@@ -52,6 +52,28 @@ def check_backend(app_configs, **kwargs):
     return []
 
 
+#: ``(app_label, name)`` of the migration that creates ``pg_trgm`` (see
+#: ``migrations/0002_postgres_index_structures.py``). Kept as one constant so
+#: the check and the migration cannot name it differently by typo.
+_EXTENSION_MIGRATION = ("search", "0002_postgres_index_structures")
+
+
+def _extension_migration_applied() -> bool:
+    """Has THIS module's own extension-creating migration run yet?
+
+    Same seam ``stapel_core``'s ``stapel_preflight`` uses
+    (``django.db.migrations.loader.MigrationLoader``, read-only, no schema
+    touched) to answer "is this app's migration state ahead of the DB" —
+    reused here instead of re-deriving it, because the question is the same
+    one: does the database already reflect a migration this app shipped.
+    """
+    from django.db import connection
+    from django.db.migrations.loader import MigrationLoader
+
+    loader = MigrationLoader(connection, ignore_no_migrations=True)
+    return _EXTENSION_MIGRATION in loader.applied_migrations
+
+
 @checks.register("stapel_search")
 def check_postgres_backend_has_postgres(app_configs, **kwargs):
     """E003: the Postgres backend on a non-Postgres connection, or no pg_trgm.
@@ -59,6 +81,21 @@ def check_postgres_backend_has_postgres(app_configs, **kwargs):
     It raises rather than degrading to ``icontains``, so this check is the
     difference between finding out at deploy time and finding out from a
     user whose search returned nothing.
+
+    One deadlock this must not be: Django runs system checks before
+    ``migrate`` (some deploy scripts gate on ``manage.py check`` explicitly,
+    e.g. via ``stapel_preflight``), and it is THIS module's own migration
+    0002 that creates ``pg_trgm`` — so on a fresh database, before 0002 has
+    run, the extension is genuinely absent and erroring here would refuse
+    the very migrate that fixes it, forever. A live classified deployment hit exactly
+    this restart loop and worked around it at the postgres-bootstrap layer
+    (``POSTGRES_EXTENSIONS`` in ``fleet/docker-compose.base.yml``,
+    pre-creating the extension before any app connects). That is a
+    legitimate deployment model, but it must not be the only escape from a
+    deadlock this module creates — so the check stays quiet about a missing
+    extension for as long as 0002 has not applied yet. Once 0002 HAS applied
+    and pg_trgm is still missing (privilege denied on a managed Postgres is
+    the common case — see 0002's own comment), the error is real and fires.
     """
     from django.db import connection
 
@@ -83,13 +120,16 @@ def check_postgres_backend_has_postgres(app_configs, **kwargs):
             )
         ]
     try:
-        if not backend.has_trigram():
+        if not backend.has_trigram() and _extension_migration_applied():
             return [
                 checks.Error(
                     "The pg_trgm extension is not installed, so the typo-tolerant "
                     "arm of the Postgres backend cannot run.",
-                    hint="Run migrations (0002 creates it) or "
-                         "CREATE EXTENSION pg_trgm; as a superuser.",
+                    hint="Migration 0002 ran but could not create the extension "
+                         "(insufficient privilege on a managed Postgres is the usual "
+                         "cause — it logs a warning rather than failing the deploy). "
+                         "Run CREATE EXTENSION pg_trgm; as a superuser, or pre-create "
+                         "it at the postgres-bootstrap layer before this app connects.",
                     id="stapel_search.E003",
                 )
             ]
