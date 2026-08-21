@@ -66,8 +66,24 @@ def search_purge_tombstones() -> int:
 
 
 def get_search_beat_schedule() -> dict:
-    """Beat entries for the three jobs, on the configured cadences."""
-    from celery.schedules import crontab
+    """Beat entries for the three jobs, on the configured cadences.
+
+    This is the one function here that genuinely needs celery — it returns
+    ``crontab`` objects. Everything else in this module is a plain callable
+    a cron job or a systemd timer can invoke, which is what "celery is
+    optional" means. Asked for it without celery installed, say so by name
+    rather than surfacing a bare ImportError from three frames down.
+    """
+    try:
+        from celery.schedules import crontab
+    except ImportError as exc:  # pragma: no cover - celery is present in most envs
+        raise ImportError(
+            "get_search_beat_schedule() builds celery crontab entries and needs "
+            "celery installed. Without celery, schedule the plain callables "
+            "instead: stapel_search.tasks.search_reindex_stale, "
+            "search_expire_signals and search_purge_tombstones are all "
+            "invocable from cron or a systemd timer."
+        ) from exc
 
     from .conf import search_settings
 

@@ -112,10 +112,29 @@ def test_w003_a_beat_schedule_with_no_catch_up_entry():
 
 
 def test_w003_is_quiet_with_the_shipped_schedule():
+    pytest.importorskip("celery", reason="celery is an optional dependency")
     from stapel_search.tasks import get_search_beat_schedule
 
     with override_settings(CELERY_BEAT_SCHEDULE=get_search_beat_schedule()):
         assert checks.check_beat_schedule(None) == []
+
+
+def test_the_beat_helper_names_celery_when_it_is_missing(monkeypatch):
+    """Celery is optional, so its absence must read as a named condition."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_celery(name, *args, **kwargs):
+        if name.startswith("celery"):
+            raise ImportError("no celery here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_celery)
+    from stapel_search.tasks import get_search_beat_schedule
+
+    with pytest.raises(ImportError, match="search_reindex_stale"):
+        get_search_beat_schedule()
 
 
 def test_w003_is_quiet_when_there_is_no_beat_at_all():
