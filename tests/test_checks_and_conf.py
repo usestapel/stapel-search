@@ -68,6 +68,59 @@ def test_e003_is_quiet_for_another_backend():
         assert checks.check_postgres_backend_has_postgres(None) == []
 
 
+def test_extension_migration_applied_reflects_the_real_migration_state():
+    """The test DB is fully migrated (pytest-django applies migrations, and
+    0002's forwards() marks itself applied on every vendor, even sqlite,
+    where its SQL is skipped by its own vendor guard) — so this must read
+    True regardless of which tier is running."""
+    assert checks._extension_migration_applied() is True
+
+
+def test_e003_is_quiet_before_migration_0002_has_applied(monkeypatch):
+    """The deadlock the darom.ai fleet hit: on a fresh database pg_trgm is
+    genuinely absent before 0002 runs, and this check must not refuse the
+    very migrate that would create it (see checks.py's docstring)."""
+    from django.db import connection
+
+    from stapel_search.backends.postgres import PostgresSearchBackend
+
+    monkeypatch.setattr(PostgresSearchBackend, "has_trigram", staticmethod(lambda: False))
+    monkeypatch.setattr(checks, "_extension_migration_applied", lambda: False)
+    with override_settings(
+        STAPEL_SEARCH={"BACKEND": "stapel_search.backends.postgres.PostgresSearchBackend"}
+    ):
+        findings = checks.check_postgres_backend_has_postgres(None)
+    if connection.vendor == "postgresql":
+        assert findings == []
+    else:
+        # off postgres entirely, the vendor guard fires first — unrelated to
+        # the migration-ordering question this test is about
+        assert _ids(findings) == ["stapel_search.E003"]
+        assert "naive" in findings[0].hint
+
+
+def test_e003_fires_once_0002_has_applied_and_the_extension_is_still_missing(monkeypatch):
+    """Once this module's own migration has had its chance and pg_trgm is
+    STILL missing (privilege denied on a managed Postgres, most likely), the
+    finding is real again."""
+    from django.db import connection
+
+    from stapel_search.backends.postgres import PostgresSearchBackend
+
+    monkeypatch.setattr(PostgresSearchBackend, "has_trigram", staticmethod(lambda: False))
+    monkeypatch.setattr(checks, "_extension_migration_applied", lambda: True)
+    with override_settings(
+        STAPEL_SEARCH={"BACKEND": "stapel_search.backends.postgres.PostgresSearchBackend"}
+    ):
+        findings = checks.check_postgres_backend_has_postgres(None)
+    if connection.vendor == "postgresql":
+        assert _ids(findings) == ["stapel_search.E003"]
+        assert "privilege" in findings[0].hint
+    else:
+        assert _ids(findings) == ["stapel_search.E003"]
+        assert "naive" in findings[0].hint
+
+
 # --- sources ---------------------------------------------------------------
 
 
