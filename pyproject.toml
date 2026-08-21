@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stapel-search"
+version = "0.1.0"
+description = "Search index, facets, geo-radius and ranking for the Stapel framework"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["django", "stapel", "search", "facets", "postgres", "meilisearch"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+dependencies = [
+    # Floor 0.31.0: the core this module is developed and tested against.
+    "stapel-core>=0.31.0,<1.0",
+    # L1 library, imported, NOT a Django app: the facet mapping registry is
+    # keyed by attribute-type slug and caches on `registry_version()`.
+    "stapel-attributes>=0.4.5,<1.0",
+    # Spec §7.2 + architect verdict §18.10: the geohash prefix/haversine
+    # arithmetic is IMPORTED, not copied. `stapel_geo.geohash` is pure
+    # (pygeohash only, no Django), so this is a library dependency —
+    # stapel_geo is never added to INSTALLED_APPS by this module.
+    "stapel-geo>=0.3.5,<1.0",
+    "djangorestframework>=3.14",
+    "drf-spectacular>=0.27",
+]
+
+[project.urls]
+Homepage = "https://github.com/usestapel/stapel-search"
+Repository = "https://github.com/usestapel/stapel-search"
+Documentation = "https://github.com/usestapel/stapel-search#readme"
+Changelog = "https://github.com/usestapel/stapel-search/blob/main/CHANGELOG.md"
+Issues = "https://github.com/usestapel/stapel-search/issues"
+
+[project.optional-dependencies]
+# Spec §16.6 / verdict §18.6: the Meilisearch backend ships INSIDE the
+# package behind an extra — one conformance suite, one release cycle, and
+# the seam is provable in e2e by flipping one settings key.
+meili = ["meilisearch>=0.31"]
+all = ["stapel-search[meili]"]
+
+[tool.setuptools]
+package-dir = {"stapel_search" = "."}
+packages = [
+    "stapel_search",
+    "stapel_search.migrations",
+    "stapel_search.backends",
+    "stapel_search.management",
+    "stapel_search.management.commands",
+]
+
+[tool.setuptools.package-data]
+# The contract documents ship IN THE WHEEL. Both stapel-docs packaging
+# gotchas are handled by construction: the dictionaries/ contract data and
+# every docs/*.json (including index.json and ranking.json, this module's
+# sixth and seventh artifacts) are listed explicitly.
+stapel_search = [
+    "py.typed",
+    "docs/schema.json",
+    "docs/flows.json",
+    "docs/errors.json",
+    "docs/capabilities.json",
+    "docs/index.json",
+    "docs/ranking.json",
+    "docs/llms.txt",
+    "CONFIG.MD",
+    "migrations/*.py",
+    "schemas/**/*.json",
+    "dictionaries/*.json",
+    "translations/*.json",
+]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Single source for the git hooks and CI (they pass the same flags on the CLI).
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+django_find_project = false
+addopts = "--tb=short -q --import-mode=importlib"
+
+[tool.coverage.run]
+omit = [
+    "*/tests/*",
+    "*/conftest.py",
+    "*/migrations/*",
+]

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "category.changed",
+  "description": "A category or one of its features changed. stapel-search advances the revision pointer for its cached facet plan and drops the cached ancestry path for that category.",
+  "type": "object",
+  "required": ["category_id", "revision"],
+  "properties": {
+    "category_id": { "type": "integer" },
+    "revision": { "type": "integer" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,355 @@
+{
+  "module": "stapel_search",
+  "kinds": [
+    "text",
+    "facet",
+    "range",
+    "sort",
+    "geo",
+    "score",
+    "filter",
+    "stored",
+    "bookkeeping"
+  ],
+  "query_read_path_prefixes": [
+    "filter:",
+    "q",
+    "facets:",
+    "sort:",
+    "score:",
+    "geo:"
+  ],
+  "service_read_path_prefixes": [
+    "result."
+  ],
+  "model_columns": {
+    "SearchDocument": {
+      "id": null,
+      "doc_type": "doc_type",
+      "doc_key": "doc_key",
+      "visible": "visible",
+      "language": "language",
+      "owner_key": "owner_key",
+      "category_path": "category_path",
+      "title": "title",
+      "body": "body",
+      "text_extra": "text_extra",
+      "text_plain": "text_plain",
+      "facets": "facets",
+      "facet_terms": "facet_terms",
+      "price_base": "price_base",
+      "published_at": "published_at",
+      "popularity": "popularity",
+      "lat": "lat",
+      "lon": "lon",
+      "geohash": "geohash",
+      "boost": "boost",
+      "promoted": "promoted",
+      "promotion_expires_at": "promotion_expires_at",
+      "card": "card",
+      "source_seq": "source_seq",
+      "source_event_id": "source_event_id",
+      "indexed_at": "indexed_at",
+      "source_updated_at": "source_updated_at"
+    },
+    "SearchNumber": {
+      "id": null,
+      "document": null,
+      "slug": "numbers",
+      "value": "numbers"
+    }
+  },
+  "fields": [
+    {
+      "field": "doc_type",
+      "kind": "filter",
+      "source": "registry",
+      "read_paths": [
+        "filter:type"
+      ],
+      "test": "tests/test_index_contract.py::test_doc_type_scopes_the_corpus",
+      "proves": "a query for another type does not find the document"
+    },
+    {
+      "field": "doc_key",
+      "kind": "filter",
+      "source": "source key",
+      "read_paths": [
+        "result.key",
+        "filter:type"
+      ],
+      "test": "tests/test_index_contract.py::test_doc_key_round_trips_and_delete_removes",
+      "proves": "the key in the answer is the source key; delete removes it"
+    },
+    {
+      "field": "visible",
+      "kind": "filter",
+      "source": "derived:status in SourceSpec.visible_statuses",
+      "read_paths": [
+        "filter:type"
+      ],
+      "test": "tests/test_index_contract.py::test_visible_is_the_implicit_predicate",
+      "proves": "a document whose pulled status left the indexed set disappears"
+    },
+    {
+      "field": "language",
+      "kind": "filter",
+      "source": "listings.search_documents.language",
+      "read_paths": [
+        "filter:lang",
+        "q"
+      ],
+      "test": "tests/test_index_contract.py::test_language_filters_and_picks_the_fts_config",
+      "proves": "a ru document is found by a stemmed ru form; an en one is not"
+    },
+    {
+      "field": "owner_key",
+      "kind": "filter",
+      "source": "listings.search_documents.owner_id",
+      "read_paths": [
+        "filter:owner"
+      ],
+      "test": "tests/test_index_contract.py::test_owner_key_filters_to_one_seller",
+      "proves": "the seller's own listings, and only those"
+    },
+    {
+      "field": "category_path",
+      "kind": "facet",
+      "source": "derived:categories.path over category_id",
+      "read_paths": [
+        "filter:category"
+      ],
+      "test": "tests/test_index_contract.py::test_category_prefix_finds_descendants",
+      "proves": "filtering by a parent category finds a child's document"
+    },
+    {
+      "field": "title",
+      "kind": "text",
+      "source": "listings.search_documents.title",
+      "read_paths": [
+        "q"
+      ],
+      "test": "tests/test_index_contract.py::test_title_outranks_body",
+      "proves": "a match in the title ranks above the same match in the body"
+    },
+    {
+      "field": "body",
+      "kind": "text",
+      "source": "listings.search_documents.description",
+      "read_paths": [
+        "q"
+      ],
+      "test": "tests/test_index_contract.py::test_body_only_word_is_found",
+      "proves": "a word occurring only in the description finds the document"
+    },
+    {
+      "field": "text_extra",
+      "kind": "text",
+      "source": "listings.search_documents.features_title",
+      "read_paths": [
+        "q"
+      ],
+      "test": "tests/test_index_contract.py::test_badge_value_is_searchable",
+      "proves": "a badge attribute's value finds the document"
+    },
+    {
+      "field": "text_vec",
+      "kind": "text",
+      "source": "derived:generated STORED tsvector, weights A/B/C",
+      "read_paths": [
+        "q"
+      ],
+      "test": "tests/test_index_contract.py::test_text_vector_is_the_primary_arm",
+      "proves": "the stemmed arm answers before any trigram fallback runs"
+    },
+    {
+      "field": "text_plain",
+      "kind": "text",
+      "source": "derived:lowercased, unaccented",
+      "read_paths": [
+        "q"
+      ],
+      "test": "tests/test_index_contract.py::test_trigram_arm_tolerates_a_typo",
+      "proves": "a misspelling finds the document only through the trigram arm"
+    },
+    {
+      "field": "facets",
+      "kind": "facet",
+      "source": "derived:DAO through FacetMapping",
+      "read_paths": [
+        "filter:facet"
+      ],
+      "test": "tests/test_index_contract.py::test_facet_filter_excludes_non_matches",
+      "proves": "filtering on a value drops the documents that lack it"
+    },
+    {
+      "field": "facet_terms",
+      "kind": "facet",
+      "source": "derived:facets, path slugs expanded to every prefix",
+      "read_paths": [
+        "facets:counts",
+        "filter:facet"
+      ],
+      "test": "tests/test_index_contract.py::test_facet_counts_match_the_candidate_set",
+      "proves": "each count equals the number of candidate documents"
+    },
+    {
+      "field": "numbers",
+      "kind": "range",
+      "source": "derived:numeric FacetMappings (SearchNumber side table)",
+      "read_paths": [
+        "filter:range"
+      ],
+      "test": "tests/test_index_contract.py::test_range_filter_includes_the_bound",
+      "proves": "`2015..` includes 2015 and excludes 2014"
+    },
+    {
+      "field": "price_base",
+      "kind": "sort",
+      "source": "listings.search_documents.price_base",
+      "read_paths": [
+        "sort:price_asc",
+        "sort:price_desc",
+        "filter:range"
+      ],
+      "test": "tests/test_index_contract.py::test_price_sorts_with_nulls_last_both_ways",
+      "proves": "ordering holds and NULL price sorts last in both directions"
+    },
+    {
+      "field": "published_at",
+      "kind": "sort",
+      "source": "listings.search_documents.published_at",
+      "read_paths": [
+        "sort:newest"
+      ],
+      "test": "tests/test_index_contract.py::test_newest_orders_by_publication",
+      "proves": "newest first, with a stable doc_key tie-break"
+    },
+    {
+      "field": "popularity",
+      "kind": "score",
+      "source": "search.signal.popularity",
+      "read_paths": [
+        "score:popularity"
+      ],
+      "test": "tests/test_index_contract.py::test_popularity_signal_moves_the_score",
+      "proves": "a popularity signal raises the score; without one it is 0"
+    },
+    {
+      "field": "lat",
+      "kind": "geo",
+      "source": "listings.search_documents.lat",
+      "read_paths": [
+        "filter:radius",
+        "filter:bbox",
+        "sort:distance"
+      ],
+      "test": "tests/test_index_contract.py::test_radius_includes_near_excludes_far",
+      "proves": "a 5km-away document is inside r=10 and outside r=1"
+    },
+    {
+      "field": "lon",
+      "kind": "geo",
+      "source": "listings.search_documents.lon",
+      "read_paths": [
+        "filter:radius",
+        "filter:bbox",
+        "sort:distance"
+      ],
+      "test": "tests/test_index_contract.py::test_bbox_crosses_the_antimeridian",
+      "proves": "min_lon > max_lon selects the box across +/-180"
+    },
+    {
+      "field": "geohash",
+      "kind": "geo",
+      "source": "listings.search_documents.geohash",
+      "read_paths": [
+        "geo:prefilter"
+      ],
+      "test": "tests/test_index_contract.py::test_geohash_prefilter_keeps_border_cells",
+      "proves": "the candidate block does not drop a neighbouring-cell document"
+    },
+    {
+      "field": "boost",
+      "kind": "score",
+      "source": "search.signal.boost",
+      "read_paths": [
+        "score:promotion_boost"
+      ],
+      "test": "tests/test_index_contract.py::test_boost_moves_relevance_only",
+      "proves": "boost reorders under sort=relevance and not under sort=price_asc"
+    },
+    {
+      "field": "promoted",
+      "kind": "stored",
+      "source": "search.signal.promoted",
+      "read_paths": [
+        "result.promoted"
+      ],
+      "test": "tests/test_index_contract.py::test_promoted_flag_is_on_every_item",
+      "proves": "the DSA Art. 26 marker is present on every item, false included"
+    },
+    {
+      "field": "promotion_expires_at",
+      "kind": "filter",
+      "source": "search.signal.expires_at",
+      "read_paths": [
+        "beat:search_expire_signals"
+      ],
+      "test": "tests/test_index_contract.py::test_expired_promotion_is_dropped",
+      "proves": "past its expiry the document is no longer promoted or boosted"
+    },
+    {
+      "field": "card",
+      "kind": "stored",
+      "source": "mapper",
+      "read_paths": [
+        "result.card"
+      ],
+      "test": "tests/test_index_contract.py::test_card_is_returned_without_a_second_query",
+      "proves": "the stored row fields come back with the hit"
+    },
+    {
+      "field": "source_seq",
+      "kind": "bookkeeping",
+      "source": "derived:event timestamp / export row seq (unix ms)",
+      "read_paths": [
+        "guard:ordering"
+      ],
+      "test": "tests/test_index_contract.py::test_stale_sequence_does_not_overwrite",
+      "proves": "an out-of-order event does not overwrite a fresher document"
+    },
+    {
+      "field": "source_event_id",
+      "kind": "bookkeeping",
+      "source": "event.event_id",
+      "read_paths": [
+        "guard:idempotency"
+      ],
+      "test": "tests/test_index_contract.py::test_redelivery_is_a_noop",
+      "proves": "the same event delivered twice changes nothing"
+    },
+    {
+      "field": "indexed_at",
+      "kind": "bookkeeping",
+      "source": "derived:now",
+      "read_paths": [
+        "drift_check",
+        "health.lag_seconds"
+      ],
+      "test": "tests/test_index_contract.py::test_drift_is_detected",
+      "proves": "a document missing from the index is reported by drift_check"
+    },
+    {
+      "field": "source_updated_at",
+      "kind": "bookkeeping",
+      "source": "listings.search_documents.updated_at",
+      "read_paths": [
+        "drift_check",
+        "health.lag_seconds"
+      ],
+      "test": "tests/test_index_contract.py::test_stale_documents_are_caught_up",
+      "proves": "search_reindex_stale re-pulls a document the source moved on"
+    }
+  ]
+}

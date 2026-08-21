@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "user.deleted",
+  "description": "A user was erased (GDPR Art. 17). stapel-search deletes every indexed document owned by them: an index is derived data, but a listing erased at the source and still searchable here is the erasure failing in the one place a stranger would notice.",
+  "type": "object",
+  "required": ["user_id"],
+  "properties": {
+    "user_id": { "type": "string" }
+  },
+  "additionalProperties": true
+}

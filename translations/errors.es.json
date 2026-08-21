@@ -1,0 +1,14 @@
+{
+  "error.400.search_bad_cursor": "El cursor de paginación no es válido",
+  "error.400.search_bad_geo": "Filtro geográfico incorrecto: {reason}",
+  "error.400.search_bad_range": "El filtro de rango «{slug}» es incorrecto: {reason}",
+  "error.400.search_query_too_long": "El texto de búsqueda es demasiado largo",
+  "error.400.search_sort_needs_center": "Ordenar por distancia requiere lat y lon",
+  "error.400.search_too_many_facets": "Demasiados filtros de faceta (límite {limit})",
+  "error.400.search_too_many_ranges": "Demasiados filtros de rango (límite {limit})",
+  "error.400.search_unknown_doc_type": "Tipo de búsqueda desconocido «{doc_type}»",
+  "error.400.search_unknown_sort": "Orden desconocido «{sort}»",
+  "error.400.search_window_exceeded": "Esta página de resultados supera el límite de {window}. Acote la búsqueda en lugar de avanzar más páginas.",
+  "error.403.search_forbidden": "No puede administrar el índice de búsqueda",
+  "error.503.search_backend_unavailable": "El motor de búsqueda no está disponible"
+}

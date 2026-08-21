@@ -1,0 +1,14 @@
+{
+  "error.400.search_bad_cursor": "Некорректный курсор постраничной навигации",
+  "error.400.search_bad_geo": "Некорректный географический фильтр: {reason}",
+  "error.400.search_bad_range": "Некорректный диапазон «{slug}»: {reason}",
+  "error.400.search_query_too_long": "Слишком длинный поисковый запрос",
+  "error.400.search_sort_needs_center": "Сортировка по расстоянию требует координат (lat и lon)",
+  "error.400.search_too_many_facets": "Слишком много фильтров-фасетов (предел {limit})",
+  "error.400.search_too_many_ranges": "Слишком много диапазонных фильтров (предел {limit})",
+  "error.400.search_unknown_doc_type": "Неизвестный тип поиска «{doc_type}»",
+  "error.400.search_unknown_sort": "Неизвестная сортировка «{sort}»",
+  "error.400.search_window_exceeded": "Эта страница выдачи выходит за предел в {window} результатов. Уточните запрос вместо перелистывания вглубь.",
+  "error.403.search_forbidden": "У вас нет прав управлять поисковым индексом",
+  "error.503.search_backend_unavailable": "Поисковый движок недоступен"
+}

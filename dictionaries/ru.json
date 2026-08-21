@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "language": "ru",
+  "_comment": "Contract data, not code: shipped in the wheel and extended through STAPEL_SEARCH['DICTIONARIES']. `equivalents` are symmetric groups (any member expands to the whole group) — the only form both shipped engines understand natively. `rewrites` normalize the QUERY only, never the index. `stopwords` are removed from the query only: a corpus indexed without them can only be repaired by reindexing everything.",
+  "equivalents": [
+    ["iphone", "айфон", "ифон", "айфоне"],
+    ["samsung", "самсунг"],
+    ["xiaomi", "ксиаоми", "сяоми"],
+    ["huawei", "хуавей"],
+    ["macbook", "макбук"],
+    ["playstation", "плейстейшн", "плойка"],
+    ["б/у", "бу", "бэушный", "бывший в употреблении"],
+    ["ноутбук", "ноут", "лэптоп", "laptop"],
+    ["телефон", "смартфон"],
+    ["холодильник", "холодос"],
+    ["автомобиль", "машина", "авто"]
+  ],
+  "rewrites": {
+    "стиралка": "стиральная машина",
+    "посудомойка": "посудомоечная машина",
+    "микроволновка": "микроволновая печь",
+    "квартира-студия": "студия"
+  },
+  "stopwords": [
+    "продам",
+    "продаю",
+    "продается",
+    "срочно",
+    "недорого",
+    "дешево",
+    "торг",
+    "новый",
+    "куплю"
+  ]
+}

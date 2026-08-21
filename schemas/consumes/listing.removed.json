@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "listing.removed",
+  "description": "Documented for the composite that registers the `listing` source. Still handled as an invalidation signal and verified by a pull: a key the source no longer serves is the source saying 'deleted', and a key it still serves with a non-indexed status is a tombstone. Note that a listing being republished does NOT emit this event (spec §19.7).",
+  "type": "object",
+  "required": ["listing_id", "owner_id", "category_id", "status"],
+  "properties": {
+    "listing_id": { "type": "integer" },
+    "owner_id": { "type": "string" },
+    "category_id": { "type": "string" },
+    "status": { "type": "string" },
+    "reason": { "type": "string" },
+    "features_search": { "type": "object", "additionalProperties": { "type": "array", "items": {} } }
+  },
+  "additionalProperties": false
+}

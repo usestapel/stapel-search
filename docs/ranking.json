@@ -1,0 +1,77 @@
+{
+  "doc_type": "",
+  "backend": "",
+  "scorers": [
+    {
+      "slug": "freshness_decay",
+      "weight": 0.3,
+      "description_key": "search.scorer.freshness",
+      "description": "Recency of publication: a listing's contribution halves every half_life_days.",
+      "params": {
+        "half_life_days": 14
+      },
+      "applies_to_sorts": [
+        "relevance"
+      ],
+      "active": true,
+      "inactive_reason": ""
+    },
+    {
+      "slug": "geo_decay",
+      "weight": 0.3,
+      "description_key": "search.scorer.geo",
+      "description": "Proximity to the searched location, decaying linearly to zero at max_radius_km. Applies only when a location was given.",
+      "params": {
+        "max_radius_km": 50
+      },
+      "applies_to_sorts": [
+        "relevance"
+      ],
+      "active": true,
+      "inactive_reason": ""
+    },
+    {
+      "slug": "popularity",
+      "weight": 0.2,
+      "description_key": "search.scorer.popularity",
+      "description": "Engagement with the listing, as reported by the host's popularity signal.",
+      "params": {},
+      "applies_to_sorts": [
+        "relevance"
+      ],
+      "active": true,
+      "inactive_reason": ""
+    },
+    {
+      "slug": "promotion_boost",
+      "weight": 1.0,
+      "description_key": "search.scorer.promotion",
+      "description": "Paid or editorial promotion. Applies ONLY to relevance ordering; choosing any explicit sort (price, date, distance) removes it entirely. Every promoted result is marked promoted: true.",
+      "params": {},
+      "applies_to_sorts": [
+        "relevance"
+      ],
+      "active": true,
+      "inactive_reason": ""
+    },
+    {
+      "slug": "relevance",
+      "weight": 1.0,
+      "description_key": "search.scorer.relevance",
+      "description": "Textual match between the query and the listing's title, attribute chips and description, with the title weighted highest.",
+      "params": {},
+      "applies_to_sorts": [
+        "relevance"
+      ],
+      "active": true,
+      "inactive_reason": ""
+    }
+  ],
+  "notes": [
+    "Sorting other than 'relevance' applies no promotional boost. This is a property of the module, not a configuration option: a scorer declares the sorts it applies to, and the promotion scorer declares only relevance.",
+    "Every result item carries a 'promoted' flag under every sort, including when it is false (DSA Art. 26).",
+    "No personalization and no machine-learned ranking is used. Ranking does not depend on who is asking.",
+    "No query log is kept, so nothing a searcher typed before affects what they see now.",
+    "Paying for promotion changes only the promotion component below, and never the textual relevance of a listing to a query."
+  ]
+}

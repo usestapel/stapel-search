@@ -1,0 +1,670 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/search/api/v1/health": {
+      "get": {
+        "operationId": "search_api_v1_health_retrieve",
+        "description": "``GET /search/api/v1/health`` — backend, capabilities, index lag.\n\n**Permissions:** `IsNotAnonymousUser`",
+        "summary": "Engine reachability, capabilities and index lag",
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/search/api/v1/query": {
+      "get": {
+        "operationId": "search_api_v1_query_retrieve",
+        "description": "``GET /search/api/v1/query`` — the whole read contract.\n\n**Permissions:** `AllowAny`",
+        "summary": "Search one registered document type",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "anchor",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque keyset cursor from a previous answer."
+          },
+          {
+            "in": "query",
+            "name": "bbox",
+            "schema": {
+              "type": "string"
+            },
+            "description": "minLat,minLon,maxLat,maxLon. minLon > maxLon means the box crosses +/-180."
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            },
+            "description": "root/leaf path; a prefix filter, so a parent finds its descendants."
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "schema": {
+              "type": "string"
+            },
+            "description": "next | prev."
+          },
+          {
+            "in": "query",
+            "name": "f.<slug>",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Facet filter. Repeat for OR within a slug; different slugs AND together."
+          },
+          {
+            "in": "query",
+            "name": "facets",
+            "schema": {
+              "type": "string"
+            },
+            "description": "on | off | comma-separated slugs. Default is the category's plan."
+          },
+          {
+            "in": "query",
+            "name": "lang",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Language of the query: selects the analyzer AND narrows the corpus. Omit it and only the analyzer is chosen (from Accept-Language) — a header must not hide a catalogue."
+          },
+          {
+            "in": "query",
+            "name": "lat",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Centre latitude (with lon)."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Centre longitude (with lat)."
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque owner key — the seller's own listings."
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Free text. Dictionary-normalized here; morphology belongs to the engine."
+          },
+          {
+            "in": "query",
+            "name": "r.<slug>",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Range filter, `from..to`; either end may be omitted."
+          },
+          {
+            "in": "query",
+            "name": "radius_km",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Radius around the centre."
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "type": "string"
+            },
+            "description": "relevance | newest | price_asc | price_desc | distance. An explicit sort never receives a promotional boost."
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Registered doc_type. One type per query — federated search across types is not in v1.",
+            "required": true
+          }
+        ],
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/search/api/v1/ranking": {
+      "get": {
+        "operationId": "search_api_v1_ranking_retrieve",
+        "description": "``GET /search/api/v1/ranking`` — the P2B Art. 5 disclosure.\n\nGenerated from the scorer registry and annotated with what the\nconfigured engine can actually evaluate, so it cannot claim a parameter\nis in effect when the backend cannot compute it.\n\n**Permissions:** `AllowAny`",
+        "summary": "Ranking disclosure (P2B Art. 5), generated from the scorer registry",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankingResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/search/api/v1/reindex": {
+      "post": {
+        "operationId": "search_api_v1_reindex_create",
+        "description": "``POST /search/api/v1/reindex`` — targeted re-pull or a full rebuild.\n\n**Permissions:** `IsNotAnonymousUser`",
+        "summary": "Re-pull specific keys, or rebuild a whole document type",
+        "tags": [
+          "search"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    },
+    "/search/api/v1/suggest": {
+      "get": {
+        "operationId": "search_api_v1_suggest_retrieve",
+        "description": "``GET /search/api/v1/suggest`` — title prefixes out of the index.\n\nNot out of a query log: no query log is kept, which is a privacy\ndecision before it is a product one, and on day one there would be\nnothing in it anyway.\n\n**Permissions:** `AllowAny`",
+        "summary": "Title prefixes from the index",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Title prefix."
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestResponse"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "FacetMeta": {
+        "type": "object",
+        "properties": {
+          "approximate": {
+            "type": "boolean",
+            "description": "True when counts came from a sample because the candidate set exceeded FACET_CANDIDATE_CAP."
+          },
+          "candidates": {
+            "type": "integer",
+            "description": "Size of the largest counted set."
+          },
+          "counted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Plan slugs dropped at MAX_FACET_FIELDS — reported, not vanished."
+          }
+        },
+        "required": [
+          "approximate",
+          "candidates",
+          "counted",
+          "skipped"
+        ]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lag_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "stale_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "detail",
+          "reachable",
+          "types"
+        ]
+      },
+      "RankingResponse": {
+        "type": "object",
+        "description": "The P2B Art. 5 disclosure, generated from the scorer registry.",
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "scorers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scorer"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "backend",
+          "doc_type",
+          "notes",
+          "scorers"
+        ]
+      },
+      "ReindexRequest": {
+        "type": "object",
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Re-pull exactly these keys; omit to rebuild the whole type."
+          }
+        },
+        "required": [
+          "doc_type"
+        ]
+      },
+      "ReindexResponse": {
+        "type": "object",
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "indexed": {
+            "type": "integer"
+          },
+          "removed": {
+            "type": "integer"
+          },
+          "skipped_stale": {
+            "type": "integer"
+          },
+          "skipped_duplicate": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "doc_type",
+          "indexed",
+          "removed",
+          "skipped_duplicate",
+          "skipped_stale"
+        ]
+      },
+      "Scorer": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number",
+            "format": "double"
+          },
+          "description_key": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "applies_to_sorts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "description": "False when the configured engine cannot evaluate this parameter."
+          },
+          "inactive_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "applies_to_sorts",
+          "description",
+          "description_key",
+          "inactive_reason",
+          "params",
+          "slug",
+          "weight"
+        ]
+      },
+      "SearchItem": {
+        "type": "object",
+        "description": "One result row.",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The source's own document key."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Ranking score; 0 under an explicit sort."
+          },
+          "promoted": {
+            "type": "boolean",
+            "description": "Whether this result is promoted. Present on EVERY item under EVERY sort, including when false — a mandatory marking (DSA Art. 26), not an optional field."
+          },
+          "distance_km": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "description": "Great-circle distance from the searched centre."
+          },
+          "card": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Stored row fields, so a result page costs one query."
+          }
+        },
+        "required": [
+          "card",
+          "distance_km",
+          "key",
+          "promoted",
+          "score"
+        ]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "description": "The query envelope: AnchorPagination's keys, plus what search owes.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchItem"
+            }
+          },
+          "facets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "description": "{slug: {value: count}}, counted with the slug's own filter removed."
+          },
+          "facet_meta": {
+            "$ref": "#/components/schemas/FacetMeta"
+          },
+          "next_anchor": {
+            "type": "string",
+            "nullable": true
+          },
+          "prev_anchor": {
+            "type": "string",
+            "nullable": true
+          },
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_prev": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "exact_total": {
+            "type": "boolean"
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the configured engine could not do for this query."
+          },
+          "backend": {
+            "type": "string"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "took_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backend",
+          "count",
+          "degraded",
+          "exact_total",
+          "facet_meta",
+          "facets",
+          "has_next",
+          "has_prev",
+          "items",
+          "next_anchor",
+          "prev_anchor",
+          "sort",
+          "took_ms"
+        ]
+      },
+      "SuggestResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "backend": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "items"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "JWTCookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "stapel_jwt",
+        "description": "JWT token stored in cookie. Login via /auth/admin/ to get the cookie."
+      }
+    }
+  }
+}

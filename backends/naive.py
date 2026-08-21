@@ -1,0 +1,289 @@
+"""The declared, honest, slow backend — and the module's semantic reference.
+
+It exists for one reason: so the Postgres backend never has to degrade.
+``stapel-recordings`` and ``stapel-studio`` both fall back to ``icontains``
+off Postgres and say so in a comment; for a *search library* that is not
+acceptable, because the caller cannot tell the good engine from the bad one
+by looking at the answer. Here the choice is explicit — a SQLite demo or a
+unit test configures this backend and gets ``typo_tolerance: False`` in
+``capabilities()`` and ``degraded: ["typo_tolerance"]`` in every response
+that wanted it.
+
+Being pure Python over the module's own table also makes it the reference
+semantics: when the Postgres and Meilisearch implementations disagree with
+this one, the conformance suite says which is wrong.
+
+Cost is exactly what it looks like — it materializes the candidate set in
+Python. That is fine for a demo and a test corpus and is not fine for a
+real one, which is why ``capabilities().max_result_window`` and the
+candidate cap still apply.
+"""
+from __future__ import annotations
+
+from ..dto import (
+    BackendCapabilities,
+    BackendHealth,
+    FacetPlan,
+    FacetResult,
+    Hit,
+    IndexDocument,
+    IndexSettings,
+    QueryResult,
+    SearchQuery,
+)
+from . import _shared as shared
+
+#: Read paths of ``docs/index.json`` and the code in THIS module that
+#: answers each. ``IDX002`` checks both that the promise is registered and
+#: that the named symbol exists — the SUR004 boundary, one level stricter:
+#: it proves the promise was not dropped on the floor, not that the branch
+#: is right. The round-trip suite proves the branch.
+READ_PATH_IMPL = {
+    "filter:type": "_candidates",
+    "filter:lang": "_candidates",
+    "filter:owner": "_candidates",
+    "filter:category": "_matches_category",
+    "filter:facet": "_matches_facets",
+    "filter:range": "_matches_ranges",
+    "filter:radius": "_geo_distance",
+    "filter:bbox": "_matches_bbox",
+    "facets:counts": "facets",
+    "q": "_text_score",
+    "sort:newest": "_sort_value",
+    "sort:price_asc": "_sort_value",
+    "sort:price_desc": "_sort_value",
+    "sort:distance": "_sort_value",
+    "score:popularity": "_score",
+    "score:promotion_boost": "_score",
+    # No geohash prefilter: this backend already walks the candidate rows,
+    # so a coarse cell narrowing would cost a pass and save nothing.
+    "geo:prefilter": "capability:python_side_scan",
+}
+
+
+class NaiveSearchBackend:
+    """Python-side matching over ``SearchDocument``. Declared, not hidden."""
+
+    name = "naive"
+
+    # -- capabilities -------------------------------------------------------
+
+    def capabilities(self) -> BackendCapabilities:
+        from ..conf import search_settings
+        from ..registry import get_scorers
+
+        return BackendCapabilities(
+            typo_tolerance=False,
+            facet_counts=True,
+            exact_facet_counts=True,
+            exact_total=True,
+            geo_native=False,
+            synonyms_native=False,
+            suggest=True,
+            phrase_synonyms=False,
+            supported_scorers=frozenset(get_scorers()),
+            max_facet_fields=int(search_settings.MAX_FACET_FIELDS),
+            max_result_window=int(search_settings.MAX_RESULT_WINDOW),
+        )
+
+    def health(self) -> BackendHealth:
+        from ..models import SearchDocument
+
+        return BackendHealth(
+            name=self.name,
+            reachable=True,
+            detail="in-process, python-side matching",
+            documents=SearchDocument.objects.count(),
+        )
+
+    # -- write side ---------------------------------------------------------
+
+    def upsert(self, docs: list[IndexDocument]) -> None:
+        """No-op: the table written by the indexer IS this backend's index."""
+        return None
+
+    def delete(self, doc_type: str, keys: list[str]) -> None:
+        """No-op: the indexer already removed the rows."""
+        return None
+
+    def clear(self, doc_type: str | None = None) -> None:
+        """No-op: the indexer owns the rows."""
+        return None
+
+    def apply_settings(self, doc_type: str, settings: IndexSettings) -> None:
+        """No-op: there is no engine-side schema to push."""
+        return None
+
+    # -- read side ----------------------------------------------------------
+
+    def _candidates(self, q: SearchQuery):
+        """Coarse ORM narrowing, then Python for everything JSON-shaped.
+
+        JSONField containment has no SQLite implementation, so facets and
+        the category path are matched in Python here. That is a property of
+        this backend, not of the contract: Postgres answers the same
+        questions with GIN.
+        """
+        from ..models import SearchDocument
+
+        qs = SearchDocument.objects.filter(doc_type=q.doc_type, visible=True)
+        if q.language_filter:
+            qs = qs.filter(language=q.language_filter)
+        if q.owner_key:
+            qs = qs.filter(owner_key=q.owner_key)
+        if q.ranges:
+            qs = shared.narrow_by_ranges(qs, q.ranges)
+        return qs
+
+    @staticmethod
+    def _matches_category(row, q: SearchQuery) -> bool:
+        return shared.category_matches(list(row.category_path or []), q.category_path)
+
+    @staticmethod
+    def _matches_facets(row, q: SearchQuery) -> bool:
+        return shared.facets_match(row.facet_terms or [], q.facets)
+
+    @staticmethod
+    def _matches_ranges(row, q: SearchQuery) -> bool:
+        """Ranges are already applied in SQL; kept as the named read path."""
+        return True
+
+    @staticmethod
+    def _matches_bbox(row, q: SearchQuery) -> bool:
+        return shared.bbox_matches(row.lat, row.lon, q.geo)
+
+    @staticmethod
+    def _geo_distance(row, q: SearchQuery):
+        return shared.geo_distance_km(row.lat, row.lon, row.geohash, q.geo)
+
+    @staticmethod
+    def _text_score(row, q: SearchQuery) -> float | None:
+        """Weighted substring matching: A=title, B=extra, C=body.
+
+        No stemming and no typo tolerance — that is the declared shortfall.
+        Every declared term group must hit somewhere (AND across terms, OR
+        within a group's expansions), which is the same semantics the FTS
+        arm gets from ``plainto_tsquery`` + an OR-group per term.
+        """
+        if q.text is None or q.text.is_empty:
+            return 0.0
+        title = row.title.casefold()
+        extra = (row.text_extra or "").casefold()
+        body = (row.text_plain or "").casefold()
+        score = 0.0
+        from ..text import fold
+
+        for group in q.text.terms:
+            best = 0.0
+            for term in group:
+                needle = fold(term)
+                if needle and needle in title:
+                    best = max(best, 1.0)
+                elif needle and needle in extra:
+                    best = max(best, 0.4)
+                elif needle and needle in body:
+                    best = max(best, 0.2)
+            if best == 0.0:
+                return None
+            score += best
+        return score
+
+    def _score(self, row, q: SearchQuery, text_score: float, distance_km) -> float:
+        """Registry-driven score. ``promotion_boost`` is structurally
+        confined to ``sort=relevance`` by its ``applies_to_sorts``."""
+        return shared.combined_score(
+            row=row, sort=q.sort, text_score=text_score, distance_km=distance_km
+        )
+
+    @staticmethod
+    def _sort_value(row, sort: str, score: float, distance_km):
+        return shared.sort_value_of(row, sort, score, distance_km)
+
+    def _rows(self, q: SearchQuery) -> list[tuple]:
+        """Every matching row as ``(sort_key, sort_value, hit, row)``."""
+        out: list[tuple] = []
+        for row in self._candidates(q).iterator():
+            if not self._matches_category(row, q):
+                continue
+            if not self._matches_facets(row, q):
+                continue
+            if not self._matches_bbox(row, q):
+                continue
+            distance = self._geo_distance(row, q)
+            if distance is shared.OUT_OF_RANGE:
+                continue
+            text_score = self._text_score(row, q)
+            if text_score is None:
+                continue
+            score = self._score(row, q, text_score, distance)
+            value = self._sort_value(row, q.sort, score, distance)
+            out.append(
+                (
+                    shared.order_key(q.sort, value, row.doc_key),
+                    value,
+                    Hit(
+                        key=row.doc_key,
+                        score=round(score, 6),
+                        distance_km=None if distance in (None, shared.OUT_OF_RANGE) else distance,
+                        sort_value=value,
+                    ),
+                    row,
+                )
+            )
+        out.sort(key=lambda item: item[0])
+        return out
+
+    def query(self, q: SearchQuery) -> QueryResult:
+        rows = self._rows(q)
+        total = len(rows)
+        page, has_next, has_prev = shared.paginate(rows, q)
+        return QueryResult(
+            hits=tuple(item[2] for item in page),
+            total=total,
+            exact_total=True,
+            has_next=has_next,
+            has_prev=has_prev,
+            degraded=(),
+        )
+
+    def facets(self, q: SearchQuery, plan: FacetPlan) -> FacetResult:
+        """Exact drill-down counts, one candidate pass per counted slug."""
+        counts: dict[str, dict[str, int]] = {}
+        candidates = 0
+        for slug in plan.slugs:
+            drilled = q.without_facet(slug)
+            rows = self._rows(drilled)
+            candidates = max(candidates, len(rows))
+            bucket: dict[str, int] = {}
+            prefix = f"{slug}="
+            for _key, _value, _hit, row in rows:
+                for term in row.facet_terms or []:
+                    if isinstance(term, str) and term.startswith(prefix):
+                        bucket[term[len(prefix):]] = bucket.get(term[len(prefix):], 0) + 1
+            counts[slug] = bucket
+        return FacetResult(counts=counts, approximate=False, candidates=candidates)
+
+    def suggest(
+        self, doc_type: str, prefix: str, *, limit: int, scope: SearchQuery | None = None
+    ) -> list[str]:
+        from ..models import SearchDocument
+
+        folded = (prefix or "").strip()
+        if not folded:
+            return []
+        qs = SearchDocument.objects.filter(
+            doc_type=doc_type, visible=True, title__istartswith=folded
+        )
+        if scope is not None and scope.language_filter:
+            qs = qs.filter(language=scope.language_filter)
+        titles = qs.order_by("title", "doc_key").values_list("title", flat=True)[: limit * 4]
+        seen: list[str] = []
+        for title in titles:
+            if title not in seen:
+                seen.append(title)
+            if len(seen) >= limit:
+                break
+        return seen
+
+
+__all__ = ["READ_PATH_IMPL", "NaiveSearchBackend"]

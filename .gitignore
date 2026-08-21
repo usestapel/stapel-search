@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+*.sqlite3
+.coverage
+htmlcov/
+.pytest_cache/
+
+# artifact / cache / editor hygiene (align with stapel-tools template)
+coverage.xml
+junit.xml
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+*.err
+
+# local throwaway harness output
+e2e/.state.json

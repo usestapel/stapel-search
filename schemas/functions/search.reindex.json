@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "search.reindex",
+  "description": "Re-pull documents into the index. With `keys` it re-pulls exactly those through the source's content Function; without them it rebuilds the whole doc_type from the source's snapshot Function ({cursor, limit} -> {rows, cursor, total}). Answers {doc_type, indexed, removed, skipped_stale, skipped_duplicate}.",
+  "type": "object",
+  "required": ["doc_type"],
+  "properties": {
+    "doc_type": { "type": "string" },
+    "keys": { "type": "array", "items": { "type": ["string", "integer"] } }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "language": "en",
+  "_comment": "Deliberately small. A shipped dictionary is a claim about a market, and inventing one for a language whose corpus we have never seen is how a search engine acquires opinions nobody asked for. Hosts extend it through STAPEL_SEARCH['DICTIONARIES'].",
+  "equivalents": [
+    ["iphone", "i-phone"],
+    ["second-hand", "secondhand", "used", "pre-owned"],
+    ["laptop", "notebook"],
+    ["tv", "television"]
+  ],
+  "rewrites": {},
+  "stopwords": ["sale", "selling", "urgent", "cheap", "wanted"]
+}

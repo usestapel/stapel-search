@@ -1,0 +1,333 @@
+{
+  "_comment": "Hand-curated layer of docs/capabilities.json (capability-config.md §2 p.3). The emitter (stapel_search/_capabilities.py) merges this over the derived axes; an axis present in conf.py DEFAULTS but missing here (or vice versa) is a loud emission error. Keep business_label/summary in business language — they surface in CTO conversations, not in code. The axes are the settings that change WHAT THE PRODUCT PROMISES a searcher: which engine answers (and therefore whether typo tolerance, exact totals and exact facet counts exist at all), which corpora are searchable, which sorts are offered, when counts stop being exact, how deep paging may go, and whether Cyrillic and Latin spellings of a brand find each other. Deliberately NOT axes: throttle rates, page sizes, cache TTLs and the trigram threshold — they bound cost and abuse; they do not change the deal. `surface_roots` + `surface` are the usage surface (stapel_tools.surface): the symbols a host or composite is meant to CALL instead of writing its own version. Deliberately NOT rooted: views.py/urls.py (mounted, not called), checks.py (Django check callbacks), functions.py/actions.py (comm surface, reached by name over the bus, never imported), backends/* (selected by dotted path through one settings key, never imported by a host).",
+  "provides": "A materialized search index with one swappable engine seam: full-text with per-language configs and a typo-tolerant second arm, drill-down facet counts with a benchmark-calibrated candidate cap and an approximate fallback, indexed range filters over a numeric side table, geo radius and bounding-box search including the antimeridian, five sorts with an opaque keyset cursor whose envelope matches AnchorPagination, a registry-generated P2B Art. 5 ranking disclosure with a mandatory promoted marker on every result, and an event-to-pull indexer carrying the four Projection guarantees (idempotency, ordering, rebuild, drift_check). Ships three engines behind the same conformance suite: Postgres FTS (default, zero new infrastructure), Meilisearch (the [meili] extra) and a declared naive backend for SQLite demos.",
+  "requires": [
+    {
+      "module": "stapel-core",
+      "optional": false,
+      "reason": "comm bus (the source's content/export Functions, search.signal, category.changed, user.deleted), AppSettings config layer, unified error envelope, access declarations, JWT authentication"
+    },
+    {
+      "module": "stapel-attributes",
+      "optional": false,
+      "reason": "facet semantics are keyed by attribute type slug and the mapping cache follows its registry_version(); the DAO shapes this module reads are its output. An L1 library — imported, never installed as an app"
+    },
+    {
+      "module": "stapel-geo",
+      "optional": false,
+      "reason": "geohash encoding and haversine distance are imported from stapel_geo.geohash rather than copied (architect verdict §18.10). The module is pure arithmetic (pygeohash, no Django) and stapel_geo is never added to INSTALLED_APPS"
+    },
+    {
+      "module": "stapel-categories",
+      "optional": true,
+      "reason": "the facet plan comes from the categories.features comm Function, and category ancestry from categories.path — both by name, no import. Any provider satisfies the contract; without categories.features nothing is counted, and without categories.path the category path degrades to one segment (search.W006, and degraded: ['category_rollup'] in every answer)"
+    },
+    {
+      "module": "stapel-listings",
+      "optional": true,
+      "reason": "the first corpus. Not a dependency of this module at all: a composite registers the `listing` source with a mapper and the two Function names, because the composite is the one place allowed to know both sides"
+    }
+  ],
+  "extension_points": [
+    {
+      "name": "BACKEND",
+      "kind": "swap_key",
+      "summary": "One dotted path selects the engine. Postgres by default; Meilisearch is one settings key and a search_rebuild away, with no module code changed — which is the test of whether the seam is real, and it is an e2e assertion, not a claim. A third-party engine implements nine verbs and must pass stapel_search.testing.backend_conformance; differences are legitimate only through capabilities(), and they travel to the caller in degraded[]."
+    },
+    {
+      "name": "SOURCES",
+      "kind": "merge_registry",
+      "summary": "Which corpora are indexed. Empty by design: this module knows nothing about listings, chats or profiles. A SourceSpec names the invalidation signals, the keyed-batch content Function, the cursor snapshot Function and the mapper — and it is declared by the composite, because a mapper is cross-domain glue and belongs where knowing both sides is allowed."
+    },
+    {
+      "name": "FACET_MAPPINGS",
+      "kind": "merge_registry",
+      "summary": "How each stapel-attributes type lands in the index (term, range, path or skip), keyed by type slug. A host registering an eleventh field type indexes by a generic default and raises search.W002 until it declares — or explicitly confirms — the mapping, because a silent default is exactly the disease the index contract exists to prevent."
+    },
+    {
+      "name": "SCORERS",
+      "kind": "merge_registry",
+      "summary": "The ranking parameters. Weights and descriptions live here, and GET /search/api/v1/ranking plus docs/ranking.json are rendered from this registry — so the P2B disclosure cannot drift away from the behaviour the way a paragraph copied into terms of service always does. A scorer declares which sorts it applies to, which is how 'an explicit sort receives no promotional boost' is a structural property rather than a check repeated in three places."
+    },
+    {
+      "name": "DICTIONARIES",
+      "kind": "merge_registry",
+      "summary": "Synonym groups, one-way query rewrites and stopwords per language, shipped as JSON contract data and extended by settings or at runtime. Stopwords are removed from the query only, never from the index: a corpus indexed without them can only be repaired by reindexing everything."
+    },
+    {
+      "name": "search.signal",
+      "kind": "action",
+      "summary": "The single inbound door for boost, popularity and promotion, with an audit row per signal. Who may open it is a product decision (a billing entitlement, an editorial tool) deliberately left outside this module: v1 owns the field, not the policy."
+    }
+  ],
+  "axes": {
+    "BACKEND": {
+      "business_label": "Search engine",
+      "summary": "Which engine answers. Postgres FTS needs no new infrastructure and is honest about its limits (estimated totals, facet counts sampled above the cap). Meilisearch adds typo tolerance, exact totals and exact facet counts at any corpus size. The switch is this key plus a rebuild."
+    },
+    "SOURCES": {
+      "business_label": "Searchable corpora",
+      "summary": "What can be found at all. Empty means installed and indexing nothing, which raises search.W001 rather than pretending."
+    },
+    "SORTS": {
+      "business_label": "Offered sort orders",
+      "summary": "Which orderings a user may pick. `popular` is absent by default because no popularity signal exists in the fleet, and a sort that orders every result by zero is a promise with nothing behind it."
+    },
+    "FACET_CANDIDATE_CAP": {
+      "business_label": "Exact facet-count ceiling",
+      "summary": "Above this many candidates the counts come from a sample and the answer says approximate: true. Calibrated by benchmark, not by feel — under eight concurrent clients, 20000 candidates already breach the 200ms target, so the default is 15000."
+    },
+    "MAX_FACET_FIELDS": {
+      "business_label": "Facets counted per query",
+      "summary": "Drill-down semantics mean N active facet filters cost N+1 candidate scans; this is the ceiling that stops a wide category page becoming a dozen sequential ones. Plan slugs past it are reported in facet_meta.skipped, never silently dropped."
+    },
+    "MAX_RESULT_WINDOW": {
+      "business_label": "Deepest reachable result",
+      "summary": "Paging past it is refused with an error rather than truncated. One explicit shared limit is what makes the engines interchangeable instead of interchangeable-until-page-forty."
+    },
+    "TRANSLITERATE": {
+      "business_label": "Cross-script matching",
+      "summary": "Whether Cyrillic and Latin spellings of the same word find each other without a curated entry per brand. On for Russian by default; a curated synonym group always wins over the algorithm, because algorithmic transliteration is noisy."
+    },
+    "ACCEPT_FEATURES_SEARCH": {
+      "business_label": "Accept the source's reduced attribute projection",
+      "summary": "Whether a source that will not hand over full attribute values may feed the index with its flattened projection instead. Lossy — no ranges, no colour axis, no unit context — and the loss is reported to the caller rather than absorbed."
+    }
+  },
+  "surface_roots": [
+    {
+      "select": "functions",
+      "path": "registry.py"
+    },
+    {
+      "select": "functions",
+      "path": "services.py"
+    },
+    {
+      "select": "functions",
+      "path": "tasks.py"
+    },
+    {
+      "select": "functions",
+      "path": "testing.py"
+    }
+  ],
+  "surface": {
+    "register_source": {
+      "kind": "factory",
+      "intent": "Declare a corpus this index should carry: the invalidation signals, the two comm Function names the documents are pulled through, and the mapper. Called from a composite's app config, because a mapper is cross-domain glue.",
+      "instead_of": [
+        "writing an @on_action subscriber and your own upsert loop"
+      ]
+    },
+    "unregister_source": {
+      "kind": "factory",
+      "intent": "Drop a runtime source registration — tests, and hosts that mount a corpus conditionally.",
+      "instead_of": []
+    },
+    "get_source": {
+      "kind": "predicate",
+      "intent": "The SourceSpec for one doc_type, or a named SourceNotRegistered rather than a KeyError three frames deeper.",
+      "instead_of": []
+    },
+    "get_sources": {
+      "kind": "predicate",
+      "intent": "Every effective source: builtins, then the settings overlay, then runtime registrations. The answer to \"what is searchable here\".",
+      "instead_of": [
+        "reading STAPEL_SEARCH['SOURCES'] directly, which misses the runtime layer"
+      ]
+    },
+    "register_facet_mapping": {
+      "kind": "factory",
+      "intent": "Say how a stapel-attributes type lands in the index — term, range, path or skip — when a host registers a field type this module has never seen. Without it the type indexes by a generic default and raises search.W002.",
+      "instead_of": []
+    },
+    "unregister_facet_mapping": {
+      "kind": "factory",
+      "intent": "Drop a runtime facet mapping (tests).",
+      "instead_of": []
+    },
+    "get_facet_mapping": {
+      "kind": "predicate",
+      "intent": "The index semantics for one attribute-type slug, falling back to the generic term branch and recording that it did so.",
+      "instead_of": []
+    },
+    "get_facet_mappings": {
+      "kind": "predicate",
+      "intent": "The whole effective mapping table, memoized on stapel-attributes' own registry_version so a host's new type is picked up rather than cached away.",
+      "instead_of": []
+    },
+    "defaulted_type_slugs": {
+      "kind": "predicate",
+      "intent": "Attribute types that took the unreviewed generic branch this process — what search.W002 names.",
+      "instead_of": []
+    },
+    "reset_defaulted_type_slugs": {
+      "kind": "factory",
+      "intent": "Forget the generic-branch record between tests.",
+      "instead_of": []
+    },
+    "register_scorer": {
+      "kind": "factory",
+      "intent": "Add or replace a ranking parameter. It takes effect in scoring AND in the generated P2B disclosure at once, which is the point: the two cannot drift.",
+      "instead_of": [
+        "post-processing a result page to reorder it"
+      ]
+    },
+    "unregister_scorer": {
+      "kind": "factory",
+      "intent": "Drop a runtime scorer (tests).",
+      "instead_of": []
+    },
+    "get_scorers": {
+      "kind": "predicate",
+      "intent": "The effective ranking registry — the same object the disclosure endpoint renders.",
+      "instead_of": []
+    },
+    "register_dictionary": {
+      "kind": "factory",
+      "intent": "Add synonym groups, query rewrites or stopwords for a language at runtime, on top of the shipped JSON.",
+      "instead_of": [
+        "editing the packaged dictionaries in site-packages"
+      ]
+    },
+    "unregister_dictionaries": {
+      "kind": "factory",
+      "intent": "Drop runtime dictionary sources (tests).",
+      "instead_of": []
+    },
+    "get_dictionary_sources": {
+      "kind": "predicate",
+      "intent": "The extra dictionary sources configured for a language, settings layer then runtime.",
+      "instead_of": []
+    },
+    "index_documents": {
+      "kind": "factory",
+      "intent": "Upsert documents into the table and the engine in ONE transaction, with the idempotency and ordering guards applied. The only supported write path.",
+      "instead_of": [
+        "SearchDocument.objects.create",
+        "calling backend.upsert yourself"
+      ]
+    },
+    "remove_documents": {
+      "kind": "factory",
+      "intent": "Tombstone documents: invisible immediately, purged by the beat later, so a late event cannot resurrect a stale version.",
+      "instead_of": [
+        "SearchDocument.objects.delete"
+      ]
+    },
+    "ingest": {
+      "kind": "factory",
+      "intent": "Pull specific keys through the source's content Function and index them; keys the source no longer serves are removed. What a signal handler and a targeted reindex both call.",
+      "instead_of": []
+    },
+    "pull_documents": {
+      "kind": "predicate",
+      "intent": "The raw keyed batch from a source's content Function, before mapping — useful when diagnosing whether a gap is the source's or ours.",
+      "instead_of": []
+    },
+    "rebuild": {
+      "kind": "factory",
+      "intent": "Rebuild a whole doc_type from the owner's cursor snapshot and drop what the source no longer has. The backfill, the recovery path, and the engine-switch procedure.",
+      "instead_of": []
+    },
+    "drift_check": {
+      "kind": "predicate",
+      "intent": "Compare the index against the owner's snapshot and report, WITHOUT repairing — a job that silently fixes drift also silently hides that drift keeps happening.",
+      "instead_of": []
+    },
+    "reindex_stale": {
+      "kind": "factory",
+      "intent": "Re-pull the documents the source has moved on from. The safety net for a lost event; on a healthy deployment it should find nothing.",
+      "instead_of": []
+    },
+    "apply_signal": {
+      "kind": "factory",
+      "intent": "Apply one boost/popularity/promotion signal with its audit row, idempotently. Writes columns disjoint from the source document, so re-indexing never undoes a promotion.",
+      "instead_of": [
+        "setting SearchDocument.boost directly"
+      ]
+    },
+    "expire_signals": {
+      "kind": "factory",
+      "intent": "Drop promotions past their expiry, so a paid slot really ends.",
+      "instead_of": []
+    },
+    "purge_tombstones": {
+      "kind": "factory",
+      "intent": "Delete rows invisible longer than the retention window.",
+      "instead_of": []
+    },
+    "apply_settings": {
+      "kind": "factory",
+      "intent": "Push the engine-side schema and the dictionary halves it owns. A no-op on Postgres, and what makes synonyms take effect on Meilisearch.",
+      "instead_of": []
+    },
+    "build_facets": {
+      "kind": "predicate",
+      "intent": "Turn a document's attribute DAOs into (facets, facet_terms, numbers) — the function that decides what is countable, filterable and range-able.",
+      "instead_of": [
+        "reading the source's features_search projection, which loses ranges, the colour axis and unit context"
+      ]
+    },
+    "build_index_document": {
+      "kind": "predicate",
+      "intent": "SearchDocumentInput -> the flattened, backend-facing document, so every engine sees identically normalized values.",
+      "instead_of": []
+    },
+    "search": {
+      "kind": "predicate",
+      "intent": "Run one query end to end: parse, plan the facets, ask the engine, hydrate cards, and shape the envelope with degraded[] filled in. The whole read path, HTTP-free.",
+      "instead_of": [
+        "calling a backend's query() directly, which returns keys and no card, promoted flag or degradation report"
+      ]
+    },
+    "suggest": {
+      "kind": "predicate",
+      "intent": "Title prefixes from the index. No query log exists to suggest from, by decision.",
+      "instead_of": []
+    },
+    "health": {
+      "kind": "predicate",
+      "intent": "Engine reachability, its declared capabilities, and how far behind the index is — the numbers an operator pages on.",
+      "instead_of": []
+    },
+    "search_reindex_stale": {
+      "kind": "factory",
+      "intent": "Beat task: catch every registered type up after a lost event.",
+      "instead_of": []
+    },
+    "search_expire_signals": {
+      "kind": "factory",
+      "intent": "Beat task: end expired promotions.",
+      "instead_of": []
+    },
+    "search_purge_tombstones": {
+      "kind": "factory",
+      "intent": "Beat task: delete tombstones past retention.",
+      "instead_of": []
+    },
+    "get_search_beat_schedule": {
+      "kind": "factory",
+      "intent": "The three beat entries on their configured cadences, to splat into a host's CELERY_BEAT_SCHEDULE. Without it, search.W003 says the catch-up is a promise rather than a mechanism.",
+      "instead_of": [
+        "hand-writing crontab entries that drift from the settings"
+      ]
+    },
+    "harness": {
+      "kind": "factory",
+      "intent": "Context manager that registers the conformance source, applies engine settings, loads the fixed corpus and cleans up — the entry point a third-party backend uses to run this package's suite against itself.",
+      "instead_of": []
+    },
+    "corpus": {
+      "kind": "factory",
+      "intent": "The fixed conformance corpus, small enough to hold in your head while reading a failure.",
+      "instead_of": []
+    },
+    "run_all": {
+      "kind": "factory",
+      "intent": "Run every conformance scenario outside pytest and return {name: ok|skip:<capability>} — a smoke check for a deployment pipeline.",
+      "instead_of": []
+    }
+  }
+}

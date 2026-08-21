@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "listing.updated",
+  "description": "Documented for the composite that registers the `listing` source: stapel-search does not subscribe to this name itself. It is an INVALIDATION SIGNAL, not a document — the payload is deliberately minimal, and the indexer pulls the document through listings.search_documents. Index membership comes from the PULLED document's status, never from this event's name.",
+  "type": "object",
+  "required": ["listing_id", "owner_id", "category_id", "status"],
+  "properties": {
+    "listing_id": { "type": "integer" },
+    "owner_id": { "type": "string" },
+    "category_id": { "type": "string" },
+    "status": { "type": "string" },
+    "features_search": { "type": "object", "additionalProperties": { "type": "array", "items": {} } }
+  },
+  "additionalProperties": false
+}

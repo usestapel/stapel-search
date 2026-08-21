@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "search.signal",
+  "description": "The one inbound door for promotion and popularity (spec §14). Idempotent by event id, last writer wins by event position. Who is allowed to emit it is a product decision (a billing entitlement, an editorial tool) that lives outside this module: stapel-search owns the field and the audit row, not the policy. Adding tiers or a promo marketplace later is a new emitter, not a redesign of the index.",
+  "type": "object",
+  "required": ["doc_type", "doc_key"],
+  "properties": {
+    "doc_type": { "type": "string" },
+    "doc_key": { "type": ["string", "integer"] },
+    "boost": { "type": "number", "description": "Relevance boost, clamped to [-1.0, 5.0]. Applies ONLY under sort=relevance." },
+    "popularity": { "type": "integer", "minimum": 0 },
+    "promoted": { "type": "boolean", "description": "DSA Art. 26 marker, serialized on every result item." },
+    "expires_at": { "type": ["string", "null"], "description": "ISO 8601; after it the beat drops promoted and boost." }
+  },
+  "additionalProperties": false
+}

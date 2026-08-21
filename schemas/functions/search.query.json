@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "search.query",
+  "description": "Run a search from a server-side caller. The payload is the same parameter set GET /search/api/v1/query accepts (type, q, lang, category, f.<slug>, r.<slug>, lat/lon/radius_km or bbox, sort, facets, limit, anchor, direction) and the answer is the same envelope: {items, facets, facet_meta, next_anchor, prev_anchor, has_next, has_prev, count, exact_total, degraded, backend, sort, took_ms}. Every item carries `promoted` (DSA Art. 26) under every sort, including when it is false.",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": { "type": "string", "description": "Registered doc_type; one type per query (no federated search in v1)." },
+    "q": { "type": "string", "description": "Free text; dictionary-normalized, morphology is the engine's." },
+    "lang": { "type": "string", "description": "Language code selecting the FTS config and dictionary." },
+    "category": { "type": "string", "description": "root/leaf path; prefix filter (rollup)." },
+    "owner": { "type": "string", "description": "Opaque owner key." },
+    "sort": { "type": "string", "description": "One of STAPEL_SEARCH['SORTS']." },
+    "facets": { "type": "string", "description": "on | off | comma-separated slugs." },
+    "limit": { "type": "integer", "minimum": 1 },
+    "anchor": { "type": "string", "description": "Opaque keyset cursor from a previous answer." },
+    "direction": { "type": "string", "enum": ["next", "prev"] },
+    "lat": { "type": ["number", "string"] },
+    "lon": { "type": ["number", "string"] },
+    "radius_km": { "type": ["number", "string"] },
+    "bbox": { "type": "string", "description": "minLat,minLon,maxLat,maxLon; minLon > maxLon crosses the antimeridian." }
+  },
+  "additionalProperties": true
+}

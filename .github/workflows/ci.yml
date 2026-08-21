@@ -1,0 +1,192 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Tier 1: the portable suite. SQLite + the naive backend, which is a
+  # declared engine rather than a degraded one, so a green run here means
+  # something on its own.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install stapel-core
+        run: pip install git+https://github.com/usestapel/stapel-core.git
+
+      - name: Install
+        # Editable on purpose: tests/ imports resolve against the source tree
+        # (stapel_search.tests), which a non-editable install does not ship.
+        run: pip install -e ".[all]" || pip install -e .
+
+      - name: Lint
+        run: |
+          pip install ruff --quiet
+          ruff check . --select E,F,W --ignore E501
+
+      - name: Import check
+        run: python -c "import stapel_search; print('import OK')"
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.42.0"
+
+      - name: Tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=stapel_search \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --junitxml=junit.xml \
+            -o junit_family=legacy \
+            -v
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          files: coverage.xml
+          flags: stapel-search
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results to Codecov
+        uses: codecov/test-results-action@v1
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Tier 2: the default backend, against a real server. Postgres FTS configs,
+  # GIN plans and TABLESAMPLE cannot be faked, so they are tested for real —
+  # a simulated engine that passes is worse than a skipped one, because it
+  # reports confidence nobody earned.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: stapel
+          POSTGRES_DB: search_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install git+https://github.com/usestapel/stapel-core.git
+      - run: pip install -e ".[all]" || pip install -e .
+      - run: pip install pytest pytest-django psycopg[binary] "stapel-tools>=0.42.0"
+      - name: Tests against Postgres
+        env:
+          STAPEL_SEARCH_TEST_DB: postgres://postgres:stapel@127.0.0.1:5432/search_test
+        run: pytest tests/ -q
+
+  # Tier 3: the second engine. This job is a RELEASE GATE by existing: a
+  # backend nobody exercises rots, and the spec's rule is that the absence of
+  # this job fails the release — not that a skipped run passes it.
+  meilisearch:
+    runs-on: ubuntu-latest
+    services:
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        env:
+          MEILI_MASTER_KEY: stapel-test-key
+          MEILI_NO_ANALYTICS: "true"
+        ports: ["7700:7700"]
+        options: >-
+          --health-cmd "curl -fsS http://localhost:7700/health || exit 1"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install git+https://github.com/usestapel/stapel-core.git
+      - run: pip install -e ".[meili]"
+      - run: pip install pytest pytest-django "stapel-tools>=0.42.0"
+      - name: Conformance against Meilisearch
+        env:
+          STAPEL_SEARCH_MEILI_URL: http://127.0.0.1:7700
+          STAPEL_SEARCH_MEILI_KEY: stapel-test-key
+        # tests/marks.py turns "the URL is set but unreachable" into a hard
+        # failure rather than a skip, so this job cannot go green by not
+        # running.
+        run: pytest tests/test_backend_conformance.py -q -k meili -v
+
+  # Tier 4: the seam itself. Both engines, one assertion function, one
+  # settings key between them.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: stapel
+          POSTGRES_DB: search_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      meilisearch:
+        image: getmeili/meilisearch:v1.11
+        env:
+          MEILI_MASTER_KEY: stapel-test-key
+          MEILI_NO_ANALYTICS: "true"
+        ports: ["7700:7700"]
+        options: >-
+          --health-cmd "curl -fsS http://localhost:7700/health || exit 1"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install git+https://github.com/usestapel/stapel-core.git
+      - run: pip install -e ".[meili]"
+      - run: pip install psycopg[binary] "stapel-tools>=0.42.0"
+      - name: Same assertions, two engines
+        env:
+          STAPEL_SEARCH_TEST_DB: postgres://postgres:stapel@127.0.0.1:5432/search_test
+          STAPEL_SEARCH_MEILI_URL: http://127.0.0.1:7700
+          STAPEL_SEARCH_MEILI_KEY: stapel-test-key
+        run: python -m stapel_search.e2e.run_e2e
+
+  # Tier 5: the contract artifacts and the fleet gate this module contributed.
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install git+https://github.com/usestapel/stapel-core.git
+      - run: pip install -e ".[all]" || pip install -e .
+      - run: pip install "stapel-tools>=0.42.0"
+      - name: Contract drift gate
+        run: make contract-check
+      - name: Index contract lint
+        run: make index-lint
+      - name: Migration expand/contract gate
+        run: make migration-lint
+      - name: Outbox discipline
+        run: make emit-check
