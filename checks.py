@@ -87,9 +87,9 @@ def check_postgres_backend_has_postgres(app_configs, **kwargs):
     e.g. via ``stapel_preflight``), and it is THIS module's own migration
     0002 that creates ``pg_trgm`` — so on a fresh database, before 0002 has
     run, the extension is genuinely absent and erroring here would refuse
-    the very migrate that fixes it, forever. A live classified deployment hit exactly
+    the very migrate that fixes it, forever. A client fleet hit exactly
     this restart loop and worked around it at the postgres-bootstrap layer
-    (``POSTGRES_EXTENSIONS`` in ``fleet/docker-compose.base.yml``,
+    (``POSTGRES_EXTENSIONS`` in the fleet's docker-compose configuration,
     pre-creating the extension before any app connects). That is a
     legitimate deployment model, but it must not be the only escape from a
     deadlock this module creates — so the check stays quiet about a missing

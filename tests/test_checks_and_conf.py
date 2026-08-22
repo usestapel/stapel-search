@@ -77,7 +77,7 @@ def test_extension_migration_applied_reflects_the_real_migration_state():
 
 
 def test_e003_is_quiet_before_migration_0002_has_applied(monkeypatch):
-    """The deadlock a live classified deployment hit: on a fresh database pg_trgm is
+    """The deadlock a client fleet hit: on a fresh database pg_trgm is
     genuinely absent before 0002 runs, and this check must not refuse the
     very migrate that would create it (see checks.py's docstring)."""
     from django.db import connection
