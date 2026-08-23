@@ -24,7 +24,7 @@ pip install stapel-search
 
 | Fact | Value |
 |---|---|
-| Version | `0.1.0` |
+| Version | `0.2.0` |
 | Python | `>=3.11` (3.11, 3.12, 3.13) |
 | Django | `djangorestframework>=3.14` |
 | HTTP operations | 5 |
@@ -68,14 +68,23 @@ bus in a split, the same `call()` either way.
 
 | engine | typo tolerance | facet counts | exact total | geo | synonyms |
 |---|---|---|---|---|---|
-| `postgres` (default) | `pg_trgm`, second arm | exact to the cap, then sampled | estimated | geohash prefilter + haversine | query expansion |
-| `meili` (`[meili]` extra) | native | exact | exact | native `_geoRadius` | native |
+| `postgres` (default) | `pg_trgm`, second arm | exact to the cap, then sampled | exact to the cap, then a floor | geohash prefilter + haversine | query expansion |
+| `meili` (`[meili]` extra) | native | exact | exact, a floor past the window | native `_geoRadius` | native |
 | `naive` (tests, SQLite demos) | none, declared | exact | exact | python haversine | query expansion |
 | `opensearch` | a pointer, not a promise | | | | |
 
 Differences are never hidden. Each backend declares
 `BackendCapabilities`, and every response carries `degraded: [...]` naming
-what this engine could not do for this query. `stapel_search.testing`
+what this engine could not do for this query.
+
+**The count is one of those differences, and it says which one it is.**
+`count` is nullable, `count_is_lower_bound` marks a floor ("at least N",
+rendered `N+`), and `exact_total` describes THIS answer rather than the
+engine class — a Postgres candidate set below the cap is counted exactly,
+and saying otherwise teaches a frontend to distrust a number that is right.
+The invariant the service enforces for every backend: **the answer may never
+claim fewer matches than the page shows**, so `count: 0` beside a non-empty
+`items[]` is unreachable. Unknown is spelled `null`, never `0`. `stapel_search.testing`
 exposes the suite publicly: **a new backend without a green conformance run
 does not merge**, and a scenario may only be skipped when the matching
 capability is `False`.

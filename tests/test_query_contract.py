@@ -196,9 +196,127 @@ def test_degraded_reports_what_the_engine_could_not_do(conformance):
     capabilities = conformance.capabilities
     if not capabilities.typo_tolerance:
         assert "typo_tolerance" in response["degraded"]
-    if not capabilities.exact_total:
-        assert "exact_total" in response["degraded"]
+    # `exact_total` is degraded per ANSWER, not per engine: an engine with no
+    # guaranteed exact total still counts a small candidate set exactly.
+    assert ("exact_total" in response["degraded"]) is not response["exact_total"]
     assert response["backend"] == conformance.backend.name
+
+
+# --------------------------------------------------------------------------
+# the count contract: never 0 beside items
+# --------------------------------------------------------------------------
+
+
+class _FakeBackend:
+    """An engine that answers exactly what a test needs it to answer."""
+
+    name = "fake"
+
+    def __init__(self, result):
+        self._result = result
+
+    def capabilities(self):
+        from stapel_search.dto import BackendCapabilities
+
+        return BackendCapabilities(
+            typo_tolerance=True,
+            facet_counts=False,
+            phrase_synonyms=True,
+            # The engine makes no exactness guarantee; the ANSWER still may.
+            exact_total=False,
+            supported_scorers=frozenset(
+                {"relevance", "freshness_decay", "geo_decay", "promotion_boost", "popularity"}
+            ),
+        )
+
+    def query(self, q):
+        return self._result
+
+    def facets(self, q, plan):  # pragma: no cover - facet_counts is False
+        raise AssertionError("facets must not be asked of an engine that cannot count")
+
+
+def _answer(monkeypatch, **result_kwargs):
+    from stapel_search import backends
+    from stapel_search.dto import Hit, QueryResult
+    from stapel_search.services import search
+
+    hits = tuple(
+        Hit(key=str(n), score=1.0 / n, sort_value=1.0 / n)
+        for n in range(1, result_kwargs.pop("hit_count", 2) + 1)
+    )
+    result = QueryResult(hits=hits, **result_kwargs)
+    monkeypatch.setattr(backends, "get_backend", lambda: _FakeBackend(result))
+    return search({"type": DOC_TYPE, "q": "samsung", "sort": "relevance"})
+
+
+def test_a_zero_count_beside_items_is_replaced_by_what_the_page_proves(monkeypatch, db):
+    """The live defect: «Примерно 0 объявлений» printed over visible cards."""
+    response = _answer(monkeypatch, total=0, exact_total=False, hit_count=3)
+
+    assert len(response["items"]) == 3
+    assert response["count"] == 3
+    assert response["count_is_lower_bound"] is True
+    assert response["exact_total"] is False
+    assert "exact_total" in response["degraded"]
+
+
+def test_the_lower_bound_counts_the_page_after_this_one(monkeypatch, db):
+    """``has_next`` proves one more row exists, so the floor includes it."""
+    response = _answer(monkeypatch, total=0, has_next=True, hit_count=2)
+
+    assert response["count"] == 3
+    assert response["count_is_lower_bound"] is True
+
+
+def test_a_cursor_offset_counts_the_pages_already_read(monkeypatch, db):
+    from stapel_search import backends
+    from stapel_search.dto import Cursor, Hit, QueryResult
+    from stapel_search.query import encode_cursor
+    from stapel_search.services import search
+
+    result = QueryResult(hits=(Hit(key="9", score=0.5, sort_value=0.5),), total=0)
+    monkeypatch.setattr(backends, "get_backend", lambda: _FakeBackend(result))
+    anchor = encode_cursor(Cursor(sort_value=0.9, doc_key="8", offset=40))
+
+    response = search({"type": DOC_TYPE, "q": "samsung", "anchor": anchor})
+    assert response["count"] == 41
+    assert response["count_is_lower_bound"] is True
+
+
+def test_an_unknown_count_is_null_not_zero(monkeypatch, db):
+    """A backend that cannot count says so; ``null`` renders as no count."""
+    response = _answer(monkeypatch, total=None, hit_count=0)
+
+    assert response["items"] == []
+    assert response["count"] is None
+    assert response["count_is_lower_bound"] is False
+    assert "exact_total" in response["degraded"]
+
+
+def test_an_unknown_count_still_reports_the_rows_it_returned(monkeypatch, db):
+    response = _answer(monkeypatch, total=None, hit_count=2)
+
+    assert response["count"] == 2
+    assert response["count_is_lower_bound"] is True
+
+
+def test_a_backends_lower_bound_survives_the_floor(monkeypatch, db):
+    response = _answer(monkeypatch, total=1001, total_is_lower_bound=True, hit_count=2)
+
+    assert response["count"] == 1001
+    assert response["count_is_lower_bound"] is True
+    assert response["exact_total"] is False
+
+
+def test_an_exact_answer_is_not_reported_as_degraded(monkeypatch, db):
+    """Exactness is a property of the answer, not of the engine class."""
+    response = _answer(monkeypatch, total=17, exact_total=True, hit_count=2)
+
+    assert response["count"] == 17
+    assert response["count_is_lower_bound"] is False
+    assert response["exact_total"] is True
+    assert "exact_total" not in response["degraded"]
 
 
 def test_suggest_refuses_an_unknown_type():

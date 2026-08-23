@@ -412,13 +412,30 @@ class MeilisearchBackend:
         return rows
 
     def query(self, q: SearchQuery) -> QueryResult:
+        from ..conf import search_settings
+
         response = self._search(q)
         rows = self._rank(q, response)
         page, has_next, has_prev = shared.paginate(rows, q)
+        window = int(search_settings.MAX_RESULT_WINDOW)
+        returned = len(response.get("hits", []))
+        if returned < window:
+            # The engine handed over everything it had, and `_rank` then
+            # dropped whatever fell outside the radius: what survived IS the
+            # answer, counted, not estimated. `estimatedTotalHits` is not
+            # used here on purpose — it is the engine's guess AND it counts
+            # the rows the geo pass just removed.
+            total, lower_bound = len(rows), False
+        else:
+            # The window truncated the answer, so every number available is
+            # a floor: at least this many match.
+            estimated = int(response.get("estimatedTotalHits") or 0)
+            total, lower_bound = max(estimated, len(rows)), True
         return QueryResult(
             hits=tuple(item[2] for item in page),
-            total=int(response.get("estimatedTotalHits", len(rows)) or len(rows)),
-            exact_total=True,
+            total=total,
+            exact_total=not lower_bound,
+            total_is_lower_bound=lower_bound,
             has_next=has_next,
             has_prev=has_prev,
             degraded=(),

@@ -135,8 +135,10 @@ def assertions(client, *, engine: str) -> None:
     with_text = get("/search/api/v1/query", type="listing", q="samsung")
     if not capabilities.typo_tolerance:
         assert "typo_tolerance" in with_text["degraded"], engine
-    if not capabilities.exact_total:
-        assert "exact_total" in with_text["degraded"], engine
+    # `exact_total` is a property of the ANSWER, not of the engine.
+    assert ("exact_total" in with_text["degraded"]) is not with_text["exact_total"], engine
+    # and the count never contradicts the page it is printed over
+    assert with_text["count"] is None or with_text["count"] >= len(with_text["items"]), engine
 
     # 11. deep paging is refused, not truncated
     from stapel_search.dto import Cursor

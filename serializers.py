@@ -57,8 +57,29 @@ class SearchResponseSerializer(serializers.Serializer):
     prev_anchor = serializers.CharField(allow_null=True)
     has_next = serializers.BooleanField()
     has_prev = serializers.BooleanField()
-    count = serializers.IntegerField()
-    exact_total = serializers.BooleanField()
+    count = serializers.IntegerField(
+        allow_null=True,
+        help_text=(
+            "How many documents match. NEVER 0 beside a non-empty items[] — the "
+            "answer may not claim fewer matches than the page shows. `null` means "
+            "the engine cannot say, and is rendered as no count at all."
+        ),
+    )
+    count_is_lower_bound = serializers.BooleanField(
+        help_text=(
+            "True when `count` is a floor: at least this many match, possibly "
+            "more (a capped count, a window-truncated engine answer). Render "
+            "'N+', never 'N'."
+        )
+    )
+    exact_total = serializers.BooleanField(
+        help_text=(
+            "True when `count` is exact for THIS answer — equivalent to "
+            "`count is not null and not count_is_lower_bound`. Per answer, not "
+            "per engine: an engine without a guaranteed exact total still counts "
+            "a small candidate set exactly."
+        )
+    )
     degraded = serializers.ListField(
         child=serializers.CharField(),
         help_text="What the configured engine could not do for this query.",

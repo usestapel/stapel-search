@@ -4,6 +4,56 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-08-24
+
+### Fixed — the count contract: never `0` beside items
+
+A relevance query answered `count: 0` with a full page of `items` and
+`degraded: ["exact_total"]`, and the storefront printed «Примерно 0
+объявлений» over the visible cards. Two causes, both closed:
+
+- **The Postgres total was counted over the wrong arm.** The typo fallback
+  answers from the `word_similarity` arm; the total kept counting the
+  `to_tsquery` arm that had just found nothing. `_candidate_count(q,
+  trigram=...)` now counts the same question the page answered.
+- **Nothing enforced the invariant above the backends.** `services`
+  now floors every engine's number with what the page proves — the cursor's
+  offset, the rows on this page, and one more when `has_next` says another
+  exists — so a number under that floor becomes the floor and is marked a
+  lower bound. `count: 0` beside a non-empty `items[]` is unreachable by
+  construction, for a third-party backend too.
+
+### Changed — wire meaning (the minor)
+
+- **`count` is now nullable.** `null` means the engine cannot say and is
+  rendered as no count at all. Unknown was previously spelled `0`, which is
+  a claim rather than an absence.
+- **New `count_is_lower_bound: bool`.** True when `count` is a floor: at
+  least this many match, possibly more. Render `N+`, never `N`. Postgres
+  sets it past `FACET_CANDIDATE_CAP`; Meilisearch sets it when the result
+  window truncated the engine's answer.
+- **`exact_total` describes the ANSWER, not the engine**, and equals `count
+  is not null and not count_is_lower_bound`. `degraded: ["exact_total"]`
+  follows it, so an engine with no guaranteed exact total no longer reports
+  a small, exactly counted candidate set as degraded.
+  `BackendCapabilities.exact_total` keeps its meaning ("exact at ANY corpus
+  size") and stays the engine-level declaration.
+- Meilisearch no longer reports `estimatedTotalHits` as an exact total: below
+  the window the ranked rows are counted (the estimate also counts the rows
+  the geo pass just removed), and past the window the number is a floor.
+- `QueryResult.total` is `int | None` and gains `total_is_lower_bound`.
+  A backend that returns the old shape still works — the service enforces
+  the invariant on top of it.
+
+### Added
+
+- Conformance scenario `count_never_contradicts_hits`: no engine may report
+  fewer matches than the page it just returned, checked on the plain and the
+  fuzzy (relevance) path.
+- Frontend note: a `degraded[]` that contains **only** `exact_total` is a
+  count nuance, not a failed search, and must not raise a degradation
+  banner (`@stapel/search-react` 0.4.0 implements this).
+
 ## [0.1.0] — 2026-08-21
 
 First cut: a materialized search index with one swappable engine seam, three

@@ -557,6 +557,7 @@ class PostgresSearchBackend:
 
         hits, has_next = self._run(q, trigram=False)
         degraded: list[str] = []
+        trigram = False
         if (
             q.text is not None
             and not q.text.is_empty
@@ -564,36 +565,48 @@ class PostgresSearchBackend:
         ):
             if self.has_trigram():
                 hits, has_next = self._run(q, trigram=True)
+                trigram = True
             else:
                 degraded.append("typo_tolerance")
         if q.text is not None and not q.text.is_empty:
             degraded.append("phrase_synonyms")
 
-        total = self._estimate_total(q)
+        # Counted over the SAME arm the hits came from. Counting the exact
+        # arm behind a fuzzy page is how `count: 0` ends up printed over
+        # four visible cards: the typo fallback answers from
+        # `word_similarity`, and the tsquery that found nothing is not the
+        # question this page answered.
+        total, lower_bound = self._candidate_count(q, trigram=trigram)
         return QueryResult(
             hits=tuple(hits),
             total=total,
-            exact_total=False,
+            exact_total=not lower_bound,
+            total_is_lower_bound=lower_bound,
             has_next=has_next,
             has_prev=q.cursor is not None,
             degraded=tuple(dict.fromkeys(degraded)),
         )
 
-    def _estimate_total(self, q: SearchQuery) -> int:
-        """Candidate count, capped: the number is an estimate and says so.
+    def _candidate_count(self, q: SearchQuery, *, trigram: bool) -> tuple[int, bool]:
+        """``(count, is_lower_bound)`` for the candidate set.
 
         Counting the whole candidate set on every page is the cost this
-        backend exists to avoid, so the count stops at the cap + 1 and
-        ``exact_total: false`` travels with it.
+        backend exists to avoid, so the count stops at the cap + 1. Below
+        the cap the number is a real ``count(*)`` and is exact; at the cap
+        it is a floor — "at least cap+1" — and says so, because a capped
+        count reported as a count is a wrong number with a confident face.
         """
         from ..conf import search_settings
 
         cap = int(search_settings.FACET_CANDIDATE_CAP)
-        where_sql, where_params = self._where(q, trigram=False)
+        where_sql, where_params = self._where(q, trigram=trigram)
         sql = f"SELECT count(*) FROM (SELECT 1 FROM {_TABLE} d WHERE {where_sql} LIMIT %s) s"
         with connection.cursor() as cursor:
             cursor.execute(sql, list(where_params) + [cap + 1])
-            return int(cursor.fetchone()[0])
+            count = int(cursor.fetchone()[0])
+        if count > cap:
+            return cap + 1, True
+        return count, False
 
     def facets(self, q: SearchQuery, plan: FacetPlan) -> FacetResult:
         """Remaining-option counts, one candidate set per counted slug.

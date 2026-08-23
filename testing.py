@@ -620,6 +620,31 @@ def _s_exact_total(ctx: Context) -> None:
     assert result.total == 4
 
 
+def _s_count_never_contradicts_hits(ctx: Context) -> None:
+    """No engine may report fewer matches than the page it just returned.
+
+    Every backend, no capability gate: ``total: 0`` beside non-empty hits is
+    not an approximation, it is a contradiction — and the storefront printed
+    it as «Примерно 0 объявлений» over four visible cards. The typo query is
+    here on purpose: the fuzzy arm is where a backend is tempted to count
+    one question and answer another.
+    """
+    for label, q in (
+        ("plain", ctx.query(limit=2)),
+        ("relevance", ctx.query(sort="relevance", text=ctx.text("Samsng", ""), limit=2)),
+    ):
+        result = ctx.backend.query(q)
+        if not result.hits:
+            continue
+        assert result.total is not None, f"{label}: a page of hits is not an unknown count"
+        assert result.total >= len(result.hits), (
+            f"{label}: total={result.total} under {len(result.hits)} visible hits"
+        )
+        assert not (result.exact_total and result.total_is_lower_bound), (
+            f"{label}: a count cannot be exact AND a lower bound"
+        )
+
+
 def _s_suggest(ctx: Context) -> None:
     ctx.require("suggest")
     titles = ctx.backend.suggest(DOC_TYPE, "Apple", limit=5)
@@ -719,6 +744,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         "an insertion between pages does not duplicate a row",
     ),
     Scenario("exact_total", _s_exact_total, "a declared exact total is exact"),
+    Scenario(
+        "count_never_contradicts_hits",
+        _s_count_never_contradicts_hits,
+        "no engine reports fewer matches than the page shows",
+    ),
     Scenario("suggest", _s_suggest, "prefix suggestions come from the index"),
     Scenario("suggest_empty_prefix", _s_suggest_empty_prefix, "an empty prefix is not a crash"),
     Scenario("capabilities_are_declared", _s_capabilities_are_declared, "the seam is described"),

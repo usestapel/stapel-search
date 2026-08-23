@@ -135,8 +135,8 @@ breaks the search verbs", and here the search verbs *are* the module — hence
 
 | engine | typo | facet counts | exact total | geo | synonyms |
 |---|---|---|---|---|---|
-| `postgres.PostgresSearchBackend` **(default)** | `pg_trgm`, second arm | exact to the cap, then sampled | estimated | geohash prefilter + haversine | query expansion |
-| `meili.MeilisearchBackend` (`[meili]`) | native | exact | exact | native `_geoRadius` | native |
+| `postgres.PostgresSearchBackend` **(default)** | `pg_trgm`, second arm | exact to the cap, then sampled | exact to the cap, then a floor | geohash prefilter + haversine | query expansion |
+| `meili.MeilisearchBackend` (`[meili]`) | native | exact | exact, a floor past the window | native `_geoRadius` | native |
 | `naive.NaiveSearchBackend` | none, **declared** | exact | exact | python haversine | query expansion |
 | `opensearch.OpenSearchBackend` | a pointer, not a promise | | | | |
 
@@ -200,6 +200,42 @@ query, for years. Three mechanical layers:
 The boundary is stated as plainly as SUR004 states its own: these gates prove
 **the promise was not dropped on the floor**, not that the branch is right.
 Only the round-trip assertions do that.
+
+---
+
+## The count (0.2.0)
+
+Three fields, one rule: **the answer may never claim fewer matches than the
+page in front of the reader shows.**
+
+| field | meaning | rendered as |
+|---|---|---|
+| `count: int` + `count_is_lower_bound: false` | the count | `N объявлений` |
+| `count: int` + `count_is_lower_bound: true` | a floor — at least N | `N+ объявлений` |
+| `count: null` | the engine cannot say | no count line |
+
+`count: 0` beside a non-empty `items[]` is unreachable by construction:
+`services._honest_count` floors every backend's number with what the page
+proves — the cursor's offset, the rows on this page, and one more when
+`has_next` says another exists. A backend number under that floor is
+replaced by the floor and marked a lower bound. **Unknown is spelled
+`null`, never `0`**: zero is a claim, and the visible cards disprove it.
+
+`exact_total` now describes THIS answer (`count is not null and not
+count_is_lower_bound`), not the engine class, and `degraded: ["exact_total"]`
+follows the answer. `BackendCapabilities.exact_total` keeps its old meaning —
+"counts exactly at ANY corpus size" — and a Postgres candidate set below
+`FACET_CANDIDATE_CAP` is still counted exactly, because reporting an exact
+number as degraded teaches a frontend to distrust a number that is right.
+
+The defect this closed: the Postgres typo fallback answers from the
+`word_similarity` arm, while the total was counted over the `to_tsquery` arm
+that had just found nothing — so a relevance query with one misspelled term
+answered `count: 0` with a full page of items, and the storefront printed
+«Примерно 0 объявлений» above them. The count is now taken over the same arm
+the hits came from. `exact_total` in `degraded[]` is a count nuance, not a
+failed search, and a frontend should not raise a degradation banner for it
+alone.
 
 ---
 

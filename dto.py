@@ -279,9 +279,34 @@ class Hit:
 
 @dataclass(frozen=True)
 class QueryResult:
+    """One page of hits, plus how many documents match — honestly.
+
+    ``total`` answers three different questions and says which one it is:
+
+    * ``exact_total=True`` — the count is the count.
+    * ``total_is_lower_bound=True`` — **at least** ``total`` match, possibly
+      more. A capped count, a window-truncated engine answer, or an
+      estimate: it renders as "N+", never as "N".
+    * ``total=None`` — the engine cannot say. Rendered as no count at all.
+
+    A backend must never return ``total=0`` beside a non-empty ``hits``:
+    zero is a claim ("nothing matches") and the page in front of the reader
+    disproves it. When the count is unknown, ``None`` is the honest answer;
+    when it is partial, ``total_is_lower_bound`` is. The service layer
+    enforces the invariant on top of whatever a backend returns
+    (``services._honest_count``), so a third-party engine cannot reintroduce
+    the "Примерно 0 объявлений" over four visible cards.
+    """
+
     hits: tuple[Hit, ...] = ()
-    total: int = 0
+    total: int | None = 0
+    #: True when the count is exact for THIS answer. Per-answer, not a
+    #: property of the engine: ``BackendCapabilities.exact_total`` says
+    #: whether an engine counts exactly at ANY corpus size, and an engine
+    #: that does not can still count a small candidate set exactly.
     exact_total: bool = False
+    #: True when ``total`` is a floor rather than a count.
+    total_is_lower_bound: bool = False
     has_next: bool = False
     has_prev: bool = False
     degraded: tuple[str, ...] = ()
@@ -327,6 +352,11 @@ class BackendCapabilities:
     typo_tolerance: bool = False
     facet_counts: bool = False
     exact_facet_counts: bool = False
+    #: Whether this engine counts exactly at ANY corpus size. A ``False``
+    #: here is not a promise that every answer is inexact: Postgres counts a
+    #: candidate set below ``FACET_CANDIDATE_CAP`` exactly and says so in
+    #: ``QueryResult.exact_total``, which is the per-answer truth the
+    #: response and ``degraded[]`` are built from.
     exact_total: bool = False
     geo_native: bool = False
     synonyms_native: bool = False

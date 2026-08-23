@@ -676,7 +676,35 @@ def apply_settings(doc_type: str) -> None:
 # --------------------------------------------------------------------------
 
 
-def _degradations(capabilities, q, facet_result, path_degraded: str) -> tuple[str, ...]:
+def _honest_count(result, *, offset: int, shown: int) -> tuple[int | None, bool]:
+    """``(count, count_is_lower_bound)`` — a count the page cannot disprove.
+
+    The invariant, enforced here for EVERY backend rather than trusted to
+    each one: the answer may never claim fewer matches than the reader can
+    already see. ``count: 0`` beside a non-empty ``items`` is the shape this
+    exists to make impossible — the storefront printed «Примерно 0
+    объявлений» over four cards, which is not an approximation, it is a
+    contradiction.
+
+    So the floor is what this page proves: the rows before it (the cursor's
+    offset), the rows on it, and one more when ``has_next`` says another
+    exists. A backend number below that floor is replaced by the floor and
+    marked a lower bound; ``None`` from a backend that genuinely cannot
+    count stays ``None`` only while nothing has been seen — past that, "at
+    least what you can see" is knowledge, and zero was never the honest way
+    to spell "unknown".
+    """
+    seen = offset + shown + (1 if result.has_next else 0)
+    total = result.total
+    if total is None:
+        return (seen, True) if seen else (None, False)
+    total = int(total)
+    if total < seen:
+        return seen, True
+    return total, bool(getattr(result, "total_is_lower_bound", False))
+
+
+def _degradations(capabilities, q, facet_result, path_degraded: str, exact_total: bool) -> tuple[str, ...]:
     """What the caller asked for that this engine could not deliver.
 
     Nothing is written to a log and forgotten. A frontend that cannot see
@@ -690,7 +718,11 @@ def _degradations(capabilities, q, facet_result, path_degraded: str) -> tuple[st
             degraded.append("typo_tolerance")
         if not capabilities.phrase_synonyms:
             degraded.append("phrase_synonyms")
-    if not capabilities.exact_total:
+    # Per ANSWER, not per engine: an engine that cannot always count exactly
+    # still counts a small candidate set exactly, and reporting `exact_total`
+    # as degraded over an exact number teaches a frontend to distrust a
+    # number that is right.
+    if not exact_total:
         degraded.append("exact_total")
     if facet_result is not None and facet_result.approximate:
         degraded.append("exact_facet_counts")
@@ -771,6 +803,8 @@ def search(params, *, accept_language: str = "") -> dict:
             )
 
     counts = fill_zero_options(facet_result.counts, plan) if facet_result else {}
+    count, count_is_lower_bound = _honest_count(result, offset=offset, shown=len(items))
+    exact_total = bool(result.exact_total and count is not None and not count_is_lower_bound)
     return {
         "items": items,
         "facets": counts,
@@ -784,10 +818,14 @@ def search(params, *, accept_language: str = "") -> dict:
         "prev_anchor": prev_anchor,
         "has_next": result.has_next,
         "has_prev": offset > 0,
-        "count": result.total,
-        "exact_total": result.exact_total,
+        # `count` is nullable and `count_is_lower_bound` says how to read it:
+        # a floor renders as "N+", never as "N", and `null` renders as no
+        # count line at all. Zero beside items is unreachable by construction.
+        "count": count,
+        "count_is_lower_bound": count_is_lower_bound,
+        "exact_total": exact_total,
         "degraded": list(
-            _degradations(capabilities, q, facet_result, path_degradation())
+            _degradations(capabilities, q, facet_result, path_degradation(), exact_total)
             + tuple(result.degraded)
             + tuple(facet_result.degraded if facet_result else ())
         ),

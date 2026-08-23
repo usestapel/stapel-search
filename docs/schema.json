@@ -601,10 +601,17 @@
             "type": "boolean"
           },
           "count": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true,
+            "description": "How many documents match. NEVER 0 beside a non-empty items[] — the answer may not claim fewer matches than the page shows. `null` means the engine cannot say, and is rendered as no count at all."
+          },
+          "count_is_lower_bound": {
+            "type": "boolean",
+            "description": "True when `count` is a floor: at least this many match, possibly more (a capped count, a window-truncated engine answer). Render 'N+', never 'N'."
           },
           "exact_total": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True when `count` is exact for THIS answer — equivalent to `count is not null and not count_is_lower_bound`. Per answer, not per engine: an engine without a guaranteed exact total still counts a small candidate set exactly."
           },
           "degraded": {
             "type": "array",
@@ -626,6 +633,7 @@
         "required": [
           "backend",
           "count",
+          "count_is_lower_bound",
           "degraded",
           "exact_total",
           "facet_meta",

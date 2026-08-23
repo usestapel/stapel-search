@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "search.query",
-  "description": "Run a search from a server-side caller. The payload is the same parameter set GET /search/api/v1/query accepts (type, q, lang, category, f.<slug>, r.<slug>, lat/lon/radius_km or bbox, sort, facets, limit, anchor, direction) and the answer is the same envelope: {items, facets, facet_meta, next_anchor, prev_anchor, has_next, has_prev, count, exact_total, degraded, backend, sort, took_ms}. Every item carries `promoted` (DSA Art. 26) under every sort, including when it is false.",
+  "description": "Run a search from a server-side caller. The payload is the same parameter set GET /search/api/v1/query accepts (type, q, lang, category, f.<slug>, r.<slug>, lat/lon/radius_km or bbox, sort, facets, limit, anchor, direction) and the answer is the same envelope: {items, facets, facet_meta, next_anchor, prev_anchor, has_next, has_prev, count, count_is_lower_bound, exact_total, degraded, backend, sort, took_ms}. `count` is nullable and is NEVER 0 beside a non-empty items[]: `count_is_lower_bound` marks a floor (render 'N+'), `null` means the engine cannot say (render no count). Every item carries `promoted` (DSA Art. 26) under every sort, including when it is false.",
   "type": "object",
   "required": ["type"],
   "properties": {
