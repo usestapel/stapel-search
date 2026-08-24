@@ -299,6 +299,48 @@ def test_geohash_prefilter_keeps_border_cells(conformance):
     assert "border" in found, "the geohash prefilter must not drop a neighbouring cell"
 
 
+def test_a_document_with_no_geohash_is_still_found_by_a_tight_radius(conformance):
+    """Coordinates without a geohash are `unknown`, never `elsewhere`.
+
+    `SearchDocument.geohash` is `blank=True, default=""`, so a source may fill
+    lat/lon and leave it empty — which is what happens whenever nothing has
+    stamped the column on the source rows yet. The geohash prefilter is an
+    OPTIMISATION in front of an exact lat/lon box test, and when it treated an
+    empty column as a non-match it deleted answers the box would have given.
+
+    The failure mode is the reason this test exists: it is SILENT and it is
+    INVERTED. A tighter search box shares a longer geohash prefix, so the
+    narrower the radius the more documents the prefilter removed — a city-wide
+    search returned nothing while a country-wide one over the same corpus
+    returned everything, and widening the search "fixed" it. That is the
+    opposite of how anyone reasons about a radius, and no degradation flag or
+    log line said a word.
+    """
+    _extra(
+        conformance,
+        doc_key="nogeohash",
+        title="Indexed with coordinates and no geohash",
+        lat=Decimal(str(CENTER[0])),
+        lon=Decimal(str(CENTER[1])),
+        geohash="",
+    )
+    # Dead centre, and as tight as the corpus allows: the prefix is at its
+    # longest here, which is exactly where the defect bit hardest.
+    tight = conformance.keys(
+        conformance.query(geo=GeoFilter(lat=CENTER[0], lon=CENTER[1], radius_km=1))
+    )
+    assert "nogeohash" in tight, (
+        "a document at the centre of the search was excluded for carrying no "
+        "geohash, while the lat/lon box beside the prefilter matched it"
+    )
+    # And the radius still MEANS something for such a document — the fix widens
+    # the candidate set, it does not stop the exact test from running.
+    far = conformance.keys(
+        conformance.query(geo=GeoFilter(lat=-33.87, lon=151.21, radius_km=1))
+    )
+    assert "nogeohash" not in far
+
+
 # --- boost -----------------------------------------------------------------
 
 

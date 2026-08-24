@@ -411,7 +411,25 @@ class PostgresSearchBackend:
                 # rectangle, so a common prefix of the box's four corners is
                 # a cell that provably contains the whole box — no border
                 # document can fall out of the candidate set.
-                clauses.append("d.geohash LIKE %s")
+                #
+                # A document with NO geohash is `unknown`, not `elsewhere`.
+                # `geohash` is `blank=True, default=""` on SearchDocument, and
+                # a source is free to fill lat/lon and leave it empty — which
+                # is exactly what a host does when nothing has stamped the
+                # column yet. Plain `LIKE 'ucf%'` then excludes every such
+                # document, and because this clause sits in front of an EXACT
+                # lat/lon box test that would have answered correctly, the
+                # failure is silent and inverted: the SMALLER the radius, the
+                # tighter the box, the longer the common prefix, the fewer
+                # results — down to zero for a city-sized search over a corpus
+                # whose coordinates are all present and correct. A widened
+                # search then "fixes" it, which is the opposite of how anyone
+                # debugs a search.
+                #
+                # The prefilter is an OPTIMISATION over the box below it. An
+                # optimisation that removes correct answers is a defect, so it
+                # only ever narrows documents that carry the column it reads.
+                clauses.append("(d.geohash = '' OR d.geohash LIKE %s)")
                 params.append(prefix + "%")
             box = shared.bbox_of(geo)
             if box is not None:
