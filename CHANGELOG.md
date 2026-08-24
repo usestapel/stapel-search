@@ -4,6 +4,39 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] — 2026-08-24
+
+### Fixed — a tighter radius stopped returning MORE results, and then any
+
+The Postgres backend's geo prefilter narrows candidates by the geohash cell
+containing the whole search box, and it ANDed `d.geohash LIKE 'prefix%'`
+unconditionally. `SearchDocument.geohash` is `blank=True, default=""`, so a
+source may fill `lat`/`lon` and leave it empty — which is the case on any
+deployment where nothing has stamped the column on the source rows yet. Every
+such document failed the LIKE and left the candidate set, in front of an exact
+`lat`/`lon` box test three lines below that would have matched it.
+
+The failure was silent (no degradation flag, no log line) and INVERTED: a
+tighter box shares a longer geohash prefix, so the smaller the radius the more
+documents were dropped. Measured on a live fleet whose listings all carry
+coordinates and no geohash — `radius=50km` → 0 results, `radius=500km` → 3
+results with the nearest at 11.67 km, a listing the 50 km search must have
+returned.
+
+A document with no geohash is *unknown*, never *elsewhere*. The prefilter is an
+optimisation over the box beside it, and an optimisation that removes correct
+answers is a defect, so it now narrows only documents that carry the column it
+reads. The naive backend (no prefilter) and Meilisearch (`_geoRadius`, no
+geohash column) were already correct.
+
+Pinned by `test_a_document_with_no_geohash_is_still_found_by_a_tight_radius`.
+
+**Note for hosts.** Stamping `geohash` on the source rows is still worth doing —
+it is what makes the prefilter an index-backed narrowing rather than a full box
+scan. `stapel-geo` publishes `geo.geohash_encode` for exactly that, and
+`stapel-geo`'s MODULE.md documents listings' `geohash` column as its consumer.
+Correctness no longer depends on it; performance at scale does.
+
 ## [0.2.0] — 2026-08-24
 
 ### Fixed — the count contract: never `0` beside items
