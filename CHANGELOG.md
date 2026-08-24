@@ -4,6 +4,20 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] — 2026-08-24
+
+### Fixed — `stapel_search.__version__` said 0.2.0 in the 0.2.1 release
+
+The version bump moved `pyproject.toml` and not the module constant beside it,
+so 0.2.1 shipped reporting itself as 0.2.0. Package metadata was correct (pip
+resolves the right thing), but anything reading `stapel_search.__version__` —
+a host's drift check, a support log — was told the wrong release. `make lint`
+and `make contract-check` do not cover it; `tests/test_contract.py::
+test_the_version_matches_pyproject` does, and it is the gate that caught this.
+0.2.1 cannot be re-uploaded, so the correction is a release of its own.
+
+No behaviour change from 0.2.1.
+
 ## [0.2.1] — 2026-08-24
 
 ### Fixed — a tighter radius stopped returning MORE results, and then any
