@@ -51,6 +51,33 @@ def category_schema():
     function_registry._schemas.pop("categories.features", None)
 
 
+@pytest.fixture
+def ref_category_schema():
+    """A stub ``categories.features`` whose one facetable slug is a ref type."""
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    features = [
+        {
+            "id": 1, "slug": "vendor", "name": "Vendor", "mandatory": False,
+            "show_at_title": False, "show_as_badge": False, "translate": "none",
+            "config": {
+                "type": "ref_select",
+                "optionsRef": {"vocabulary": "phones", "level": "Vendor"},
+                "minSelected": 0, "maxSelected": 1, "uiStyle": "dropdown",
+            },
+        },
+    ]
+
+    def provider(payload):
+        return {"category_id": payload["category_id"], "revision": 1, "features": features}
+
+    register_function("categories.features", provider)
+    yield features
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
 def test_the_plan_comes_from_the_category_schema(category_schema):
     from stapel_search.facets import facet_plan
 
@@ -208,6 +235,53 @@ def test_every_builtin_attribute_type_has_a_declared_mapping():
         pytest.skip("stapel-attributes not importable")
     missing = sorted(set(get_all_type_slugs()) - set(BUILTIN_FACET_MAPPINGS))
     assert not missing, f"attribute types with no declared index semantics: {missing}"
+
+
+def test_the_vocabulary_backed_types_are_declared_not_defaulted():
+    """A ref type must never reach ``search.W002``'s generic branch.
+
+    Its DAO carries ``value`` (term codes) plus a ``labels`` snapshot; codes
+    are the axis, exactly as for the inline twins, so ``ref_select`` is a
+    term and ``ref_hierarchical_select`` a root->leaf path.
+    """
+    from stapel_search.registry import (
+        defaulted_type_slugs,
+        get_facet_mapping,
+        reset_defaulted_type_slugs,
+    )
+
+    reset_defaulted_type_slugs()
+    assert get_facet_mapping("ref_select").kind == "term"
+    assert get_facet_mapping("ref_hierarchical_select").kind == "path"
+    assert not defaulted_type_slugs() & {"ref_select", "ref_hierarchical_select"}
+
+
+def test_a_ref_dao_indexes_its_codes_not_its_labels():
+    from stapel_search.services import build_facets
+
+    doc = _document(
+        doc_key="x",
+        features={
+            "vendor": {"type": "ref_select", "value": ["apple"],
+                       "labels": ["Apple"], "vocabulary": "phones", "level": "Vendor"},
+            "model": {"type": "ref_hierarchical_select", "value": ["apple", "iphone-15"],
+                      "labels": ["Apple", "iPhone 15"], "vocabulary": "phones",
+                      "levels": ["Vendor", "Model"]},
+        },
+    )
+    facets, terms, _numbers, _ = build_facets(doc)
+    assert facets == {"vendor": ["apple"], "model": ["apple", "iphone-15"]}
+    assert terms == ["vendor=apple", "model=apple", "model=apple/iphone-15"]
+
+
+def test_a_vocabulary_backed_slug_plans_open(ref_category_schema):
+    """§3.5: the level lives outside the schema, so there are no zeros to owe."""
+    from stapel_search.facets import facet_plan, fill_zero_options
+
+    plan = facet_plan("7")
+    assert plan.kinds["vendor"] == "term"
+    assert "vendor" not in plan.closed_options
+    assert fill_zero_options({"vendor": {"apple": 2}}, plan)["vendor"] == {"apple": 2}
 
 
 def test_hex_color_indexes_the_simple_axis_not_the_paint_code():

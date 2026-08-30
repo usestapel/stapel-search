@@ -185,9 +185,12 @@ def _hex_color_simple(dao: dict) -> list:
     return [] if simple in (None, "") else [simple]
 
 
-#: The ten builtin stapel-attributes types (spec §5.3). `convertible_unit`
+#: The twelve builtin stapel-attributes types (spec §5.3). `convertible_unit`
 #: is always stored in the family's base unit, so no read-time conversion.
 #: `date` is a unix timestamp int, which is why it is a range, not a term.
+#: The two vocabulary-backed types index exactly like their inline twins: the
+#: DAO's `value` is term CODES (`labels` is a display snapshot), so `ref_select`
+#: is a term axis and `ref_hierarchical_select` a root->leaf path.
 BUILTIN_FACET_MAPPINGS: dict[str, FacetMapping] = {
     "int": FacetMapping("range", _value_list, numeric=True),
     "float": FacetMapping("range", _value_list, numeric=True),
@@ -197,12 +200,14 @@ BUILTIN_FACET_MAPPINGS: dict[str, FacetMapping] = {
     "bool": FacetMapping("term", _value_list),
     "select": FacetMapping("term", _sequence_value),
     "hierarchical_select": FacetMapping("path", _sequence_value),
+    "ref_select": FacetMapping("term", _sequence_value),
+    "ref_hierarchical_select": FacetMapping("path", _sequence_value),
     "hex_color": FacetMapping("term", _hex_color_simple),
     "header": FacetMapping("skip", lambda dao: []),
 }
 
-#: The branch an 11th, host-registered type falls into. Indexing it silently
-#: is the disease §11 exists to stop, so taking this branch raises
+#: The branch a thirteenth, host-registered type falls into. Indexing it
+#: silently is the disease §11 exists to stop, so taking this branch raises
 #: ``search.W002`` and logs once per slug.
 DEFAULT_FACET_MAPPING = FacetMapping("term", _value_list)
 
@@ -240,7 +245,7 @@ def _attributes_registry_version() -> Any:
 def get_facet_mappings() -> dict[str, FacetMapping]:
     """The effective registry, memoized on ``registry_version()``.
 
-    A host registering an 11th feature type changes the DAO shape under us
+    A host registering a further feature type changes the DAO shape under us
     (spec risk §17.6); keying the cache on attributes' own monotonic version
     is what makes the mapping follow instead of going stale.
     """

@@ -191,6 +191,12 @@ def facet_plan(
             continue
         kinds[slug] = mapping.kind
         ordered.append(slug)
+        if config.get("optionsRef"):
+            # A vocabulary-backed field (ref_select, and any host type that
+            # points at a vocabulary the same way) has no closed option set to
+            # zero-fill: the level lives outside the schema and can hold
+            # thousands of terms. Counting what is present is the whole panel.
+            continue
         options = config.get("options")
         # Labels are translation keys living in the category config, so we
         # return codes and counts and let the frontend resolve captions from
