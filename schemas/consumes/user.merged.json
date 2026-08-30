@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "user.merged",
+  "description": "Consumed from stapel-auth. An anonymous guest account was absorbed into an existing account; the guest row ceases to exist. Search re-indexes every document whose owner_key is the guest onto the survivor — table and engine both, since rewriting only the row would leave the engine's copy owned by an id that can no longer sign in. Deliberately not a source re-pull: the source may not have processed its own merge yet, and ingest treats a document missing from the source's answer as a delete. Contract owned by the emitter.",
+  "type": "object",
+  "required": ["from_user_id", "into_user_id"],
+  "properties": {
+    "from_user_id": { "type": "string" },
+    "into_user_id": { "type": "string" },
+    "reason": { "type": "string" }
+  },
+  "additionalProperties": true
+}

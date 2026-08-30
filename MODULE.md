@@ -117,6 +117,29 @@ and subscribes one dispatcher to every signal the registry names (the
 `stapel-docs` INGEST form, `actions.py:41-88`). A broken entry raises
 `ImproperlyConfigured` — configured-but-broken must not be silent.
 
+**The account life cycle is the exception to "pull, never push".** Two
+signals are answered from the index itself rather than through the source,
+and core 0.52.x requires both together (`stapel_core.lifecycle.E001`):
+
+| Consume | What it does |
+|---|---|
+| `user.deleted` | Remove every document with that `owner_key` — the index is derived data, but a listing erased at the source and left searchable here is the erasure failing where a stranger would notice |
+| `user.merged` | Re-index every document with `owner_key == from_user_id` under `into_user_id` — `services.reassign_owner` |
+
+A merge changes exactly one indexed thing, and the row already holds
+everything else, so `reassign_owner` does not re-pull. A pull would ask the
+source about a merge it may not have processed yet and would re-stamp the
+guest's id back onto the row — and no source emits a per-document signal
+after a bulk reassignment, so nothing would come along to fix it. `ingest`
+also treats a document missing from the source's answer as a *delete*, which
+a transport hiccup during a merge must not trigger. It is still a re-index and
+not an `UPDATE`: the index has two halves, and each touched row is pushed to
+the engine, because the engine's copy would otherwise stay filed under an
+account that can no longer sign in. There is no ordering raise here (unlike
+the modules holding a real FK) — `owner_key` is an opaque `CharField`, so
+nothing has to exist before the id can be written. Schema:
+`schemas/consumes/user.merged.json`.
+
 **Values on the wire.** stapel-listings 0.4.0 serves `Decimal` as strings
 (a float would round a price) and datetimes as ISO 8601; the indexer coerces.
 `seq` is unix milliseconds of `updated_at`, the same unit and origin as

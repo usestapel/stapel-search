@@ -4,6 +4,60 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-08-30
+
+### Added — `user.merged`: a guest's documents stay findable after signing in
+
+When stapel-auth folds an anonymous guest into an existing account on sign-in
+it DELETES the guest row. `SearchDocument.owner_key` is a copy of the source's
+owner, and nothing else in the fleet corrects it: the source modules re-parent
+their own rows with a bulk `UPDATE` and emit no per-document signal, so an
+index left alone kept every one of the guest's documents filed under an id
+that can no longer sign in — missing from "my listings", and never erased,
+because no erasure was ever requested for it. `user.deleted` was the wrong
+tool for it in both directions: that handler *removes* documents, and a merge
+removes nothing.
+
+stapel-core 0.52.1 makes the omission a system-check ERROR
+(`stapel_core.lifecycle.E001`): an app that answers one half of an account's
+life cycle and not the other has a silent wrong answer for the other half, and
+the failure has no symptom at the seam.
+
+`services.reassign_owner(from_key, into_key)` is the new service; the
+`user.merged` subscriber in `actions.py` is a thin wrapper over it.
+
+- **It is a re-index, not an `UPDATE`.** The index has two halves. Rewriting
+  only the table would leave the engine's copy of every document owned by the
+  account that stopped existing, so each touched row is pushed back through
+  the same `_row_to_index_document` path a signal write uses.
+- **It is deliberately not a re-pull**, which is the shape every other
+  invalidation in this module takes. Two reasons: `ingest` re-reads the
+  source, which may not have processed its own merge yet, and would then
+  re-stamp the guest's id onto the row this handler had just corrected — with
+  no per-document signal ever coming to fix it; and `ingest` treats a
+  document missing from the source's answer as a *delete*, which a transport
+  hiccup during a merge must not trigger. A merge changes exactly one indexed
+  thing, and the row already holds the rest.
+- **Signal-owned columns are untouched** (`boost`, `promoted`, `popularity`,
+  `promotion_expires_at`), and so are the ordering tokens (`source_seq`,
+  `source_event_id`) — those record the SOURCE's last word about a document,
+  and a merge is not one. A merge must not undo a promotion, and must not make
+  a later real event look stale.
+- **No ordering raise.** Unlike the modules that hold a real FK to the user
+  table, `owner_key` is an opaque `CharField`: nothing has to exist here
+  before the id can be written, so there is no "survivor not projected yet"
+  case to retry. Idempotent for the same reason — a redelivery matches no rows
+  and reports zero.
+- **Malformed and missing ids are logged and dropped.** An escaping exception
+  is a poison pill the bus redelivers forever, and no redelivery fixes a typo.
+
+The handler walks index rows rather than the source registry, so a host that
+has dropped a source from `STAPEL_SEARCH["SOURCES"]` has not thereby given up
+its documents' ownership.
+
+Schema: `schemas/consumes/user.merged.json`. Tests: `tests/test_user_merged.py`.
+No migration, no query-surface change.
+
 ## [0.2.2] — 2026-08-24
 
 ### Fixed — `stapel_search.__version__` said 0.2.0 in the 0.2.1 release

@@ -1,8 +1,8 @@
-# stapel-search 0.2.2
+# stapel-search 0.3.0
 
 A materialized search index with one swappable engine seam: full-text with per-language configs and a typo-tolerant second arm, drill-down facet counts with a benchmark-calibrated candidate cap and an approximate fallback, indexed range filters over a numeric side table, geo radius and bounding-box search including the antimeridian, five sorts with an opaque keyset cursor whose envelope matches AnchorPagination, a registry-generated P2B Art. 5 ranking disclosure with a mandatory promoted marker on every result, and an event-to-pull indexer carrying the four Projection guarantees (idempotency, ordering, rebuild, drift_check). Ships three engines behind the same conformance suite: Postgres FTS (default, zero new infrastructure), Meilisearch (the [meili] extra) and a declared naive backend for SQLite demos.
 
-Contract: axes 8 · surface 39 · extension points 6 · operations 5 · error codes 54.
+Contract: axes 8 · surface 40 · extension points 6 · operations 5 · error codes 54.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Configuration axes — what a product switches on
@@ -80,6 +80,9 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   Pull specific keys through the source's content Function and index them; keys the source no longer serves are removed. What a signal handler and a targeted reindex both call.
 - purge_tombstones — stapel_search.services.purge_tombstones
   Delete rows invisible longer than the retention window.
+- reassign_owner — stapel_search.services.reassign_owner
+  instead of: SearchDocument.objects.filter(owner_key=...).update(...), ingest() for every key the account owns
+  Re-index every document from one owner_key onto another — table and engine both. What the user.merged handler calls when an account is folded into another; not a re-pull, because the source may not have processed the same merge yet and a missing document there means delete.
 - rebuild — stapel_search.services.rebuild
   Rebuild a whole doc_type from the owner's cursor snapshot and drop what the source no longer has. The backfill, the recovery path, and the engine-switch procedure.
 - register_dictionary — stapel_search.registry.register_dictionary

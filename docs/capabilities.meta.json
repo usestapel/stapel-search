@@ -216,6 +216,14 @@
         "SearchDocument.objects.delete"
       ]
     },
+    "reassign_owner": {
+      "kind": "factory",
+      "intent": "Re-index every document from one owner_key onto another — table and engine both. What the user.merged handler calls when an account is folded into another; not a re-pull, because the source may not have processed the same merge yet and a missing document there means delete.",
+      "instead_of": [
+        "SearchDocument.objects.filter(owner_key=...).update(...)",
+        "ingest() for every key the account owns"
+      ]
+    },
     "ingest": {
       "kind": "factory",
       "intent": "Pull specific keys through the source's content Function and index them; keys the source no longer serves are removed. What a signal handler and a targeted reindex both call.",

@@ -331,6 +331,48 @@ def remove_documents(doc_type: str, keys: Iterable[str]) -> IndexReport:
     return IndexReport(removed=updated)
 
 
+@transaction.atomic
+def reassign_owner(from_key, into_key) -> int:
+    """Re-point every indexed document from one owner onto another.
+
+    The merge counterpart of :func:`remove_documents`, and deliberately NOT a
+    re-pull. The index is derived data, but a merge changes exactly one
+    indexed thing — who owns the document — and the row already holds every
+    other field. Two reasons the cheap answer is also the correct one:
+
+    * ``ingest`` would re-read the source, which may not have processed its
+      own merge yet, and would then re-stamp the guest's id back onto a row
+      this handler had just corrected. No source emits a per-document signal
+      after a bulk reassignment, so nothing would ever come along to fix it;
+    * ``ingest`` treats "absent from the source's answer" as *delete*. A
+      transport hiccup during a merge must not tombstone a person's
+      documents.
+
+    It IS a re-index rather than an UPDATE, though: the index has two halves,
+    and rewriting only the table would leave the engine's copy of every
+    document still filed under an account that can no longer sign in. Each
+    touched row is pushed to the engine through the same
+    :func:`_row_to_index_document` path a signal write uses.
+
+    Idempotent: a redelivery matches no rows and reports ``0``.
+    """
+    from .models import SearchDocument
+
+    source, target = str(from_key), str(into_key)
+    if not source or source == target:
+        return 0
+    rows = list(SearchDocument.objects.filter(owner_key=source))
+    if not rows:
+        return 0
+    SearchDocument.objects.filter(owner_key=source).update(
+        owner_key=target, indexed_at=timezone.now()
+    )
+    for row in rows:
+        row.owner_key = target
+        _reupsert(row)
+    return len(rows)
+
+
 def pull_documents(doc_type: str, keys: Iterable[str]) -> dict[str, dict]:
     """Fetch documents through the source's content Function.
 
@@ -930,6 +972,7 @@ __all__ = [
     "ingest",
     "pull_documents",
     "purge_tombstones",
+    "reassign_owner",
     "rebuild",
     "reindex_stale",
     "remove_documents",

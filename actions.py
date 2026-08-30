@@ -18,6 +18,13 @@ Two rules this module will not bend:
    signal goes through the pull: the pulled document's ``status`` decides,
    and a key the source no longer serves is the source saying "deleted".
 
+The account life cycle is the one place both rules are suspended, and on
+purpose: ``user.deleted`` and ``user.merged`` (the pair core 0.52.x requires,
+``stapel_core.lifecycle.E001``) address rows by ``owner_key`` and are answered
+from the index itself. A pull would ask the source a question about an account
+it may not have finished answering for itself — see
+:func:`~stapel_search.services.reassign_owner`.
+
 Handlers are idempotent by construction — delivery is at-least-once, and
 ``index_documents`` drops a redelivered ``source_event_id`` and refuses a
 ``source_seq`` older than the stored one.
@@ -26,7 +33,7 @@ from __future__ import annotations
 
 import logging
 
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 
 from stapel_core.comm import on_action, subscribe_action
 
@@ -158,11 +165,65 @@ def handle_user_deleted(event) -> None:
             logger.info("search: erased %s %s document(s) for user %s", len(keys), doc_type, user_id)
 
 
+@on_action("user.merged")
+def handle_user_merged(event) -> None:
+    """Re-index a merged-away account's documents under the survivor.
+
+    stapel-auth absorbs an anonymous guest into an existing account and then
+    DELETES the guest row. ``SearchDocument.owner_key`` is a copy of the
+    source's owner, and nothing else in the fleet will come along to correct
+    it: the source modules re-parent their own rows with a bulk ``UPDATE``
+    and emit no per-document signal, so an index left alone keeps every one
+    of the guest's documents filed under an id that can no longer sign in —
+    invisible to "my listings", and never erased, because no erasure was ever
+    requested for it. ``user.deleted`` is the wrong tool for it too: that
+    handler *removes* documents, and a merge removes nothing.
+
+    Unlike a deletion this is a re-index, not a table write. Rewriting only
+    the row would leave the ENGINE's copy of each document still owned by the
+    guest, so every touched row is pushed back through the same path a signal
+    write uses. Why it is not a re-pull from the source —
+    :func:`~stapel_search.services.reassign_owner` states the two reasons in
+    full: the source may not have processed its own merge yet, and ``ingest``
+    treats a missing document as a delete.
+
+    No survivor probe and no retry raise, unlike the modules that hold a real
+    FK: ``owner_key`` is an opaque ``CharField``, so the id needs nothing to
+    exist here before it can be written. Idempotent by the same token — a
+    redelivery matches no rows and reports zero.
+    """
+    from .services import reassign_owner
+
+    payload = event.payload or {}
+    from_user_id = payload.get("from_user_id")
+    into_user_id = payload.get("into_user_id")
+    if not from_user_id or not into_user_id:
+        logger.error("user.merged without from/into user id: %s", event.event_id)
+        return
+    if str(from_user_id) == str(into_user_id):
+        return
+
+    try:
+        moved = reassign_owner(from_user_id, into_user_id)
+    except (ValidationError, ValueError, TypeError):
+        # An id that cannot address a row here names nothing. Django raises
+        # ValidationError (not a ValueError) wherever a key is coerced, and an
+        # escaping exception is a poison pill: no redelivery can fix a typo.
+        logger.warning("user.merged with unusable user ids: %s", event.event_id)
+        return
+    if moved:
+        logger.info(
+            "user.merged %s -> %s: %s document(s) re-indexed",
+            from_user_id, into_user_id, moved,
+        )
+
+
 __all__ = [
     "dispatch_source_signal",
     "handle_category_changed",
     "handle_search_signal",
     "handle_user_deleted",
+    "handle_user_merged",
     "reset_wiring",
     "wire_sources",
 ]
