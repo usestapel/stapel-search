@@ -1,6 +1,6 @@
 {
   "module": "stapel-search",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "provides": "A materialized search index with one swappable engine seam: full-text with per-language configs and a typo-tolerant second arm, drill-down facet counts with a benchmark-calibrated candidate cap and an approximate fallback, indexed range filters over a numeric side table, geo radius and bounding-box search including the antimeridian, five sorts with an opaque keyset cursor whose envelope matches AnchorPagination, a registry-generated P2B Art. 5 ranking disclosure with a mandatory promoted marker on every result, and an event-to-pull indexer carrying the four Projection guarantees (idempotency, ordering, rebuild, drift_check). Ships three engines behind the same conformance suite: Postgres FTS (default, zero new infrastructure), Meilisearch (the [meili] extra) and a declared naive backend for SQLite demos.",
   "axes": [
     {
@@ -138,7 +138,7 @@
     {
       "name": "FACET_MAPPINGS",
       "kind": "merge_registry",
-      "summary": "How each stapel-attributes type lands in the index (term, range, path or skip), keyed by type slug. A host registering an eleventh field type indexes by a generic default and raises search.W002 until it declares — or explicitly confirms — the mapping, because a silent default is exactly the disease the index contract exists to prevent."
+      "summary": "How each stapel-attributes type lands in the index (term, range, path or skip), keyed by type slug. A host registering a field type this module has never seen indexes by a generic default and raises search.W002 until it declares — or explicitly confirms — the mapping, because a silent default is exactly the disease the index contract exists to prevent."
     },
     {
       "name": "SCORERS",

@@ -286,8 +286,16 @@ hardware before freezing it.
 
 Index semantics per attribute type live **here**, not in stapel-attributes:
 that library carries no index metadata at all, and index semantics are a
-property of the engine, not of the field type. An eleventh, host-registered
-type indexes by a generic default **and raises `search.W002`**.
+property of the engine, not of the field type. A host-registered type this
+module has never seen indexes by a generic default **and raises
+`search.W002`**.
+
+The two vocabulary-backed types (`ref_select`, `ref_hierarchical_select`,
+stapel-attributes 0.5.0) are declared like their inline twins — a DAO stores
+term **codes** in `value` and labels only as a display snapshot, so codes are
+the axis. They carry no closed option set: the level lives in a vocabulary
+outside the category schema and can hold thousands of terms, so the planner
+counts what is present and owes the panel no zeros.
 
 ---
 

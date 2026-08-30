@@ -42,7 +42,7 @@
     {
       "name": "FACET_MAPPINGS",
       "kind": "merge_registry",
-      "summary": "How each stapel-attributes type lands in the index (term, range, path or skip), keyed by type slug. A host registering an eleventh field type indexes by a generic default and raises search.W002 until it declares — or explicitly confirms — the mapping, because a silent default is exactly the disease the index contract exists to prevent."
+      "summary": "How each stapel-attributes type lands in the index (term, range, path or skip), keyed by type slug. A host registering a field type this module has never seen indexes by a generic default and raises search.W002 until it declares — or explicitly confirms — the mapping, because a silent default is exactly the disease the index contract exists to prevent."
     },
     {
       "name": "SCORERS",

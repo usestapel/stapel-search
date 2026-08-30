@@ -4,6 +4,34 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-08-30
+
+### Added — index semantics for the two vocabulary-backed attribute types
+
+stapel-attributes 0.5.0 brings `ref_select` and `ref_hierarchical_select`:
+selects whose options live in an external vocabulary instead of inline in the
+category schema. `BUILTIN_FACET_MAPPINGS` is keyed by attribute-type slug and
+`test_every_builtin_attribute_type_has_a_declared_mapping` compares it against
+the live registry, so the moment the floor moved to 0.5 the two new slugs were
+undeclared — and an undeclared slug is not an error, it is the `search.W002`
+generic branch, which is precisely the silent-default disease that gate exists
+to stop. They are now declared:
+
+- `ref_select` -> `term`, `ref_hierarchical_select` -> `path` — the same pair
+  their inline twins `select` / `hierarchical_select` get, and for the same
+  reason: a ref DAO stores term **codes** in `value` and carries `labels` only
+  as a display snapshot, so the codes are the axis and a path still rolls up
+  by prefix.
+- `facet_plan` builds **no closed option set** for a vocabulary-backed field.
+  Zero-filling means answering with every option the schema declares, and a
+  ref field declares none — its level lives outside the schema and can hold
+  thousands of terms (14 962 phone models in the catalogue this was designed
+  against). The test is a config carrying `optionsRef`, not a hard-coded type
+  slug, so a host type that points at a vocabulary the same way plans open too.
+
+### Changed
+- Dependency floor `stapel-attributes>=0.5,<1.0`.
+
 ## [0.3.0] — 2026-08-30
 
 ### Added — `user.merged`: a guest's documents stay findable after signing in
