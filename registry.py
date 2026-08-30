@@ -185,12 +185,17 @@ def _hex_color_simple(dao: dict) -> list:
     return [] if simple in (None, "") else [simple]
 
 
-#: The twelve builtin stapel-attributes types (spec §5.3). `convertible_unit`
+#: The thirteen builtin stapel-attributes types (spec §5.3). `convertible_unit`
 #: is always stored in the family's base unit, so no read-time conversion.
 #: `date` is a unix timestamp int, which is why it is a range, not a term.
 #: The two vocabulary-backed types index exactly like their inline twins: the
 #: DAO's `value` is term CODES (`labels` is a display snapshot), so `ref_select`
 #: is a term axis and `ref_hierarchical_select` a root->leaf path.
+#: `group` (the composite) joins `header` on the `skip` branch: its DAO value is
+#: a list of ROWS of child DAOs, so it has no single value to filter on — five
+#: discount-ladder steps are one answer, not five terms, and flattening them
+#: would count a row rather than a listing. A composite is a form shape, not a
+#: search axis; a child worth filtering on belongs outside the group.
 BUILTIN_FACET_MAPPINGS: dict[str, FacetMapping] = {
     "int": FacetMapping("range", _value_list, numeric=True),
     "float": FacetMapping("range", _value_list, numeric=True),
@@ -204,9 +209,10 @@ BUILTIN_FACET_MAPPINGS: dict[str, FacetMapping] = {
     "ref_hierarchical_select": FacetMapping("path", _sequence_value),
     "hex_color": FacetMapping("term", _hex_color_simple),
     "header": FacetMapping("skip", lambda dao: []),
+    "group": FacetMapping("skip", lambda dao: []),
 }
 
-#: The branch a thirteenth, host-registered type falls into. Indexing it
+#: The branch a fourteenth, host-registered type falls into. Indexing it
 #: silently is the disease §11 exists to stop, so taking this branch raises
 #: ``search.W002`` and logs once per slug.
 DEFAULT_FACET_MAPPING = FacetMapping("term", _value_list)

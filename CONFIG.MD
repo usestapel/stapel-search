@@ -32,7 +32,7 @@ nothing and says so (`search.W001`), rather than guessing what a host wanted.
 
 | key | default | what it decides |
 |---|---|---|
-| `FACET_MAPPINGS` | `{}` | `{attribute type slug: dotted path to a FacetMapping | None}`. Overlays the twelve builtins (the two vocabulary-backed `ref_*` types included). A host's own field type indexes by a generic default and raises `search.W002` until this declares — or explicitly confirms — the mapping. |
+| `FACET_MAPPINGS` | `{}` | `{attribute type slug: dotted path to a FacetMapping | None}`. Overlays the thirteen builtins (the two vocabulary-backed `ref_*` types and the composite `group` included). A host's own field type indexes by a generic default and raises `search.W002` until this declares — or explicitly confirms — the mapping. |
 | `FACET_CANDIDATE_CAP` | `15000` | Above this many candidates the counts come from `TABLESAMPLE` and the answer says `approximate: true`. **Benchmark-calibrated, not guessed**: under eight concurrent clients, 20000 candidates already breach the 200ms target on the measurement rig (`tasks/search-facet-benchmark.md` §8.3). Re-validate on your own hardware before freezing it. |
 | `MAX_FACET_FIELDS` | `12` | How many slugs one query may count. Drill-down semantics mean N active facet filters cost N+1 candidate scans; this is what stops a wide category page becoming a dozen sequential ones. Plan slugs past it land in `facet_meta.skipped`, never silently dropped. |
 | `FACET_CACHE_TTL` | `30` | Seconds a candidate set is reusable across the facets of one query. |

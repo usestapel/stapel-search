@@ -297,6 +297,15 @@ the axis. They carry no closed option set: the level lives in a vocabulary
 outside the category schema and can hold thousands of terms, so the planner
 counts what is present and owes the panel no zeros.
 
+The composite `group` (stapel-attributes 0.6.0) is declared `skip`, next to
+`header`. Its DAO value is a list of **rows** of child DAOs, so it has no
+single value to filter on — five discount-ladder steps are one answer, not five
+terms, and flattening them would count a row rather than a listing. A composite
+is a form shape, not a search axis; a child worth filtering on belongs outside
+the group. A `skip` slug is also refused when a caller names it explicitly in
+`facets=`: the writer never indexed it, so planning it as a term facet would
+answer every query with an empty panel.
+
 ---
 
 ## Ranking, promotion and disclosure

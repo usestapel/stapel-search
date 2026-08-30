@@ -179,6 +179,11 @@ def facet_plan(
     kinds: dict[str, str] = {}
     closed: dict[str, tuple[str, ...]] = {}
     ordered: list[str] = []
+    #: Slugs the category declares with a `skip` kind (`header`, `group`).
+    #: Kept so an explicit `facets=` list cannot re-admit them below — a slug
+    #: the writer never indexes would otherwise plan as a term facet and answer
+    #: every query with an empty panel.
+    excluded: set[str] = set()
 
     for feature in features:
         slug = feature.get("slug")
@@ -188,6 +193,7 @@ def facet_plan(
             continue
         mapping = get_facet_mapping(type_slug)
         if mapping.kind == "skip":
+            excluded.add(slug)
             continue
         kinds[slug] = mapping.kind
         ordered.append(slug)
@@ -211,7 +217,7 @@ def facet_plan(
                 closed[slug] = values
 
     if requested is not None:
-        wanted = [slug for slug in requested if slug]
+        wanted = [slug for slug in requested if slug and slug not in excluded]
         ordered = [slug for slug in wanted if slug in kinds] + [
             slug for slug in wanted if slug not in kinds
         ]

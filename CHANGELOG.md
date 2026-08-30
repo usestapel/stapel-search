@@ -4,6 +4,33 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] — 2026-08-31
+
+### Added — the composite type is not a search axis
+
+stapel-attributes 0.6.0 registers `group`, the composite kind: one feature
+holding a list of **rows** of child DAOs. Undeclared it would have reached
+`DEFAULT_FACET_MAPPING` — the generic term branch `search.W002` exists to
+flag — and `test_every_builtin_attribute_type_has_a_declared_mapping` would
+have gone red on the floor it already allows.
+
+- `BUILTIN_FACET_MAPPINGS["group"] = FacetMapping("skip", …)`, next to
+  `header`. A group has no single value to filter on: five discount-ladder
+  steps are one answer, not five terms, and flattening them would count a row
+  rather than a listing. A composite is a form shape, not a search axis; a
+  child worth filtering on belongs outside the group.
+- **A `skip` slug named explicitly in `facets=` is now refused too.** The plan
+  built its exclusion from the category schema but then re-admitted any
+  requested slug with `kinds.setdefault(slug, "term")`, so an explicit
+  `facets=ladder` (or `facets=heading` — `header` had the same hole since
+  0.1.0) planned a term facet over a slug the writer never indexes, and the
+  panel answered empty for every query. `facet_plan` now carries the skipped
+  slugs and drops them from `requested`.
+
+The dependency floor stays `stapel-attributes>=0.5,<1.0`: declaring index
+semantics for a slug the installed library may not register costs nothing, and
+this module needs nothing from 0.6.
+
 ## [0.3.1] — 2026-08-30
 
 ### Added — index semantics for the two vocabulary-backed attribute types

@@ -40,6 +40,18 @@ def category_schema():
             "show_at_title": False, "show_as_badge": False, "translate": "none",
             "config": {"type": "header"},
         },
+        {
+            "id": 4, "slug": "ladder", "name": "Discount ladder", "mandatory": False,
+            "show_at_title": False, "show_as_badge": False, "translate": "none",
+            "config": {
+                "type": "group",
+                "fields": [
+                    {"slug": "quantity", "config": {"type": "int", "min": 1}},
+                    {"slug": "discount", "config": {"type": "int", "min": 1, "max": 30}},
+                ],
+                "repeat": {"min": 1, "max": 5},
+            },
+        },
     ]
 
     def provider(payload):
@@ -82,7 +94,10 @@ def test_the_plan_comes_from_the_category_schema(category_schema):
     from stapel_search.facets import facet_plan
 
     plan = facet_plan("7")
-    assert plan.slugs == ("brand", "note"), "a header carries no value and is not indexed"
+    assert plan.slugs == ("brand", "note"), (
+        "a header carries no value and a group carries rows, not a value; "
+        "neither is indexed"
+    )
     assert plan.kinds["brand"] == "term"
 
 
@@ -235,6 +250,58 @@ def test_every_builtin_attribute_type_has_a_declared_mapping():
         pytest.skip("stapel-attributes not importable")
     missing = sorted(set(get_all_type_slugs()) - set(BUILTIN_FACET_MAPPINGS))
     assert not missing, f"attribute types with no declared index semantics: {missing}"
+
+
+def test_the_composite_type_is_declared_skip_not_defaulted():
+    """A `group` DAO is a list of ROWS of child DAOs — no single value to
+    filter on. Five discount-ladder steps are one answer, not five terms, so
+    indexing it would count a row rather than a listing."""
+    from stapel_search.registry import (
+        defaulted_type_slugs,
+        get_facet_mapping,
+        reset_defaulted_type_slugs,
+    )
+
+    reset_defaulted_type_slugs()
+    assert get_facet_mapping("group").kind == "skip"
+    assert "group" not in defaulted_type_slugs()
+
+
+def test_the_writer_indexes_nothing_for_a_group_dao():
+    from stapel_search.services import build_facets
+
+    doc = _document(
+        doc_key="x",
+        features={
+            "ladder": {
+                "type": "group",
+                "name": "Discount ladder",
+                "value": [
+                    {"quantity": {"type": "int", "value": 10, "order": 0},
+                     "discount": {"type": "int", "value": 15, "order": 1}},
+                    {"quantity": {"type": "int", "value": 20, "order": 0},
+                     "discount": {"type": "int", "value": 25, "order": 1}},
+                ],
+            },
+            "brand": {"type": "select", "value": ["apple"]},
+        },
+    )
+    facets, terms, numbers, _ = build_facets(doc)
+    assert "ladder" not in facets
+    assert numbers == {}
+    assert terms == ["brand=apple"]
+
+
+def test_an_explicitly_requested_skip_slug_is_still_refused(category_schema):
+    """A caller naming a `skip` slug in `facets=` must not re-admit it: the
+    writer never indexed it, so planning it as a term facet would answer every
+    query with an empty panel."""
+    from stapel_search.facets import facet_plan
+
+    plan = facet_plan("7", requested=("ladder", "heading", "brand"))
+    assert plan.slugs == ("brand",)
+    assert "ladder" not in plan.kinds
+    assert "heading" not in plan.kinds
 
 
 def test_the_vocabulary_backed_types_are_declared_not_defaulted():
