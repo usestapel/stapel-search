@@ -118,12 +118,50 @@ def _apply(table: Iterable[tuple[str, str]], term: str) -> str:
     return "".join(out)
 
 
+#: Latin vowels, for the one ambiguity the reverse table cannot carry alone.
+_LAT_VOWELS = frozenset("aeiou")
+
+
+def _to_cyrillic(term: str) -> str:
+    """Latin -> Cyrillic, with the terminal ``y`` resolved by position.
+
+    GOST sends BOTH ``й`` and ``ы`` to ``y``, so the reverse direction is
+    genuinely ambiguous and a single table has to pick one. Picking ``й``
+    unconditionally — which is what shipped through 0.6.0 — turns the most
+    common shape a Russian noun has when typed in Latin, the plural ``-y``,
+    into a word that exists in no corpus: ``shorty`` reached ``шортй`` and
+    found nothing, on the SERP and in the dropdown alike, with an empty
+    result set as the only symptom.
+
+    Position resolves it, because the two letters do not appear in the same
+    place: ``ы`` follows a consonant, ``й`` follows a vowel.
+
+    - ``...yy``  -> ``...ый``   (``krasnyy`` -> ``красный``)
+    - ``<cons>y`` -> ``<cons>ы`` (``shorty`` -> ``шорты``)
+    - ``<vowel>y`` -> ``<vowel>й`` (``moy`` -> ``мой``)
+
+    Only word-final positions are touched; a medial ``y`` keeps the table's
+    ``й`` (``mayka`` -> ``майка``).
+    """
+    if term.endswith("yy"):
+        # Already Cyrillic — `_apply` copies unmapped characters verbatim.
+        term = term[:-2] + "ый"
+    elif term.endswith("y") and len(term) > 1 and term[-2] not in _LAT_VOWELS:
+        term = term[:-1] + "ы"
+    return _apply(_LAT_TO_RU, term)
+
+
 def transliterate(term: str) -> str | None:
     """The single-script counterpart of *term*, or ``None`` if mixed/neither.
 
     Algorithmic transliteration is noisy, which is why a curated
     ``equivalents`` group always wins: a term that already belongs to a
     group is never additionally transliterated (spec §12).
+
+    One layer, one place. Both the SERP's query normalization and the
+    type-ahead's category matching arrive here, because a search box that
+    finds one thing while typing and another after Enter is worse than one
+    that finds nothing.
     """
     folded = fold(term)
     has_cyrillic = bool(_CYRILLIC_RE.search(folded))
@@ -131,7 +169,7 @@ def transliterate(term: str) -> str | None:
     if has_cyrillic and not has_latin:
         return _apply(_RU_TO_LAT, folded) or None
     if has_latin and not has_cyrillic:
-        return _apply(_LAT_TO_RU, folded) or None
+        return _to_cyrillic(folded) or None
     return None
 
 

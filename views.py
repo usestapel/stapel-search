@@ -115,21 +115,64 @@ class SearchQueryView(APIView):
         )
 
 
+def _suggest_etag(data) -> str:
+    """A weak validator over the whole answer.
+
+    Derived from the payload rather than from a version counter because the
+    answer is a JOIN of two things that move independently — the category
+    tree and the live listing counts — and there is no single number that
+    advances when either does. Hashing what was actually served cannot get
+    that wrong, and the answer is small.
+
+    Nothing time-varying is in the body (no ``took_ms``), which is what
+    makes the hash stable enough to be worth sending: an ETag that changes
+    on every request is a header that costs bytes and saves none.
+    """
+    import hashlib
+    import json
+
+    payload = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return 'W/"%s"' % hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
 @extend_schema(
     parameters=[
-        OpenApiParameter("type", str, required=True),
-        OpenApiParameter("q", str, description="Title prefix."),
-        OpenApiParameter("limit", int),
+        OpenApiParameter(
+            "type",
+            str,
+            description="Registered doc_type. Optional when exactly one type is "
+            "registered — a type-ahead should not have to name the only corpus "
+            "there is.",
+        ),
+        OpenApiParameter("q", str, description="What the buyer has typed so far."),
+        OpenApiParameter(
+            "lang",
+            str,
+            description="Language of the query: picks the dictionary, so «shorty» "
+            "reaches «шорты». Falls back to Accept-Language, then DEFAULT_LANGUAGE.",
+        ),
+        OpenApiParameter("limit", int, description="Rows per half. Capped by MAX_SUGGEST_LIMIT."),
     ],
     responses={200: SuggestResponseSerializer},
-    summary="Title prefixes from the index",
+    summary="Type-ahead: category paths with live counts, plus title prefixes",
 )
 class SearchSuggestView(APIView):
-    """``GET /search/api/v1/suggest`` — title prefixes out of the index.
+    """``GET /search/api/v1/suggest`` — what to offer under the search box.
 
-    Not out of a query log: no query log is kept, which is a privacy
+    ``categories`` is the primary half: each row is a destination with its
+    full ancestor path and the number of listings a buyer would actually
+    see there, ranked by that number. ``terms`` is the title-prefix half.
+
+    Neither comes from a query log: no query log is kept, which is a privacy
     decision before it is a product one, and on day one there would be
     nothing in it anyway.
+
+    The answer is public, identical for every reader and requested on every
+    keystroke, so it carries ``Cache-Control: public`` and an ``ETag``. This
+    is the module's first conditional read — ``query`` has none, because a
+    SERP answer embeds ``took_ms`` and a cursor and would revalidate to a
+    miss every time. Here the payload is deliberately free of anything that
+    varies with the clock.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -138,9 +181,27 @@ class SearchSuggestView(APIView):
     throttle_scope = "search-suggest"
 
     def get(self, request):
+        from rest_framework.response import Response
+
+        from .conf import search_settings
         from .services import suggest
 
-        return _handle(lambda: suggest(request.query_params))
+        response = _handle(
+            lambda: suggest(
+                request.query_params,
+                accept_language=request.headers.get("Accept-Language", ""),
+            )
+        )
+        if response.status_code != 200:
+            return response
+
+        etag = _suggest_etag(response.data)
+        cache_control = f"public, max-age={int(search_settings.SUGGEST_CACHE_SECONDS)}"
+        if request.headers.get("If-None-Match") == etag:
+            response = Response(status=304)
+        response["ETag"] = etag
+        response["Cache-Control"] = cache_control
+        return response
 
 
 @extend_schema(

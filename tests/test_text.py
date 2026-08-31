@@ -43,6 +43,24 @@ def test_transliteration_is_single_script_only():
     assert transliterate("iphone13про") is None
 
 
+def test_a_terminal_y_is_resolved_by_position():
+    """GOST sends both `й` and `ы` to `y`; only the position tells them apart.
+
+    Through 0.6.0 the reverse table picked `й` unconditionally, so the most
+    common shape of a Latin-typed Russian noun — the plural `-y` — became a
+    word in no corpus, and «shorty» found nothing on the SERP and offered
+    nothing in the dropdown.
+    """
+    assert transliterate("shorty") == "шорты", "a consonant before it means `ы`"
+    assert transliterate("moy") == "мой", "a vowel before it means `й`"
+    assert transliterate("krasnyy") == "красный"
+    assert transliterate("mayka") == "майка", "medial `y` is untouched"
+
+
+def test_a_plural_survives_the_round_trip():
+    assert transliterate(transliterate("шорты")) == "шорты"
+
+
 def test_a_curated_term_is_never_additionally_transliterated():
     """Curation beats the algorithm — noise is the cost of transliteration."""
     group = normalize_query("iphone", "ru").terms[0]

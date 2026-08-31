@@ -280,15 +280,24 @@
     "/search/api/v1/suggest": {
       "get": {
         "operationId": "search_api_v1_suggest_retrieve",
-        "description": "``GET /search/api/v1/suggest`` — title prefixes out of the index.\n\nNot out of a query log: no query log is kept, which is a privacy\ndecision before it is a product one, and on day one there would be\nnothing in it anyway.\n\n**Permissions:** `AllowAny`",
-        "summary": "Title prefixes from the index",
+        "description": "``GET /search/api/v1/suggest`` — what to offer under the search box.\n\n``categories`` is the primary half: each row is a destination with its\nfull ancestor path and the number of listings a buyer would actually\nsee there, ranked by that number. ``terms`` is the title-prefix half.\n\nNeither comes from a query log: no query log is kept, which is a privacy\ndecision before it is a product one, and on day one there would be\nnothing in it anyway.\n\nThe answer is public, identical for every reader and requested on every\nkeystroke, so it carries ``Cache-Control: public`` and an ``ETag``. This\nis the module's first conditional read — ``query`` has none, because a\nSERP answer embeds ``took_ms`` and a cursor and would revalidate to a\nmiss every time. Here the payload is deliberately free of anything that\nvaries with the clock.\n\n**Permissions:** `AllowAny`",
+        "summary": "Type-ahead: category paths with live counts, plus title prefixes",
         "parameters": [
+          {
+            "in": "query",
+            "name": "lang",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Language of the query: picks the dictionary, so «shorty» reaches «шорты». Falls back to Accept-Language, then DEFAULT_LANGUAGE."
+          },
           {
             "in": "query",
             "name": "limit",
             "schema": {
               "type": "integer"
-            }
+            },
+            "description": "Rows per half. Capped by MAX_SUGGEST_LIMIT."
           },
           {
             "in": "query",
@@ -296,7 +305,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Title prefix."
+            "description": "What the buyer has typed so far."
           },
           {
             "in": "query",
@@ -304,7 +313,7 @@
             "schema": {
               "type": "string"
             },
-            "required": true
+            "description": "Registered doc_type. Optional when exactly one type is registered — a type-ahead should not have to name the only corpus there is."
           }
         ],
         "tags": [
@@ -333,6 +342,61 @@
   },
   "components": {
     "schemas": {
+      "CategorySuggestion": {
+        "type": "object",
+        "description": "One destination in the dropdown, ready to render and ready to follow.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Category id."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Category slug."
+          },
+          "name": {
+            "type": "string",
+            "description": "The category's own display name."
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Display names root->leaf, e.g. ['Мужская одежда', 'Шорты']. This is what distinguishes three categories that share a name."
+          },
+          "category": {
+            "type": "string",
+            "description": "The ancestry as ids joined with '/'. Pass it verbatim as the `category` parameter of /query — do not re-join path segments yourself."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live listings a buyer would see under this category, descendants included — the same number the SERP reports for it."
+          },
+          "depth": {
+            "type": "integer",
+            "description": "Number of segments in `path`."
+          },
+          "match": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MatchEnum"
+              }
+            ],
+            "description": "How the name matched. Informational; ranking is by `count`.\n\n* `prefix` - prefix\n* `substring` - substring"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "depth",
+          "id",
+          "match",
+          "name",
+          "path",
+          "slug"
+        ]
+      },
       "FacetLabels": {
         "type": "object",
         "description": "Captions for one slug's option codes.",
@@ -433,6 +497,14 @@
           "reachable",
           "types"
         ]
+      },
+      "MatchEnum": {
+        "enum": [
+          "prefix",
+          "substring"
+        ],
+        "type": "string",
+        "description": "* `prefix` - prefix\n* `substring` - substring"
       },
       "RankingResponse": {
         "type": "object",
@@ -691,11 +763,37 @@
       "SuggestResponse": {
         "type": "object",
         "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategorySuggestion"
+            },
+            "description": "Destinations, ranked by live listing count desc, then depth, then name."
+          },
+          "terms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Title prefixes from the index."
+          },
           "items": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Deprecated alias of `terms`, kept for one minor."
+          },
+          "language": {
+            "type": "string",
+            "description": "Which dictionary answered — the same resolution /query reports."
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What this answer could not do: `category_suggestions` (no provider for category names), `category_rollup` (no ancestry, so counts would read 0)."
           },
           "backend": {
             "type": "string"
@@ -703,7 +801,11 @@
         },
         "required": [
           "backend",
-          "items"
+          "categories",
+          "degraded",
+          "items",
+          "language",
+          "terms"
         ]
       }
     },

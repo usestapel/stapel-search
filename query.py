@@ -135,6 +135,31 @@ def parse_geo(params: Mapping[str, Any]) -> GeoFilter | None:
     return GeoFilter(lat=lat, lon=lon, radius_km=radius)
 
 
+def resolve_language(params: Mapping[str, Any], *, accept_language: str = "") -> str:
+    """Which dictionary and analyzer answer this request.
+
+    ``lang`` does two different jobs, and conflating them empties
+    catalogues: it always picks the analyzer/dictionary, and it narrows the
+    CORPUS only when the caller typed it (``parse_query`` applies that
+    second half). ``Accept-Language`` is a hint about the reader, not an
+    instruction to hide every listing written in another language.
+
+    One function, because suggestions have to resolve it identically. On a
+    live stand `айфон` found 2 and `iphone` found 15 for exactly this
+    reason — no header reached the service, the ru dictionary was never
+    loaded, and the synonym layer silently did not apply. A type-ahead that
+    picked its language a second way would reintroduce that as a
+    disagreement between the dropdown and the page it leads to.
+    """
+    from .conf import search_settings
+
+    return (
+        str(params.get("lang") or "").strip()
+        or (accept_language or "").split(",")[0].split("-")[0].strip()
+        or str(search_settings.DEFAULT_LANGUAGE or "")
+    )
+
+
 def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> SearchQuery:
     """Turn request parameters into a validated :class:`SearchQuery`."""
     from .backends import _shared as shared
@@ -147,16 +172,8 @@ def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> Sear
     if not doc_type or doc_type not in get_sources():
         raise SearchValidationError(ERR_400_UNKNOWN_DOC_TYPE, doc_type=doc_type)
 
-    # `lang` does two different jobs, and conflating them empties catalogues:
-    # it always picks the analyzer/dictionary, and it narrows the corpus ONLY
-    # when the caller typed it. Accept-Language is a hint about the reader,
-    # not an instruction to hide every listing written in another language.
     explicit_language = str(params.get("lang") or "").strip()
-    language = (
-        explicit_language
-        or (accept_language or "").split(",")[0].split("-")[0].strip()
-        or str(search_settings.DEFAULT_LANGUAGE or "")
-    )
+    language = resolve_language(params, accept_language=accept_language)
 
     raw_text = str(params.get("q") or "").strip()
     if len(raw_text) > int(search_settings.MAX_QUERY_CHARS):
@@ -271,4 +288,5 @@ __all__ = [
     "parse_facet_selection",
     "parse_geo",
     "parse_query",
+    "resolve_language",
 ]

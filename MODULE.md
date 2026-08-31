@@ -291,6 +291,99 @@ alone.
 
 ---
 
+## Suggestions: a type-ahead that offers PLACES (0.7.0)
+
+A classified's search box is a navigation control before it is a query
+control. Typing «шорты» has three right answers and none of them is a
+string:
+
+```
+Одежда › Мужская одежда › Шорты      128
+Детям  › Детская одежда › Шорты       41
+Одежда › Женская одежда › Шорты       12
+```
+
+`GET /search/api/v1/suggest?q=…` answers `{categories, terms, language,
+degraded, backend}`. `terms` is the 0.1.0 title-prefix half, still second;
+`categories` is the destination half, and every row carries the whole
+ancestor path, a `count`, and a `category` string ready to paste into
+`/query?category=`.
+
+Four decisions carry it.
+
+**Names are not matched here.** Names, ancestry and the retired/test/
+soft-deleted state of a node belong to stapel-categories and are asked for
+by comm name — `categories.suggest`, the `categories.path` canon applied a
+second time. This module sends already-normalized terms and receives nodes.
+What it deliberately does not send is a query language: there is exactly one
+of those, `text.normalize_query`, and suggestions call the same function the
+SERP calls with the same dictionaries. A dropdown that finds one thing while
+typing and another after Enter is worse than one that finds nothing — which
+is also why `resolve_language` is now one function both halves use.
+
+**`count` is the SERP's count, and that is asserted, not asserted-to.**
+`tests/test_suggest.py::test_suggest_count_equals_the_serp_count` asks this
+module for the number and asks `/query` for the same category, and fails if
+they differ. Code that merely resembles the SERP's predicate would pass
+review; only the comparison proves it. The rule is the SERP's own: `doc_type`
++ `visible`, and a category path PREFIX, so a parent counts its descendants.
+
+**Counting is one aggregate, ever.** `GROUP BY category_path` over the index,
+then a prefix rollup in Python — never one count per suggestion. Measured on
+Postgres 16 at 100k rows / 2850 distinct paths: `HashAggregate` over a
+sequential scan, **35 ms**, which is the right plan and not a missing index
+(95% of the table satisfies the predicate). It runs once per
+`SUGGEST_COUNT_CACHE_TTL` per document type and the indexer drops the entry
+when a batch lands, so a buyer's keystrokes share one aggregate and a freshly
+seeded stand never shows zeros. Past the point where that stops being enough
+the answer is a materialized per-category counter maintained by the indexer;
+`suggest.category_counts` is the single named read, so that is one function
+body.
+
+The aggregate reads the index TABLE rather than going through the backend
+seam, and that is the same line `card`, `promoted` and `health()`'s document
+count already sit on: `SearchDocument` is this module's own materialized
+table in **both** topologies, and `category_path` is written here under every
+backend. A `category_counts` verb on the protocol would oblige four engines
+to reimplement a group-by over a column this module maintains itself, and the
+first engine to get it subtly wrong would be invisible.
+
+**Ranking is count desc, then depth asc, then name**, and the order of the
+three is the product decision. Count first because the row is a prediction of
+what the buyer will find, and a path with two listings above one with two
+hundred is wrong on the only axis they care about. Depth second because among
+equals the broader place is the safer landing. Name last so the answer is
+stable rather than incidentally ordered by whatever the tree read returned.
+
+`type` is optional here, unlike on `query`: a deployment with one registered
+document type has one answer, and making a storefront name it on every
+keystroke is ceremony that can only be got wrong. With several registered
+types it is required again.
+
+The answer is public, identical for every reader and requested per keystroke,
+so it carries `Cache-Control: public, max-age=SUGGEST_CACHE_SECONDS` and a
+weak `ETag` over the payload, and honours `If-None-Match` with a 304. This is
+the module's first conditional read; `query` has none, because a SERP answer
+embeds `took_ms` and a cursor and would revalidate to a miss every time.
+Nothing time-varying is in this payload, which is what makes the validator
+worth sending.
+
+Without a `categories.suggest` provider the endpoint still answers its
+`terms` half, reports `degraded: ["category_suggestions"]`, and `search.W008`
+says so at deploy time. Without `categories.path` the stored paths are one
+segment long and no candidate's ancestry can match, so the answer reports
+`degraded: ["category_rollup"]` rather than printing a column of zeros.
+
+**The transliteration table gained a rule** in the same release, and it is a
+SERP fix as much as a dropdown one. GOST sends both `й` and `ы` to `y`, so
+the reverse direction is ambiguous, and through 0.6.0 it picked `й`
+unconditionally: `shorty` became `шортй`, a word in no corpus, and found
+nothing. Position resolves it — `ы` follows a consonant, `й` follows a vowel
+— so `shorty` → `шорты`, `moy` → `мой`, `krasnyy` → `красный`, and a medial
+`y` is untouched (`mayka` → `майка`).
+
+---
+
 ## Facets
 
 `facets jsonb` + `jsonb_path_ops` GIN is the authoritative **filter**

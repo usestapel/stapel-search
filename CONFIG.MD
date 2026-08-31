@@ -25,7 +25,8 @@ nothing and says so (`search.W001`), rather than guessing what a host wanted.
 | `SOURCES` | `{}` | `{doc_type: dotted path to a SourceSpec}`. Empty by design: this module knows nothing about listings. A **composite** declares the entry, because a mapper is cross-domain glue. |
 | `ACCEPT_FEATURES_SEARCH` | `True` | Whether a source that will not hand over full attribute DAOs may feed the index with its flattened projection. Lossy — no ranges, no colour axis, no unit context — and the loss is reported in `degraded[]`, not absorbed. |
 | `CATEGORY_FEATURES_FUNCTION` | `"categories.features"` | The comm Function the facet plan comes from. No import of stapel-categories. |
-| `CATEGORY_PATH_FUNCTION` | `"categories.path"` | The comm Function category ancestry comes from. **No provider exists in the fleet yet** — until one does, `category_path` degrades to a single segment, `search.W006` says so at deploy time, and every answer carries `degraded: ["category_rollup"]`. Exact-category filtering keeps working; rollup does not. |
+| `CATEGORY_PATH_FUNCTION` | `"categories.path"` | The comm Function category ancestry comes from (stapel-categories 0.8+). Without a provider, `category_path` degrades to a single segment, `search.W006` says so at deploy time, and every answer carries `degraded: ["category_rollup"]`. Exact-category filtering keeps working; rollup does not. |
+| `CATEGORY_SUGGEST_FUNCTION` | `"categories.suggest"` | The comm Function category NAME matching comes from (stapel-categories 0.9+). It is sent already-normalized terms — this module owns the query language, that one owns the tree. Without a provider `/suggest` still answers title prefixes, says `degraded: ["category_suggestions"]`, and `search.W008` says so at deploy time. |
 | `CATEGORY_CACHE_TIMEOUT` | `300` | Seconds a resolved facet plan / ancestry is memoized. Invalidated early by `category.changed`. |
 
 ## Facet semantics and cost
@@ -50,7 +51,17 @@ nothing and says so (`search.W001`), rather than guessing what a host wanted.
 | `DEFAULT_PAGE_SIZE` | `24` | |
 | `MAX_RESULT_WINDOW` | `1000` | Paging past it is **refused** (`error.400.search_window_exceeded`), not truncated. Meilisearch has its own hard window, and one explicit shared limit is what makes the engines interchangeable instead of interchangeable-until-page-forty. |
 | `QUERY_THROTTLE` | `"120/min"` | Rate for the `search-query` scope, from this module's namespace: a library does not own the project's `DEFAULT_THROTTLE_RATES`. |
-| `SUGGEST_THROTTLE` | `"300/min"` | Rate for the `search-suggest` scope. |
+| `SUGGEST_THROTTLE` | `"300/min"` | Rate for the `search-suggest` scope. Higher than `query` on purpose: a type-ahead fires per keystroke. |
+
+## Suggestions
+
+| key | default | what it decides |
+|---|---|---|
+| `SUGGEST_CATEGORY_CANDIDATES` | `200` | How many name matches `CATEGORY_SUGGEST_FUNCTION` may hand back for counting. The provider caps this too; both caps exist because a one-letter term matches most of a wide catalogue. |
+| `SUGGEST_COUNT_CACHE_TTL` | `60` | Seconds the ONE per-`doc_type` category count aggregate is held. The indexer drops the entry when a batch lands, so this is the ceiling on staleness for a corpus nothing is writing to, not the usual case. |
+| `DEFAULT_SUGGEST_LIMIT` | `10` | Rows per half when the caller does not say. |
+| `MAX_SUGGEST_LIMIT` | `25` | A larger `limit` is clamped, not refused. |
+| `SUGGEST_CACHE_SECONDS` | `30` | `Cache-Control: public, max-age=` on the suggest answer, and therefore how long a shared cache may serve it. The answer carries no per-user state at all, and an `ETag` makes a revalidation cheap. |
 
 ## Text
 

@@ -311,6 +311,14 @@ def index_documents(doc_type: str, inputs: Iterable[SearchDocumentInput]) -> Ind
             # deleted: the row keeps the ordering token so a late event for
             # the same key cannot resurrect a stale version.
             backend.delete(doc_type, removals)
+    if report.indexed or removals:
+        # The type-ahead's per-category counts are an aggregate over this
+        # table, cached. A TTL alone would be correct but slow to notice: a
+        # freshly seeded stand must not offer a dropdown of zeros, and a
+        # category that has just emptied must not keep advertising stock.
+        from .suggest import invalidate_counts
+
+        invalidate_counts(doc_type)
     return report
 
 
@@ -328,6 +336,10 @@ def remove_documents(doc_type: str, keys: Iterable[str]) -> IndexReport:
     from .backends import get_backend
 
     get_backend().delete(doc_type, listed)
+    if updated:
+        from .suggest import invalidate_counts
+
+        invalidate_counts(doc_type)
     return IndexReport(removed=updated)
 
 
@@ -925,29 +937,74 @@ def search(params, *, accept_language: str = "") -> dict:
     }
 
 
-def suggest(params) -> dict:
-    """Title prefixes from the index. No query log exists to suggest from."""
+def suggest(params, *, accept_language: str = "") -> dict:
+    """What to offer under the search box: CATEGORIES first, then terms.
+
+    A classified's type-ahead is a navigation control. «шорты» is not one
+    destination but three — men's, women's, children's — and the buyer picks
+    between them by the ancestor path and by how many live listings are
+    behind each. So ``categories`` is the primary half of the answer and
+    carries the full path plus a count that is the SERP's count; ``terms``
+    is the 0.1.0 title-prefix half, which remains useful and remains second.
+
+    Neither half comes from a query log: none is kept, which is a privacy
+    decision before it is a product one (spec §15).
+
+    ``type`` is optional here, unlike on ``query``. A deployment with one
+    registered document type has one answer, and requiring a storefront to
+    name it in every keystroke is ceremony that can only be got wrong; with
+    several registered types the parameter is required again, because
+    guessing which corpus a buyer meant is not something this module can do.
+    """
     from .backends import get_backend
     from .conf import search_settings
     from .errors import ERR_400_UNKNOWN_DOC_TYPE, SearchValidationError
+    from .query import resolve_language
     from .registry import get_sources
+    from .suggest import suggest_categories
 
+    sources = get_sources()
     doc_type = str(params.get("type") or "").strip()
-    if not doc_type or doc_type not in get_sources():
+    if not doc_type and len(sources) == 1:
+        doc_type = next(iter(sources))
+    if not doc_type or doc_type not in sources:
         raise SearchValidationError(ERR_400_UNKNOWN_DOC_TYPE, doc_type=doc_type)
+
     prefix = str(params.get("q") or "").strip()
     if len(prefix) > int(search_settings.MAX_QUERY_CHARS):
         from .errors import ERR_400_QUERY_TOO_LONG
 
         raise SearchValidationError(ERR_400_QUERY_TOO_LONG)
     try:
-        limit = max(1, min(int(params.get("limit") or 10), 25))
+        limit = max(
+            1,
+            min(
+                int(params.get("limit") or search_settings.DEFAULT_SUGGEST_LIMIT),
+                int(search_settings.MAX_SUGGEST_LIMIT),
+            ),
+        )
     except (TypeError, ValueError):
-        limit = 10
+        limit = int(search_settings.DEFAULT_SUGGEST_LIMIT)
+
+    language = resolve_language(params, accept_language=accept_language)
 
     backend = get_backend()
+    categories, degraded = (
+        suggest_categories(doc_type, prefix, language=language, limit=limit)
+        if prefix
+        else ([], [])
+    )
+    terms = backend.suggest(doc_type, prefix, limit=limit) if prefix else []
     return {
-        "items": backend.suggest(doc_type, prefix, limit=limit),
+        "categories": categories,
+        "terms": terms,
+        # The 0.1.0 name for `terms`, kept for one minor so a storefront
+        # already reading it is not broken by an answer that grew. Removing
+        # a field a live frontend reads is a deletion, and a deletion gets
+        # its own release note rather than riding along with a feature.
+        "items": terms,
+        "language": language,
+        "degraded": degraded,
         "backend": getattr(backend, "name", "unknown"),
     }
 

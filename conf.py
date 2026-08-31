@@ -88,14 +88,37 @@ DEFAULTS = {
     # search.W006 says so (see CONFIG.MD).
     "CATEGORY_FEATURES_FUNCTION": "categories.features",
     "CATEGORY_PATH_FUNCTION": "categories.path",
+    # Category NAME matching for the type-ahead, by comm name. Same rule as
+    # the two above: the tree's names, ancestry and retired state are
+    # stapel-categories', asked for rather than mirrored. Unreachable, the
+    # dropdown keeps its `terms` half and says `degraded:
+    # ["category_suggestions"]` (search.W007).
+    "CATEGORY_SUGGEST_FUNCTION": "categories.suggest",
     "CATEGORY_CACHE_TIMEOUT": 300,
     # Source document pull, by comm name; overridable per source entry.
     "REINDEX_SCHEDULE": {"hour": 3, "minute": 20},
     "STALE_REINDEX_SCHEDULE": {"minute": "*/10"},
     "TOMBSTONE_RETENTION_DAYS": 7,
+    # --- suggestions -------------------------------------------------------
+    # How many name matches `categories.suggest` may hand back for counting.
+    # The provider caps this too; both caps exist because a one-letter term
+    # matches most of a wide catalogue.
+    "SUGGEST_CATEGORY_CANDIDATES": 200,
+    # Seconds the ONE per-doc_type category count aggregate is held. The
+    # indexer drops the entry when a batch lands, so this is the ceiling on
+    # staleness for a corpus nothing is writing to, not the usual case.
+    "SUGGEST_COUNT_CACHE_TTL": 60,
+    # Largest `limit` a suggest request may ask for.
+    "MAX_SUGGEST_LIMIT": 25,
+    "DEFAULT_SUGGEST_LIMIT": 10,
     # --- HTTP ------------------------------------------------------------
     "QUERY_THROTTLE": "120/min",
     "SUGGEST_THROTTLE": "300/min",
+    # `Cache-Control: public, max-age=<this>` on the suggest answer, which is
+    # also how long a shared cache may serve it. A type-ahead is the highest
+    # request rate in the product and its answer is the same for everyone:
+    # the anonymous dropdown carries no per-user state at all.
+    "SUGGEST_CACHE_SECONDS": 30,
     # --- Meilisearch (read only by the meili backend) ---------------------
     "MEILI_URL": "http://127.0.0.1:7700",
     "MEILI_KEY": "",

@@ -128,8 +128,54 @@ class SearchResponseSerializer(serializers.Serializer):
     took_ms = serializers.IntegerField()
 
 
+class CategorySuggestionSerializer(serializers.Serializer):
+    """One destination in the dropdown, ready to render and ready to follow."""
+
+    id = serializers.IntegerField(help_text="Category id.")
+    slug = serializers.CharField(help_text="Category slug.")
+    name = serializers.CharField(help_text="The category's own display name.")
+    path = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Display names root->leaf, e.g. ['Мужская одежда', 'Шорты']. "
+        "This is what distinguishes three categories that share a name.",
+    )
+    category = serializers.CharField(
+        help_text="The ancestry as ids joined with '/'. Pass it verbatim as the "
+        "`category` parameter of /query — do not re-join path segments yourself.",
+    )
+    count = serializers.IntegerField(
+        help_text="Live listings a buyer would see under this category, "
+        "descendants included — the same number the SERP reports for it.",
+    )
+    depth = serializers.IntegerField(help_text="Number of segments in `path`.")
+    match = serializers.ChoiceField(
+        choices=["prefix", "substring"],
+        help_text="How the name matched. Informational; ranking is by `count`.",
+    )
+
+
 class SuggestResponseSerializer(serializers.Serializer):
-    items = serializers.ListField(child=serializers.CharField())
+    categories = CategorySuggestionSerializer(
+        many=True,
+        help_text="Destinations, ranked by live listing count desc, then depth, "
+        "then name.",
+    )
+    terms = serializers.ListField(
+        child=serializers.CharField(), help_text="Title prefixes from the index."
+    )
+    items = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="Deprecated alias of `terms`, kept for one minor.",
+    )
+    language = serializers.CharField(
+        help_text="Which dictionary answered — the same resolution /query reports."
+    )
+    degraded = serializers.ListField(
+        child=serializers.CharField(),
+        help_text="What this answer could not do: `category_suggestions` (no "
+        "provider for category names), `category_rollup` (no ancestry, so counts "
+        "would read 0).",
+    )
     backend = serializers.CharField()
 
 
@@ -192,5 +238,6 @@ __all__ = [
     "ScorerSerializer",
     "SearchItemSerializer",
     "SearchResponseSerializer",
+    "CategorySuggestionSerializer",
     "SuggestResponseSerializer",
 ]

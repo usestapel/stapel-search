@@ -277,6 +277,40 @@ def check_category_path_provider(app_configs, **kwargs):
 
 
 @checks.register("stapel_search")
+def check_category_suggest_provider(app_configs, **kwargs):
+    """W008: no ``categories.suggest`` provider, so the type-ahead has no places.
+
+    Same shape and same reasoning as W006 one function up. Without it the
+    dropdown still answers — with title prefixes only — which is exactly the
+    kind of half-working that has to be said out loud at deploy time rather
+    than discovered by a buyer who typed «шорты» and got nowhere to go.
+    """
+    from stapel_core.comm import function_unreachable_reason
+
+    from .conf import search_settings
+
+    name = search_settings.CATEGORY_SUGGEST_FUNCTION
+    try:
+        reason = function_unreachable_reason(name)
+    except Exception:  # noqa: BLE001 - comm not configured yet at check time
+        return []
+    if not reason:
+        return []
+    return [
+        checks.Warning(
+            f"The comm Function {name!r} is unreachable ({reason}), so "
+            "/suggest can offer no categories: the dropdown degrades to title "
+            "prefixes.",
+            hint="Provide it from stapel-categories 0.9+ (or a composite) as "
+                 "{'terms': [...], 'limit': n} -> {'categories': [{id, slug, name, "
+                 "path, path_ids, depth, match}]}. Until then every suggest answer "
+                 "carries degraded: ['category_suggestions'].",
+            id="stapel_search.W008",
+        )
+    ]
+
+
+@checks.register("stapel_search")
 def check_truncated_terms(app_configs, **kwargs):
     """W005: facet terms are being cut, so two options may share one count."""
     from .services import MAX_TERM_CHARS
@@ -362,6 +396,7 @@ __all__ = [
     "check_backend",
     "check_beat_schedule",
     "check_category_path_provider",
+    "check_category_suggest_provider",
     "check_default_language_has_a_dictionary",
     "check_default_facet_mappings",
     "check_popular_sort_has_a_signal",

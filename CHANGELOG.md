@@ -4,6 +4,97 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-08-31
+
+### Added — the type-ahead offers CATEGORIES, with the SERP's own counts
+
+Typing «шорты» into a classified has three right answers and none of them is
+a string. 0.6.0's `/suggest` answered `{"items": ["Шорты мужские", "Шорты
+карго", …]}` — titles, no destination, no idea which of the three clothing
+branches a buyer meant. A search box on a board this size is a navigation
+control before it is a query control.
+
+```
+GET /search/api/v1/suggest?q=шорты&limit=10
+{
+  "categories": [
+    {"id": 101, "slug": "muzhskaya-odezhda-shorty", "name": "Шорты",
+     "path": ["Одежда", "Мужская одежда", "Шорты"],
+     "category": "46/48/101", "count": 128, "depth": 3, "match": "prefix"},
+    …
+  ],
+  "terms": [...], "language": "ru", "degraded": [], "backend": "postgres"
+}
+```
+
+- **`categories[]`** — every row carries the whole ancestor path (the only
+  thing that tells three identically named leaves apart), the number of live
+  listings behind it, and a `category` string ready to paste into
+  `/query?category=`. Serving the joined ids rather than only the segments is
+  deliberate: a frontend that invents its own join misses silently.
+- **Ranking is live count desc, then depth asc, then name.** The row is a
+  prediction of what the buyer will find; a path with two listings above one
+  with two hundred is wrong on the only axis they care about.
+- **`count` is the SERP's count, and the test says so.**
+  `test_suggest_count_equals_the_serp_count` asks this module for the number
+  and `/query` for the same category, and fails if they differ — code that
+  merely resembles the SERP's predicate would pass review. The rule is the
+  SERP's: `doc_type` + `visible`, and a category path PREFIX, so a parent
+  counts its descendants.
+- **One aggregate, never one count per row.** `GROUP BY category_path` over
+  the index plus a prefix rollup, cached per `doc_type` and dropped by the
+  indexer when a batch lands. Measured on Postgres 16 at 100k rows / 2850
+  distinct paths: HashAggregate over a sequential scan, 35 ms — the right
+  plan, not a missing index, since 95% of the table satisfies the predicate.
+  `test_counting_is_one_aggregate_and_does_not_grow_with_the_answer` pins it.
+- **`terms`** is the old `items`, renamed; `items` still ships as a
+  deprecated alias for one minor, because removing a field a live frontend
+  reads is a deletion and a deletion gets its own release note.
+- **`type` is optional** when exactly one document type is registered. A
+  type-ahead should not have to name the only corpus there is.
+- **`Cache-Control: public` + a weak `ETag`, and `If-None-Match` → 304.** The
+  module's first conditional read: this payload carries nothing that varies
+  with the clock, which is what makes a validator worth sending. `query` has
+  none and should not.
+
+### Added — `categories.suggest`, declared and provided
+
+Names, ancestry and the retired/test/soft-deleted state of a node belong to
+stapel-categories, so they are asked for by comm name — the `categories.path`
+canon applied a second time, no import either way. This module sends
+already-normalized terms and receives nodes; it does not send a query
+language, because there is exactly one of those and it lives here.
+stapel-categories 0.9.0 is the provider. Without one, `/suggest` still
+answers its `terms` half, reports `degraded: ["category_suggestions"]`, and
+**`search.W008`** says so at deploy time.
+
+### Fixed — `shorty` reached `шортй`, a word in no corpus
+
+A SERP fix as much as a dropdown one. GOST sends both `й` and `ы` to `y`, so
+the reverse direction is ambiguous, and the table picked `й` unconditionally
+— turning the most common shape of a Latin-typed Russian noun, the plural
+`-y`, into nothing at all, at HTTP 200, with an empty result set as the only
+symptom. Position resolves it: `ы` follows a consonant, `й` follows a vowel.
+
+- `shorty` → `шорты`, `moy` → `мой`, `krasnyy` → `красный`
+- a medial `y` is untouched: `mayka` → `майка`
+- `transliterate(transliterate("шорты")) == "шорты"` is now a test
+
+### Changed
+
+- `query.resolve_language` is extracted and shared. Suggestions resolving the
+  language a second way would reintroduce, as a disagreement between the
+  dropdown and the page it leads to, the live defect where `айфон` found 2
+  and `iphone` found 15 because no header reached the service.
+- `services.suggest(params, *, accept_language="")` — the header now reaches
+  it, as it already reached `search`.
+
+### Settings
+
+`CATEGORY_SUGGEST_FUNCTION`, `SUGGEST_CATEGORY_CANDIDATES`,
+`SUGGEST_COUNT_CACHE_TTL`, `DEFAULT_SUGGEST_LIMIT`, `MAX_SUGGEST_LIMIT`,
+`SUGGEST_CACHE_SECONDS` — all documented in CONFIG.MD.
+
 ## [0.6.0] — 2026-08-31
 
 ### Added — the other half of the panel gets captions too
