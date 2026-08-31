@@ -474,6 +474,34 @@ def _s_synonym_expansion(ctx: Context) -> None:
     assert "2" in keys
 
 
+def _s_synonym_cross_script(ctx: Context) -> None:
+    """The direction a Russian buyer actually types, on a Latin catalogue.
+
+    ``_s_synonym_expansion`` above covers Latin query -> Cyrillic text, which
+    is the easy half and was never broken. The half measured broken on a live
+    board is this one: the corpus is a catalogue of Latin brand names, the
+    buyer types the brand as it *sounds*, and «айфон» found 2 documents where
+    ``iphone`` found 15.
+
+    Two of these three are unreachable by any letter table — ``transliterate
+    ("эпл")`` is ``epl`` and ``transliterate("айфон")`` is ``ayfon``, neither
+    of which is a substring of anything — so passing this scenario is a claim
+    about the dictionary layer, not about the transliterator. It is a
+    conformance scenario rather than a unit test because a normalizer that
+    expands into an engine that ignores the expansion answers ``2`` just the
+    same, which is precisely how the defect survived: the expansion was
+    correct and invisible.
+    """
+    for typed, expected in (("айфон", "1"), ("эпл", "1"), ("самсунг", "2")):
+        keys = set(ctx.keys(ctx.query(text=ctx.text(typed, "ru"), language="ru")))
+        assert expected in keys, f"{typed!r} did not reach document {expected}"
+
+    # The negative, in the same scenario so no engine can pass the reach
+    # without also passing the restraint: a Cyrillic word no group claims
+    # expands to itself and its script twin, and neither is in the corpus.
+    assert ctx.keys(ctx.query(text=ctx.text("эпоксидка", "ru"), language="ru")) == []
+
+
 def _s_sort_newest(ctx: Context) -> None:
     assert ctx.keys(ctx.query(sort="newest")) == ["3", "2", "4", "1"]
 
@@ -747,6 +775,11 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("text_and_semantics", _s_text_and_semantics, "terms are AND-ed"),
     Scenario("typo_tolerance", _s_typo_tolerance, "a declared typo tolerance is real"),
     Scenario("synonym_expansion", _s_synonym_expansion, "curated equivalents expand"),
+    Scenario(
+        "synonym_cross_script",
+        _s_synonym_cross_script,
+        "a Cyrillic query reaches a Latin catalogue, and only where it should",
+    ),
     Scenario("sort_newest", _s_sort_newest, "publication order"),
     Scenario("sort_price_asc_nulls_last", _s_sort_price_asc_nulls_last, "NULL is not cheapest"),
     Scenario("sort_price_desc_nulls_last", _s_sort_price_desc_nulls_last, "NULL is not dearest"),

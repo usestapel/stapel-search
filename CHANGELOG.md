@@ -4,6 +4,55 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-08-31
+
+### Added — the cross-script reach is a conformance scenario, not a unit test
+
+0.4.0 fixed the two mechanisms behind «айфон» finding 2 where `iphone` found
+15 — the unresolved language and the brand forms transliteration cannot reach
+— and proved both against `normalize_query`. That is the mechanism, but it is
+not the defect. The defect was a COUNT, and a normalizer that expands
+perfectly into an engine that ignores the expansion answers 2 just the same.
+That is not hypothetical: it is exactly how the shipped `ru` dictionary sat
+unused since 0.1.0 while every unit test over it passed.
+
+- **`SCENARIOS` gains `synonym_cross_script`.** The existing
+  `synonym_expansion` covers Latin query -> Cyrillic text, which is the half
+  that was never broken. The new one covers the half a Russian buyer actually
+  types against a Latin brand catalogue — «айфон» and «эпл» reach the Apple
+  document, «самсунг» reaches the Samsung one — and it carries its own
+  negative in the same scenario, so no engine can pass the reach without also
+  passing the restraint: «эпоксидка» is Cyrillic, phonetically near two
+  curated groups, in none of them, and must find nothing. Green on all three
+  engines (naive, Postgres FTS, Meilisearch).
+- Corpus-level assertions through `services.search` for the six brands
+  measured live, plus the symmetry itself — `iphone` and «айфон» must answer
+  the *same* key set, which is the sentence the report actually made.
+
+**A third-party backend must now pass one more scenario**, which is why this
+is a minor and not a patch. No runtime behaviour changed.
+
+### A note on where the synonym data comes from
+
+Deriving the brand groups from vocabulary term labels was considered and
+measured against the live catalogue rather than assumed. It does not work,
+and the measurement is worth keeping:
+
+- A `Vendor` level is `{code: "apple", label: "Apple"}` — **both sides
+  Latin**. A code<->label synonym source emits nothing a Cyrillic query can
+  use. `эпл` is not derivable from any row that exists.
+- A `Color` level is `{code: "chernyy", label: "черный"}` — a genuine
+  cross-script pair, and already reachable: `stapel_vocabularies.slug`
+  produces a code with a GOST-like table close enough to
+  `stapel_search.text.transliterate` that the query term folds onto the code
+  without any dictionary at all.
+
+So the curated groups stay curated, because phonetic spelling is not a letter
+mapping; and the *labels* problem is closed where labels live, by attribute
+DAOs carrying their display snapshot (stapel-attributes 0.7.0), not by
+shipping a derived dictionary this module would then have to keep in step
+with someone else's catalogue.
+
 ## [0.4.0] — 2026-08-31
 
 ### Added — a listing's own price is a filter axis

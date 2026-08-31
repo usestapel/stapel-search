@@ -395,3 +395,100 @@ def test_a_default_language_without_a_dictionary_is_a_deploy_warning(settings):
 
     settings.STAPEL_SEARCH = {"DEFAULT_LANGUAGE": "ru"}
     assert check_default_language_has_a_dictionary(None) == []
+
+
+# --------------------------------------------------------------------------
+# C4(b) — the cross-script reach, asserted against a CORPUS on every engine
+#
+# The tests above assert the normalizer's output. That is the mechanism, but
+# it is not the defect: the defect was measured as a COUNT on a live board
+# («айфон» 2 where `iphone` found 15), and a normalizer that expands
+# correctly into an engine that ignores the expansion answers 2 just the
+# same. So the same four brands are asserted again here through
+# `services.search`, under the `conformance` fixture, which runs every
+# scenario on each configured engine in turn — the seam that made the
+# expansion invisible is exactly the seam this fixture exists to watch.
+# --------------------------------------------------------------------------
+
+
+#: The brands the live corpus carries that the shipped corpus does not.
+_BRAND_DOCS = (
+    ("91", "Xiaomi Redmi Note 12", "xiaomi"),
+    ("92", "realme C55 128 ГБ", "realme"),
+    ("93", "Honor X9b", "honor"),
+)
+
+
+def _index_brand_docs():
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(doc_key=key, title=title, card={"title": title})
+            for key, title, _brand in _BRAND_DOCS
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "typed,expected_key",
+    [
+        ("айфон", "1"),  # Apple iPhone 13 Pro — the headline measurement
+        ("эпл", "1"),
+        ("ксиоми", "91"),
+        ("реалми", "92"),
+        ("хонор", "93"),
+        ("самсунг", "2"),
+    ],
+)
+def test_a_russian_buyer_reaches_the_latin_corpus(conformance, typed, expected_key):
+    """The live defect as a count, not as a token list.
+
+    Every one of these returned 0 or 2 on the stand while its Latin spelling
+    returned 7-15. `эпл` is the one no letter table can reach —
+    `transliterate("эпл")` is `epl` — which is why the group is curated data
+    and not an algorithm.
+    """
+    from stapel_search.services import search
+
+    _index_brand_docs()
+    keys = [item["key"] for item in search({"type": DOC_TYPE, "q": typed, "lang": "ru"})["items"]]
+    assert expected_key in keys, f"{typed!r} did not reach document {expected_key}"
+
+
+def test_the_latin_and_the_russian_spelling_answer_the_same_corpus(conformance):
+    """The asymmetry itself, since it is the asymmetry a buyer felt."""
+    from stapel_search.services import search
+
+    _index_brand_docs()
+    for latin, russian in (("iphone", "айфон"), ("xiaomi", "ксиоми"), ("realme", "реалми")):
+        one = {i["key"] for i in search({"type": DOC_TYPE, "q": latin, "lang": "ru"})["items"]}
+        other = {i["key"] for i in search({"type": DOC_TYPE, "q": russian, "lang": "ru"})["items"]}
+        assert one == other, f"{latin!r} and {russian!r} disagree: {one} vs {other}"
+
+
+def test_a_word_no_group_claims_expands_to_itself_and_its_script_twin_only():
+    """The negative. An expansion layer that reaches too far is worse than
+    one that reaches too little: it is unfalsifiable from the outside, and a
+    buyer cannot tell a synonym from a bug.
+    """
+    from stapel_search.text import load_dictionary, normalize_query
+
+    expansions = normalize_query("пылесос", "ru").terms[0]
+    assert expansions == ("пылесос", "pylesos")
+
+    every_member = {m for group in load_dictionary("ru").equivalents for m in group}
+    assert not set(expansions) & every_member
+
+
+def test_an_unrelated_query_does_not_drag_a_brand_in(conformance):
+    """The corpus half of the same negative: no hit is manufactured."""
+    from stapel_search.services import search
+
+    _index_brand_docs()
+    # Cyrillic, phonetically near two curated groups ("эпл", "хонор"), in no
+    # group itself, and in no document.
+    assert search({"type": DOC_TYPE, "q": "эпоксидка", "lang": "ru"})["items"] == []
+    assert search({"type": DOC_TYPE, "q": "хоровод", "lang": "ru"})["items"] == []
