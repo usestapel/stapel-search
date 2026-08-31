@@ -28,7 +28,7 @@ The models (``SearchDocument``, ``SearchNumber``, ``SearchSignal``) live in
 ``stapel_search.models`` — import them explicitly, not from here.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "FacetMapping",

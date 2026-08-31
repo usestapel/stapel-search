@@ -788,7 +788,13 @@ def search(params, *, accept_language: str = "") -> dict:
     """Run one query and shape the answer. The module's whole read path."""
     from .backends import get_backend
     from .errors import SearchBackendUnavailable
-    from .facets import facet_plan, fill_zero_options, path_degradation, reset_path_degradation
+    from .facets import (
+        facet_plan,
+        fill_zero_options,
+        path_degradation,
+        reset_path_degradation,
+        vocabulary_labels,
+    )
     from .models import SearchDocument
     from .query import encode_cursor, parse_facet_selection, parse_query
 
@@ -855,16 +861,24 @@ def search(params, *, accept_language: str = "") -> dict:
     counts = fill_zero_options(facet_result.counts, plan) if facet_result else {}
     count, count_is_lower_bound = _honest_count(result, offset=offset, shown=len(items))
     exact_total = bool(result.exact_total and count is not None and not count_is_lower_bound)
+    # A vocabulary-backed slug's caption is resolved from the codes the query
+    # actually counted, so it can only be added here. `translatable` is False
+    # for these without asking: a vocabulary term's label is literal text an
+    # owner curated, never a translation key — that is the difference between
+    # a vocabulary and an inline option list.
+    facet_labels: dict[str, dict] = {
+        slug: {
+            "translatable": bool(plan.translatable_labels.get(slug, True)),
+            "values": values,
+        }
+        for slug, values in plan.option_labels.items()
+    }
+    for slug, values in vocabulary_labels(plan, counts).items():
+        facet_labels[slug] = {"translatable": False, "values": values}
     return {
         "items": items,
         "facets": counts,
-        "facet_labels": {
-            slug: {
-                "translatable": bool(plan.translatable_labels.get(slug, True)),
-                "values": values,
-            }
-            for slug, values in plan.option_labels.items()
-        },
+        "facet_labels": facet_labels,
         "facet_meta": {
             "approximate": bool(facet_result.approximate) if facet_result else False,
             "candidates": facet_result.candidates if facet_result else 0,

@@ -357,6 +357,12 @@ class FacetPlan:
     #: (``translatable_options``, default true) or literal text. The reader
     #: cannot guess: ``b.apple`` and ``Б/у`` are both strings.
     translatable_labels: dict[str, bool] = field(default_factory=dict)
+    #: ``{slug: (vocabulary, level)}`` for the vocabulary-backed slugs in the
+    #: plan. Not captions: a level can hold tens of thousands of terms, so the
+    #: only affordable resolution is of the codes a query actually COUNTED,
+    #: which is not known until the counting is done. This is the address the
+    #: post-count pass needs.
+    vocabulary_refs: dict[str, tuple[str, str]] = field(default_factory=dict)
     #: Reserved range slugs that address a core document column
     #: (``index_schema.CORE_RANGE_FIELDS``). Not part of ``slugs``: there is
     #: nothing to count, only an axis to offer.

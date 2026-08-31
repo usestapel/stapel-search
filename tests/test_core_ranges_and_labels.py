@@ -242,12 +242,139 @@ def test_the_plan_carries_the_option_captions(labelled_category):
     assert plan.translatable_labels["brand"] is True
 
 
-def test_a_vocabulary_backed_slug_has_no_captions_to_carry(labelled_category):
-    """`optionsRef` levels live outside the schema — inventing one would lie."""
+def test_a_vocabulary_backed_slug_carries_its_ADDRESS_not_its_captions(
+    labelled_category,
+):
+    """`optionsRef` levels live outside the schema — inventing one would lie.
+
+    The plan cannot hold the captions: a level of a real phone catalogue is
+    15 844 terms and the plan does not yet know which of them this query will
+    count. What it can hold is where to ask.
+    """
     from stapel_search.facets import facet_plan
 
     plan = facet_plan("c1")
     assert "vendor" not in plan.option_labels
+    assert plan.vocabulary_refs["vendor"] == ("phones", "Vendor")
+
+
+@pytest.fixture
+def vendor_resolver():
+    """A vocabulary resolver over three terms, registered and cleaned up."""
+    from stapel_attributes.vocabularies import register_vocabulary_resolver
+
+    TERMS = {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"}
+
+    class _Resolver:
+        calls: list[tuple] = []
+
+        def describe(self, vocabulary):
+            return None
+
+        def exists(self, vocabulary, level, code):
+            return code in TERMS
+
+        def is_child(self, vocabulary, level, code, parent_level, parent_code):
+            return False
+
+        def labels(self, vocabulary, level, codes):
+            _Resolver.calls.append((vocabulary, level, tuple(codes)))
+            return {code: TERMS[code] for code in codes if code in TERMS}
+
+    resolver = _Resolver()
+    register_vocabulary_resolver(resolver)
+    yield resolver
+    register_vocabulary_resolver(None)
+    _Resolver.calls.clear()
+
+
+def _index_vendor_docs():
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(
+                doc_key=key,
+                title=title,
+                card={"title": title},
+                # The category the labelled schema describes: a facet count is
+                # taken over the candidate set, and a document filed elsewhere
+                # is not in it.
+                category_id="c1",
+                category_path=("c1",),
+                features={"vendor": {"type": "ref_select", "value": [code]}},
+            )
+            for key, title, code in (
+                ("81", "Apple iPhone 13", "apple"),
+                ("82", "Xiaomi Redmi Note 12", "xiaomi"),
+                ("83", "realme C55", "realme"),
+                ("84", "A phone from a vendor the catalogue lost", "ghost-vendor"),
+            )
+        ],
+    )
+
+
+def test_a_vocabulary_backed_facet_ships_captions_for_what_it_counted(
+    conformance, labelled_category, vendor_resolver
+):
+    """The other half of the same panel.
+
+    0.4.0 gave the inline selects captions and left the ref slugs bare, so one
+    panel read «Состояние: Б/у» directly above «Производитель: apple» — the
+    two halves disagreeing about whether a facet is readable.
+    """
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
+    assert answer["facet_labels"]["vendor"] == {
+        "translatable": False,
+        "values": {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"},
+    }
+
+
+def test_only_the_counted_codes_are_resolved_and_in_one_call(
+    conformance, labelled_category, vendor_resolver
+):
+    """The reason this runs after the count, not in the plan: a level can hold
+    tens of thousands of terms and a query produces at most a page of them."""
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    search({"type": DOC_TYPE, "q": "iphone", "category": "c1", "facets": "vendor"})
+    assert len(vendor_resolver.calls) == 1, "one batched call per slug, not one per code"
+    vocabulary, level, codes = vendor_resolver.calls[0]
+    assert (vocabulary, level) == ("phones", "Vendor")
+    assert set(codes) == {"apple"}, "only the code this query counted"
+
+
+def test_a_code_the_vocabulary_cannot_resolve_is_absent_rather_than_echoed(
+    conformance, labelled_category, vendor_resolver
+):
+    """`{"ghost-vendor": "ghost-vendor"}` would make a map that resolved
+    nothing indistinguishable from one that resolved everything to its own
+    name. A reader falls back to the code on its own."""
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
+    assert "ghost-vendor" not in answer["facet_labels"]["vendor"]["values"]
+    assert answer["facets"]["vendor"]["ghost-vendor"] == 1, "still counted, just uncaptioned"
+
+
+def test_no_resolver_registered_answers_exactly_as_before(
+    conformance, labelled_category
+):
+    """A caption is an improvement on a code, never a precondition for
+    answering. No `vendor_resolver` fixture here, on purpose."""
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
+    assert "vendor" not in answer["facet_labels"]
+    assert answer["facets"]["vendor"]["apple"] == 1
 
 
 def test_the_answer_ships_the_captions_beside_the_counts(

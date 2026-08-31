@@ -4,6 +4,55 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-08-31
+
+### Added — the other half of the panel gets captions too
+
+0.4.0 shipped `facet_labels` for slugs whose options are inline in the
+category config and left the vocabulary-backed slugs out, on the reasoning
+that their level lives outside the schema and inventing a caption would lie.
+The reasoning was right and the conclusion was wrong, and one screen showed
+why: a live panel read
+
+```
+Состояние: Новое 12 · Б/у 31          <- captioned by 0.4.0
+Производитель: apple 13 · xiaomi 10   <- still a storage code
+Модель: redmi-note-12 3 · c55 3
+Встроенная память: 128-gb 18
+```
+
+Neither half was wrong about its own type. The panel was wrong as a whole,
+and the four rows a buyer of a phone actually uses are all in the bottom half.
+
+- **`facets.vocabulary_labels(plan, counts)`** resolves the captions AFTER the
+  count, through `stapel_attributes`' vocabulary resolver — the same
+  abstraction `ref_select` validates and snapshots through, so a deployment
+  wires a vocabulary once and every reader of it agrees. It cannot happen in
+  `facet_plan`: a level of a real phone catalogue holds 15 844 terms and the
+  plan does not know which of them a query will produce. What a query produces
+  is at most `MAX_FACET_VALUES` codes per slug, asked for in one batched call
+  per slug — asserted, so a future edit cannot turn it into a loop.
+- **`FacetPlan.vocabulary_refs`** — `{slug: (vocabulary, level)}`, the address
+  the post-count pass needs. Not captions.
+- `translatable` is `False` for these without asking: a vocabulary term's
+  label is literal text an owner curated, never a translation key. That is
+  most of the difference between a vocabulary and an inline option list.
+- **A code the vocabulary cannot resolve is ABSENT from the map, not echoed.**
+  This is why the pass calls `VocabularyResolver.labels` rather than
+  `refs.resolve_labels`: the latter labels an unresolved code as itself, which
+  is correct for a stored DAO (something must be shown) and destroys the
+  distinction here, where the map is an overlay. `{"apple": "apple"}` would
+  make a map that resolved nothing look exactly like one that resolved every
+  term to its own name — and `realme`'s catalogue label really is `realme`.
+- **No resolver registered answers exactly as before.** A caption is an
+  improvement on a code, never a precondition for answering; a resolver that
+  raises is a warning and an uncaptioned facet, never a failed query.
+
+Companion to stapel-attributes 0.7.0, which does the same thing for the same
+defect on the write side: an inline `select`'s DAO now carries the option copy
+it used to throw away, so `b-u` stops reaching a listing card. Between them a
+code no longer reaches a reader on either surface.
+
 ## [0.5.0] — 2026-08-31
 
 ### Added — the cross-script reach is a conformance scenario, not a unit test

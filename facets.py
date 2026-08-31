@@ -126,6 +126,95 @@ def category_path(category_id: Any) -> tuple[str, ...]:
     return path
 
 
+def _ref_field(options_ref: Any, name: str) -> str:
+    """One field of an ``optionsRef``, dataclass or dict alike.
+
+    ``stapel_attributes.types.refs.ref_field`` in a form this module can call
+    on a raw config dict off the wire: `categories.features` serves JSON, so
+    the dataclass arm is defensive rather than the normal path.
+    """
+    if options_ref is None:
+        return ""
+    value = (
+        options_ref.get(name)
+        if isinstance(options_ref, dict)
+        else getattr(options_ref, name, None)
+    )
+    return str(value) if value else ""
+
+
+def vocabulary_labels(
+    plan: FacetPlan, counts: dict[str, dict[str, int]]
+) -> dict[str, dict[str, str]]:
+    """Captions for the vocabulary-backed slugs, for the codes actually counted.
+
+    The asymmetry this closes was the tell in the live report: an inline
+    ``select`` printed ``b-u`` while a ``ref_select`` printed "Apple" on a
+    listing CARD — because a ref DAO carries a label snapshot taken at write
+    time and an inline select did not. In the FACET PANEL it was the other way
+    round: 0.4.0 gave the inline selects captions and left the ref slugs as
+    bare codes, so one panel showed «Состояние: Б/у» directly above
+    «Производитель: apple». Neither half was wrong about its own type; the
+    panel was wrong as a whole.
+
+    Resolution happens HERE, after counting, and not in ``facet_plan``, for a
+    reason that is about size rather than tidiness: a level of the phone
+    catalogue holds 15 844 terms and the plan does not know which of them a
+    query will produce. What a query produces is at most ``MAX_FACET_VALUES``
+    codes per slug, and they are asked for in ONE batched call per slug.
+
+    The resolver is ``stapel-attributes``' — the same abstraction the ref
+    types validate and snapshot through, so a deployment wires a vocabulary
+    once. With no resolver registered this returns ``{}`` and the panel is
+    exactly what it was: codes. A caption is an improvement on a code, never a
+    precondition for answering.
+    """
+    if not plan.vocabulary_refs:
+        return {}
+    try:
+        from stapel_attributes.vocabularies import get_vocabulary_resolver
+    except ImportError:  # pragma: no cover - stapel-attributes is a hard dep
+        return {}
+
+    resolver = get_vocabulary_resolver()
+    if resolver is None:
+        return {}
+
+    out: dict[str, dict[str, str]] = {}
+    for slug, (vocabulary, level) in plan.vocabulary_refs.items():
+        codes = [code for code in (counts.get(slug) or {}) if code]
+        if not codes:
+            continue
+        try:
+            # `VocabularyResolver.labels`, not `refs.resolve_labels`. The
+            # latter labels an unresolved code as ITSELF, which is right for a
+            # stored DAO — something must be shown — and wrong here: a caption
+            # map is an OVERLAY, and `{"apple": "apple"}` would make a map that
+            # resolved nothing indistinguishable from one that resolved every
+            # term to its own name. `labels()` omits what it does not know,
+            # which is the distinction this needs, and a reader falls back to
+            # the code for a missing key anyway. (`realme`'s catalogue label
+            # really is `realme`; the two are not the same fact.)
+            mapping = resolver.labels(vocabulary, level, list(codes)) or {}
+        except Exception as exc:  # noqa: BLE001 — a caption is never fatal
+            logger.warning(
+                "vocabulary labels unavailable for facet %r (%s/%s): %s",
+                slug,
+                vocabulary,
+                level,
+                exc,
+            )
+            continue
+        captions = {
+            code: str(mapping[code])
+            for code in codes
+            if mapping.get(code) not in (None, "")
+        }
+        if captions:
+            out[slug] = captions
+    return out
+
+
 def _feature_defs(category_id: Any) -> tuple[list[dict], Any]:
     """``categories.features`` for *category_id*, revision-cached."""
     from stapel_core.comm import call
@@ -231,6 +320,7 @@ def facet_plan(
     closed: dict[str, tuple[str, ...]] = {}
     labels: dict[str, dict[str, str]] = {}
     translatable: dict[str, bool] = {}
+    vocabulary_refs: dict[str, tuple[str, str]] = {}
     ranked: list[tuple[int, int, str]] = []
     ordered: list[str] = []
     #: Slugs the category declares with a `skip` kind (`header`, `group`).
@@ -256,6 +346,19 @@ def facet_plan(
             # points at a vocabulary the same way) has no closed option set to
             # zero-fill: the level lives outside the schema and can hold
             # thousands of terms. Counting what is present is the whole panel.
+            #
+            # Its CAPTIONS are a different question, and 0.4.0 answered it
+            # wrongly by not answering it: `facet_labels` simply omitted these
+            # slugs, so a panel built from the answer printed «Производитель:
+            # apple 13, xiaomi 10» and «Модель: redmi-note-12 3» — the same
+            # defect as `b-u`, one type over, and the two halves of one panel
+            # disagreeing about whether a facet is readable. The address is
+            # recorded here and the codes are resolved after the count, where
+            # the set is small and known. See `vocabulary_labels`.
+            vocabulary = _ref_field(config["optionsRef"], "vocabulary")
+            level = _ref_field(config["optionsRef"], "level")
+            if vocabulary and level:
+                vocabulary_refs[slug] = (vocabulary, level)
             continue
         options = config.get("options")
         if not options:
@@ -308,6 +411,9 @@ def facet_plan(
         option_labels={slug: labels[slug] for slug in selected if slug in labels},
         translatable_labels={
             slug: translatable[slug] for slug in selected if slug in translatable
+        },
+        vocabulary_refs={
+            slug: vocabulary_refs[slug] for slug in selected if slug in vocabulary_refs
         },
         # Not conditioned on the category: a core range addresses a column
         # every document in every corpus has. Announcing it here is what
