@@ -32,6 +32,7 @@ with a TABLESAMPLE fallback that is live from day one, not "when needed".
 from __future__ import annotations
 
 import logging
+import re as _re
 from decimal import Decimal
 
 from django.db import connection
@@ -50,6 +51,58 @@ from ..dto import (
 from . import _shared as shared
 
 logger = logging.getLogger(__name__)
+
+#: A term that can be spliced into a ``to_tsquery`` string as one
+#: alternative. Anything else — a space, a slash, a hyphen, any tsquery
+#: metacharacter — goes through ``phraseto_tsquery`` as a bound PARAMETER
+#: instead, where the text is tokenized rather than parsed as syntax.
+_SIMPLE_TERM = _re.compile(r"^[^\W_]+$", _re.UNICODE)
+
+
+def _tsquery_expression(terms, config: str, params: list) -> str:
+    """Build one SQL ``tsquery`` expression for a normalized query.
+
+    Groups are AND-ed (``&&``), a group's expansions OR-ed (``||``). Two
+    kinds of expansion exist and they cannot share a rendering:
+
+    - **single-word** members are alternatives inside one ``to_tsquery``
+      string, which is what they always were;
+    - **multi-word** members («бывший в употреблении», and every hyphenated
+      or slashed form such as ``б/у`` and ``second-hand``) become a
+      ``phraseto_tsquery`` term.
+
+    Before 0.4.0 every member was concatenated into the ``to_tsquery``
+    string after stripping only ``'`` and ``\\``. A multi-word member
+    therefore produced ``to_tsquery('(бу | б/у | бывший в употреблении)')``
+    — a **syntax error in tsquery**, i.e. a 500 for any query whose language
+    dictionary happened to contain a phrase. The shipped ``ru`` dictionary
+    has contained one since 0.1.0; nothing reached it because nothing on the
+    stand resolved a language until now.
+
+    Rendering the phrase properly rather than dropping it is why this engine
+    can now declare ``phrase_synonyms``: ``phraseto_tsquery`` is exactly the
+    adjacency the capability names, and it is what removes the standing
+    «Синонимы не подставлялись» notice at its source rather than hiding it.
+    """
+    parts: list[str] = []
+    for group in terms:
+        members = [term.strip() for term in group if term and term.strip()]
+        simple = [term for term in members if _SIMPLE_TERM.match(term)]
+        phrases = [term for term in members if not _SIMPLE_TERM.match(term)]
+        alternatives: list[str] = []
+        if simple:
+            alternatives.append("to_tsquery(%s::regconfig, %s)")
+            params.append(config)
+            params.append(" | ".join(simple))
+        for phrase in phrases:
+            alternatives.append("phraseto_tsquery(%s::regconfig, %s)")
+            params.append(config)
+            params.append(phrase)
+        if alternatives:
+            parts.append("(" + " || ".join(alternatives) + ")")
+    if not parts:
+        return ""
+    return " && ".join(parts)
 
 #: Read paths of ``docs/index.json`` and the symbol in THIS module that
 #: answers each (``IDX002``).
@@ -143,9 +196,17 @@ class PostgresSearchBackend:
             # pretend it can, so equivalents are applied as QUERY expansion.
             synonyms_native=False,
             suggest=True,
-            # Query-side expansion cannot make a phrase match through a
-            # synonym; declared rather than discovered.
-            phrase_synonyms=False,
+            # True since 0.4.0. The old `False` said "query-side expansion
+            # cannot make a phrase match through a synonym", and that was
+            # true of the rendering, not of the engine: a multi-word member
+            # spliced into a `to_tsquery` string is a syntax error, so the
+            # only thing that could be done with it was to declare it lost.
+            # `_tsquery_expression` renders it with `phraseto_tsquery` and
+            # OR-s it into the group, which IS the adjacency the capability
+            # names. This is also what takes the standing yellow «Синонимы
+            # не подставлялись» off every SERP: the shortfall stopped being
+            # real, so it stopped being reported.
+            phrase_synonyms=True,
             supported_scorers=frozenset(
                 {"relevance", "freshness_decay", "geo_decay", "promotion_boost", "popularity"}
             ),
@@ -253,17 +314,11 @@ class PostgresSearchBackend:
         config = (search_settings.FTS_CONFIGS or {}).get(
             q.language, search_settings.FTS_FALLBACK_CONFIG or "simple"
         )
-        groups = []
-        for group in q.text.terms:
-            safe = [t.replace("'", "").replace("\\", "") for t in group if t.strip()]
-            safe = [t for t in safe if t]
-            if safe:
-                groups.append("(" + " | ".join(safe) + ")")
-        if not groups:
+        params: list = []
+        expression = _tsquery_expression(q.text.terms, config, params)
+        if not expression:
             return "", []
-        tsquery = " & ".join(groups)
-        clause = "d.text_vec @@ to_tsquery(%s::regconfig, %s)"
-        params: list = [config, tsquery]
+        clause = f"d.text_vec @@ ({expression})"
         if trigram and self.has_trigram():
             # The fuzzy arm keeps the AND semantics of the exact one: every
             # term group must still match SOMETHING, it may just match it
@@ -293,18 +348,11 @@ class PostgresSearchBackend:
         config = (search_settings.FTS_CONFIGS or {}).get(
             q.language, search_settings.FTS_FALLBACK_CONFIG or "simple"
         )
-        groups = []
-        for group in q.text.terms:
-            safe = [t.replace("'", "").replace("\\", "") for t in group if t.strip()]
-            safe = [t for t in safe if t]
-            if safe:
-                groups.append("(" + " | ".join(safe) + ")")
-        if not groups:
+        params: list = []
+        expression = _tsquery_expression(q.text.terms, config, params)
+        if not expression:
             return "0.0", []
-        return "ts_rank_cd(d.text_vec, to_tsquery(%s::regconfig, %s))", [
-            config,
-            " & ".join(groups),
-        ]
+        return f"ts_rank_cd(d.text_vec, ({expression}))", params
 
     def _distance_expression(self, q: SearchQuery) -> tuple[str, list]:
         """Great-circle distance in km, or ``NULL`` when no centre was given."""
@@ -390,7 +438,18 @@ class PostgresSearchBackend:
                 continue
             clauses.append("d.facet_terms_arr && %s::text[]")
             params.append(shared.facet_terms_for(slug, values))
-        for spec in q.ranges:
+        core_ranges, attribute_ranges = shared.split_ranges(q.ranges)
+        for field, spec in core_ranges:
+            # A column comparison, not the side-table semi-join: the number
+            # is on the document. NULL fails both comparisons, which is the
+            # wanted meaning — an unpriced listing is not a cheap one.
+            if spec.lower is not None:
+                clauses.append(f"d.{field} >= %s")
+                params.append(spec.lower)
+            if spec.upper is not None:
+                clauses.append(f"d.{field} <= %s")
+                params.append(spec.upper)
+        for spec in attribute_ranges:
             sub = ["n.document_id = d.id", "n.slug = %s"]
             params.append(spec.slug)
             if spec.lower is not None:
@@ -586,8 +645,11 @@ class PostgresSearchBackend:
                 trigram = True
             else:
                 degraded.append("typo_tolerance")
-        if q.text is not None and not q.text.is_empty:
-            degraded.append("phrase_synonyms")
+        # `phrase_synonyms` is NOT reported here. It is derivable from
+        # `capabilities()` alone, and `services._degradations` already
+        # derives it — from the same condition, so the answer carried it
+        # twice on every query with text. One owner, and the one that can
+        # see whether this particular query had a multi-word member to lose.
 
         # Counted over the SAME arm the hits came from. Counting the exact
         # arm behind a fuzzy page is how `count: 0` ends up printed over

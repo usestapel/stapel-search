@@ -365,6 +365,33 @@ def _s_range_open_upper(ctx: Context) -> None:
     assert set(ctx.keys(q)) == {"2"}
 
 
+def _s_core_range_price(ctx: Context) -> None:
+    """``r.price`` filters on the document's own column, not on an attribute.
+
+    No engine may serve this through ``SearchNumber``: nothing writes a
+    ``price`` row there, so a backend that forgets the split answers zero
+    for every bound — the exact silence a live classified stand shipped.
+    """
+    q = ctx.query(ranges=(RangeFilter(slug="price", lower=Decimal("100"), upper=Decimal("400")),))
+    assert set(ctx.keys(q)) == {"2"}, "100..400 selects the 300 and nothing else"
+
+    q = ctx.query(ranges=(RangeFilter(slug="price", upper=Decimal("100")),))
+    assert set(ctx.keys(q)) == {"4"}, "..100 selects the 10"
+
+    # Key 3 has no price. An open lower bound must not adopt it.
+    q = ctx.query(ranges=(RangeFilter(slug="price", lower=Decimal("0")),))
+    assert "3" not in set(ctx.keys(q)), "an unpriced document is not a cheap one"
+
+    # The two axes compose, and neither shadows the other.
+    q = ctx.query(
+        ranges=(
+            RangeFilter(slug="price", lower=Decimal("100")),
+            RangeFilter(slug="year", lower=Decimal("2015")),
+        )
+    )
+    assert set(ctx.keys(q)) == {"1"}
+
+
 def _s_facet_counts(ctx: Context) -> None:
     ctx.require("facet_counts")
     from .dto import FacetPlan
@@ -700,6 +727,11 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("range_inclusive", _s_range_inclusive, "2015.. includes 2015, excludes 2014"),
     Scenario("range_both_ends", _s_range_both_ends, "a closed range"),
     Scenario("range_open_upper", _s_range_open_upper, "..2014 is an open lower bound"),
+    Scenario(
+        "core_range_price",
+        _s_core_range_price,
+        "r.price filters the document's own column, and composes with attribute ranges",
+    ),
     Scenario("facet_counts", _s_facet_counts, "counts equal the candidate set"),
     Scenario("facet_drilldown", _s_facet_drilldown, "a selection does not zero neighbours"),
     Scenario(

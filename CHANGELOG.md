@@ -4,6 +4,116 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-08-31
+
+### Added — a listing's own price is a filter axis
+
+`r.price` answered `count: 0` for every bound, at HTTP 200, on a live
+classified board. Every range predicate resolved against the
+`SearchNumber(slug, value)` side table, which is written only by numeric
+*attribute* mappings; price is a column of the document, so the semi-join
+found nothing and said nothing. Meanwhile `price_base` had declared
+`filter:range` among its read paths since 0.1.0 — the contract claimed the
+capability before any code implemented it, and `IDX002` passed because the
+prefix was implemented *somewhere*.
+
+- **`index_schema.CORE_RANGE_FIELDS`** — `{"price": "price_base"}`, emitted
+  to `docs/index.json` as `core_range_fields`. An entry reserves the slug
+  fleet-wide, so the map is short and lives in the contract rather than
+  inside one backend.
+- **`backends/_shared.split_ranges`** is the single place the two axes part
+  company; postgres, meili and naive all call it, so they cannot drift about
+  what `r.price` means. A core range is a plain column comparison, so a NULL
+  price is outside every bound — an unpriced listing is not a cheap one.
+- **`core_range_price` is a conformance scenario.** A backend that forgets
+  the split fails the suite instead of quietly answering zero.
+- `facet_meta.core_ranges` announces the axes, so a panel offers «Цена от …
+  до …» without keeping its own list of which slugs are core.
+
+### Added — the caption ships with the count
+
+Facet buckets were `{value: count}` and nothing else, on the reasoning that
+the frontend has the category schema already (spec §1.3). True of a compose
+form, which fetches the category to draw itself; false of a SERP, where a
+host rendering a panel from the search answer alone printed storage slugs at
+buyers — «Состояние: **b-u**», «Вид объявления: **prodayu-svoe**».
+
+- **`facet_labels`** — `{slug: {translatable, values: {value: caption}}}`,
+  built from the same option dicts `facet_plan` already walks for
+  `closed_options`, so it costs no extra I/O. `translatable` rides along
+  because `b.apple` and `Б/у` are both strings and the reader cannot tell a
+  key from a caption by looking.
+- A vocabulary-backed slug is **absent** from the map rather than guessed at:
+  its level lives outside the category schema.
+
+### Changed — the facet budget goes to what the category flagged
+
+`MAX_FACET_FIELDS` overflow was decided by authoring order, an accident of
+the feed a category was imported from. Live, a phone board counted parcel
+weight, length, height and width — the delivery block is authored first —
+and reported Colour and RAM as `skipped`.
+
+- `facet_plan` ranks by `show_at_title`, then `show_as_badge`, then
+  `mandatory`, then the authored order as a stable tie-break. No list of
+  slugs lives in this module.
+- **`facet: false`** on a FeatureDef (or its config) drops the feature from
+  the plan entirely — neither counted nor `skipped`. Default `true`, so a
+  category that says nothing is unaffected. The `categories.path` canon
+  again: name the field the owner does not serve yet, consume it the moment
+  they do. It is what an author needs to say "the parcel's width is a
+  shipping input, not a filter" — which no library can infer from the type,
+  because the same `int` is a filter axis one category over.
+
+### Fixed — a multi-word synonym was a 500, and the notice about it was false
+
+- **`syntax error in tsquery`.** Every group member was spliced into one
+  `to_tsquery` string after stripping `'` and `\`, so a multi-word member
+  produced `to_tsquery('(бу | б/у | бывший в употреблении)')`. The shipped
+  `ru` dictionary has held that phrase since 0.1.0; it reached no engine only
+  because nothing resolved a language. `_tsquery_expression` renders
+  single-word members as `to_tsquery` alternatives and multi-word ones as
+  `phraseto_tsquery` terms, OR-ed with `||` within a group and AND-ed with
+  `&&` across groups.
+- **`PostgresSearchBackend` now declares `phrase_synonyms: True`.** The old
+  `False` described the rendering, not the engine: `phraseto_tsquery` *is*
+  the adjacency the capability names.
+- **A shortfall is a property of the answer, not of the engine class.**
+  `phrase_synonyms` was reported for every query with text, so every buyer
+  saw a yellow «Синонимы не подставлялись» on every SERP — a sentence that
+  was also untrue, since query-side expansion runs on every backend and
+  `iphone` did reach `айфон`. It is now reported only when
+  `NormalizedQuery.multiword_expansions` is non-empty, i.e. when this query
+  actually had a phrase to lose. `exact_total` has been governed this way
+  since 0.2.0; both are now the same rule.
+- **`degraded[]` is deduplicated across layers, not only within each.**
+  `_degradations` derived a shortfall from `capabilities()` while the
+  backend reported the same one from the branch it took, and every answer
+  shipped `["phrase_synonyms", "phrase_synonyms"]`. The postgres backend no
+  longer re-emits what the service derives.
+
+### Fixed — the dictionary that silently did not apply
+
+`language` resolves as `lang` → `Accept-Language` → `DEFAULT_LANGUAGE`, and
+it selects the dictionary. A Russian board on the `"en"` default therefore
+analyzed every header-less request with the English dictionary: no ru
+equivalents, no transliteration, no sign of it anywhere. Measured live —
+`айфон` 2, `iphone` 15, and the same `айфон` with `?lang=ru` 16.
+
+- **The answer states its `language`.** The only place a caller could ever
+  have seen which dictionary answered.
+- **`search.W007`** warns at deploy time when `DEFAULT_LANGUAGE` has no
+  dictionary while other languages do — silent on a genuinely English
+  deployment.
+- **`dictionaries/ru.json` v2** adds the brand forms transliteration cannot
+  reach, because a Russian buyer types the brand as it *sounds*: `эпл` is
+  not `epl`. Apple, realme, honor, oppo, vivo, tecno, infinix, nokia,
+  motorola, sony, asus, lenovo, zte, oneplus, google/pixel, nothing, ipad,
+  airpods, plus the `ксиоми`/`редми`/`poco` spellings the existing xiaomi
+  group missed. Contract data in its designated home, under the existing
+  `search_dictionary_lint` gate.
+
+347 passed, 52 skipped (postgres backend conformance included).
+
 ## [0.3.2] — 2026-08-31
 
 ### Added — the composite type is not a search axis

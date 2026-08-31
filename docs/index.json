@@ -22,6 +22,9 @@
   "service_read_path_prefixes": [
     "result."
   ],
+  "core_range_fields": {
+    "price": "price_base"
+  },
   "model_columns": {
     "SearchDocument": {
       "id": null,

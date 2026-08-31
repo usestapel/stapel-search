@@ -302,7 +302,15 @@ class MeilisearchBackend:
                 continue
             terms = shared.facet_terms_for(slug, values)
             filters.append([f'facet_terms = "{term}"' for term in terms])
-        for spec in q.ranges:
+        core_ranges, attribute_ranges = shared.split_ranges(q.ranges)
+        for field, spec in core_ranges:
+            # `price_base` is already in _FILTERABLE — the document has always
+            # carried it, and only the query side was missing.
+            if spec.lower is not None:
+                filters.append(f"{field} >= {spec.lower}")
+            if spec.upper is not None:
+                filters.append(f"{field} <= {spec.upper}")
+        for spec in attribute_ranges:
             if spec.lower is not None:
                 filters.append(f"numeric.{spec.slug} >= {spec.lower}")
             if spec.upper is not None:

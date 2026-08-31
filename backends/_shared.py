@@ -67,11 +67,48 @@ def facets_match(row_terms, wanted: dict[str, list[str]]) -> bool:
     return True
 
 
+def split_ranges(
+    ranges: tuple[RangeFilter, ...],
+) -> tuple[tuple[tuple[str, RangeFilter], ...], tuple[RangeFilter, ...]]:
+    """Split range predicates into the two axes an engine has to serve.
+
+    Returns ``(core, attributes)`` where *core* pairs each reserved slug with
+    the document COLUMN it addresses (``index_schema.CORE_RANGE_FIELDS``) and
+    *attributes* is everything else, resolved through ``SearchNumber`` as
+    before. Every engine calls this rather than pattern-matching a slug of
+    its own, because the whole point of the map is that the three backends
+    cannot drift about what ``r.price`` means.
+    """
+    from ..index_schema import CORE_RANGE_FIELDS
+
+    core: list[tuple[str, RangeFilter]] = []
+    attributes: list[RangeFilter] = []
+    for spec in ranges:
+        field = CORE_RANGE_FIELDS.get(spec.slug)
+        if field is None:
+            attributes.append(spec)
+        else:
+            core.append((field, spec))
+    return tuple(core), tuple(attributes)
+
+
 def narrow_by_ranges(qs, ranges: tuple[RangeFilter, ...]):
-    """One indexed semi-join per range predicate, over ``SearchNumber``."""
+    """Apply every range predicate to *qs*.
+
+    A core-field range is a plain column comparison (and therefore excludes
+    a document whose column is NULL — an unpriced listing is not a cheap
+    one); an attribute range stays one indexed semi-join over
+    ``SearchNumber``.
+    """
     from ..models import SearchNumber
 
-    for spec in ranges:
+    core, attributes = split_ranges(ranges)
+    for field, spec in core:
+        if spec.lower is not None:
+            qs = qs.filter(**{f"{field}__gte": spec.lower})
+        if spec.upper is not None:
+            qs = qs.filter(**{f"{field}__lte": spec.upper})
+    for spec in attributes:
         matching = SearchNumber.objects.filter(slug=spec.slug)
         if spec.lower is not None:
             matching = matching.filter(value__gte=spec.lower)
@@ -359,6 +396,7 @@ __all__ = [
     "geohash_prefix",
     "haversine_km",
     "narrow_by_ranges",
+    "split_ranges",
     "order_key",
     "paginate",
     "parse_range",

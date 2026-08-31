@@ -1,19 +1,158 @@
 {
-  "version": 1,
+  "version": 2,
   "language": "ru",
-  "_comment": "Contract data, not code: shipped in the wheel and extended through STAPEL_SEARCH['DICTIONARIES']. `equivalents` are symmetric groups (any member expands to the whole group) — the only form both shipped engines understand natively. `rewrites` normalize the QUERY only, never the index. `stopwords` are removed from the query only: a corpus indexed without them can only be repaired by reindexing everything.",
+  "_comment": "Contract data, not code: shipped in the wheel and extended through STAPEL_SEARCH['DICTIONARIES']. `equivalents` are symmetric groups (any member expands to the whole group) — the only form both shipped engines understand natively. `rewrites` normalize the QUERY only, never the index. `stopwords` are removed from the query only: a corpus indexed without them can only be repaired by reindexing everything. The brand groups exist because transliteration cannot reach them: a Russian buyer types the brand as it SOUNDS (эпл, ксиоми, реалми), and no letter table turns `эпл` into `apple` — `stapel_search.text.transliterate` produces `epl`. Every member is a form measured on a live board, not a guess.",
   "equivalents": [
-    ["iphone", "айфон", "ифон", "айфоне"],
-    ["samsung", "самсунг"],
-    ["xiaomi", "ксиаоми", "сяоми"],
-    ["huawei", "хуавей"],
-    ["macbook", "макбук"],
-    ["playstation", "плейстейшн", "плойка"],
-    ["б/у", "бу", "бэушный", "бывший в употреблении"],
-    ["ноутбук", "ноут", "лэптоп", "laptop"],
-    ["телефон", "смартфон"],
-    ["холодильник", "холодос"],
-    ["автомобиль", "машина", "авто"]
+    [
+      "iphone",
+      "айфон",
+      "ифон",
+      "айфоне",
+      "айфона",
+      "afon"
+    ],
+    [
+      "samsung",
+      "самсунг",
+      "самсунга",
+      "самс"
+    ],
+    [
+      "xiaomi",
+      "ксиаоми",
+      "сяоми",
+      "ксиоми",
+      "щаоми",
+      "redmi",
+      "редми",
+      "poco",
+      "поко"
+    ],
+    [
+      "huawei",
+      "хуавей",
+      "хуавэй"
+    ],
+    [
+      "macbook",
+      "макбук"
+    ],
+    [
+      "playstation",
+      "плейстейшн",
+      "плойка"
+    ],
+    [
+      "б/у",
+      "бу",
+      "бэушный",
+      "бывший в употреблении"
+    ],
+    [
+      "ноутбук",
+      "ноут",
+      "лэптоп",
+      "laptop"
+    ],
+    [
+      "телефон",
+      "смартфон"
+    ],
+    [
+      "холодильник",
+      "холодос"
+    ],
+    [
+      "автомобиль",
+      "машина",
+      "авто"
+    ],
+    [
+      "apple",
+      "эпл",
+      "эппл",
+      "аппл",
+      "яблоко"
+    ],
+    [
+      "realme",
+      "реалми",
+      "реалме",
+      "риалми"
+    ],
+    [
+      "honor",
+      "хонор",
+      "хонер"
+    ],
+    [
+      "oppo",
+      "оппо"
+    ],
+    [
+      "vivo",
+      "виво"
+    ],
+    [
+      "tecno",
+      "техно",
+      "текно",
+      "techno"
+    ],
+    [
+      "infinix",
+      "инфиникс"
+    ],
+    [
+      "nokia",
+      "нокиа",
+      "нокия"
+    ],
+    [
+      "motorola",
+      "моторола",
+      "мотрола"
+    ],
+    [
+      "sony",
+      "сони"
+    ],
+    [
+      "asus",
+      "асус"
+    ],
+    [
+      "lenovo",
+      "леново"
+    ],
+    [
+      "zte",
+      "зте"
+    ],
+    [
+      "oneplus",
+      "ванплюс",
+      "уанплюс"
+    ],
+    [
+      "google",
+      "гугл",
+      "pixel",
+      "пиксель"
+    ],
+    [
+      "nothing",
+      "нозинг"
+    ],
+    [
+      "ipad",
+      "айпад"
+    ],
+    [
+      "airpods",
+      "аирподс",
+      "эйрподс"
+    ]
   ],
   "rewrites": {
     "стиралка": "стиральная машина",

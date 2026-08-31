@@ -333,6 +333,26 @@
   },
   "components": {
     "schemas": {
+      "FacetLabels": {
+        "type": "object",
+        "description": "Captions for one slug's option codes.",
+        "properties": {
+          "translatable": {
+            "type": "boolean",
+            "description": "True when `values` holds translation KEYS to run through the catalogue; false when it holds literal captions. The reader cannot tell by looking — `b.apple` and `Б/у` are both strings."
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "translatable",
+          "values"
+        ]
+      },
       "FacetMeta": {
         "type": "object",
         "properties": {
@@ -356,11 +376,19 @@
               "type": "string"
             },
             "description": "Plan slugs dropped at MAX_FACET_FIELDS — reported, not vanished."
+          },
+          "core_ranges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Range slugs that address a core document column rather than an attribute (`r.price`). Offer them as filters unconditionally: they exist for every document in every category, which is why they are not in the category's own plan."
           }
         },
         "required": [
           "approximate",
           "candidates",
+          "core_ranges",
           "counted",
           "skipped"
         ]
@@ -583,6 +611,13 @@
             },
             "description": "{slug: {value: count}}, counted with the slug's own filter removed."
           },
+          "facet_labels": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FacetLabels"
+            },
+            "description": "{slug: {translatable, values: {value: caption}}} for slugs whose options are inline in the category schema. Absent for a vocabulary-backed slug: its level lives outside the schema and the plan will not invent a caption it has not read."
+          },
           "facet_meta": {
             "$ref": "#/components/schemas/FacetMeta"
           },
@@ -623,6 +658,10 @@
           "backend": {
             "type": "string"
           },
+          "language": {
+            "type": "string",
+            "description": "The language whose dictionary and analyzer configuration answered — `lang`, else Accept-Language, else DEFAULT_LANGUAGE. When the fallback is wrong the synonym layer silently does not apply, and this field is the only place the answer says so."
+          },
           "sort": {
             "type": "string"
           },
@@ -636,11 +675,13 @@
           "count_is_lower_bound",
           "degraded",
           "exact_total",
+          "facet_labels",
           "facet_meta",
           "facets",
           "has_next",
           "has_prev",
           "items",
+          "language",
           "next_anchor",
           "prev_anchor",
           "sort",

@@ -43,7 +43,7 @@ nothing and says so (`search.W001`), rather than guessing what a host wanted.
 | key | default | what it decides |
 |---|---|---|
 | `SORTS` | `("relevance", "newest", "price_asc", "price_desc", "distance")` | The closed vocabulary a caller may ask for. `popular` is deliberately absent: no popularity signal exists in the fleet, and a sort that orders every document by zero is a promise with nothing behind it. Add it once you have an emitter for `search.signal`, and `search.W004` stops warning. |
-| `DEFAULT_LANGUAGE` | `"en"` | The analyzer used when neither `lang` nor `Accept-Language` says otherwise. Note that `lang` narrows the corpus only when a caller **typed** it — a browser's `Accept-Language` picks the analyzer and never hides a catalogue. |
+| `DEFAULT_LANGUAGE` | `"en"` | The analyzer **and dictionary** used when neither `lang` nor `Accept-Language` says otherwise. Note that `lang` narrows the corpus only when a caller **typed** it — a browser's `Accept-Language` picks the analyzer and never hides a catalogue. **Set this to the board's own language.** Left at `"en"` on a Russian board, every header-less request is analyzed with the English dictionary: no ru equivalents, no transliteration, and the only symptom is lower counts. Measured live: `айфон` found 2 where `iphone` found 15 and `?lang=ru` found 16. `search.W007` warns at deploy time, and every answer now echoes the resolved `language`. |
 | `MAX_QUERY_CHARS` | `200` | Longer is refused with `error.400.search_query_too_long`. |
 | `MAX_QUERY_TERMS` | `32` | Counted AFTER synonym and transliteration expansion, because that is what actually reaches the engine. |
 | `MAX_PAGE_SIZE` | `100` | A larger `limit` is clamped, not refused. |

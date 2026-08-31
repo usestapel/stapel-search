@@ -758,7 +758,15 @@ def _degradations(capabilities, q, facet_result, path_degraded: str, exact_total
     if q.text is not None and not q.text.is_empty:
         if not capabilities.typo_tolerance:
             degraded.append("typo_tolerance")
-        if not capabilities.phrase_synonyms:
+        # Reported only when this ANSWER actually lost something, not
+        # whenever the engine class lacks the feature. Query-side expansion
+        # runs on every backend, so `iphone -> айфон` is substituted even on
+        # Postgres; what an engine without phrase synonyms cannot do is
+        # match a MULTI-WORD group member («бывший в употреблении») as a
+        # phrase. Keying on the capability alone put a yellow «Синонимы не
+        # подставлялись» over every SERP, on every query, for every buyer —
+        # a sentence that was also false.
+        if not capabilities.phrase_synonyms and q.text.multiword_expansions:
             degraded.append("phrase_synonyms")
     # Per ANSWER, not per engine: an engine that cannot always count exactly
     # still counts a small candidate set exactly, and reporting `exact_total`
@@ -850,11 +858,19 @@ def search(params, *, accept_language: str = "") -> dict:
     return {
         "items": items,
         "facets": counts,
+        "facet_labels": {
+            slug: {
+                "translatable": bool(plan.translatable_labels.get(slug, True)),
+                "values": values,
+            }
+            for slug, values in plan.option_labels.items()
+        },
         "facet_meta": {
             "approximate": bool(facet_result.approximate) if facet_result else False,
             "candidates": facet_result.candidates if facet_result else 0,
             "counted": list(plan.slugs) if facet_result else [],
             "skipped": list(plan.skipped),
+            "core_ranges": list(plan.core_ranges),
         },
         "next_anchor": next_anchor,
         "prev_anchor": prev_anchor,
@@ -866,12 +882,30 @@ def search(params, *, accept_language: str = "") -> dict:
         "count": count,
         "count_is_lower_bound": count_is_lower_bound,
         "exact_total": exact_total,
+        # Deduplicated across the three layers that contribute, not just
+        # within each: `_degradations` derives a shortfall from
+        # `capabilities()` while a backend may report the same one from the
+        # branch it actually took, and the concatenation shipped
+        # `["phrase_synonyms", "phrase_synonyms"]` on every query with text.
+        # The frontend deduped it on arrival, which is exactly why nobody
+        # saw it until a stand was read by hand.
         "degraded": list(
-            _degradations(capabilities, q, facet_result, path_degradation(), exact_total)
-            + tuple(result.degraded)
-            + tuple(facet_result.degraded if facet_result else ())
+            dict.fromkeys(
+                _degradations(
+                    capabilities, q, facet_result, path_degradation(), exact_total
+                )
+                + tuple(result.degraded)
+                + tuple(facet_result.degraded if facet_result else ())
+            )
         ),
         "backend": getattr(backend, "name", "unknown"),
+        # Which dictionary and analyzer configuration answered. Resolved from
+        # `lang`, then `Accept-Language`, then DEFAULT_LANGUAGE — and when
+        # that fallback is wrong the whole synonym layer silently does not
+        # apply: on a live stand `айфон` found 2 and `iphone` found 15,
+        # because no header reached the service and the ru dictionary was
+        # never loaded. Stating it makes that visible from the answer.
+        "language": q.language,
         "sort": q.sort,
         "took_ms": int((timezone.now() - started).total_seconds() * 1000),
     }

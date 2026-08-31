@@ -207,6 +207,24 @@ class NormalizedQuery:
     def flat_terms(self) -> tuple[str, ...]:
         return tuple(group[0] for group in self.terms)
 
+    @property
+    def multiword_expansions(self) -> tuple[str, ...]:
+        """Group members an engine without phrase synonyms cannot honour.
+
+        A single-word expansion is served by every engine — it is one more
+        alternative in the same OR. A member with a space in it («бывший в
+        употреблении») is a PHRASE, and a `to_tsquery` alternative cannot
+        require two lexemes to be adjacent. This is the whole content of
+        the ``phrase_synonyms`` capability, and reporting it per ANSWER
+        rather than per engine is what keeps the shortfall true.
+        """
+        seen: list[str] = []
+        for group in self.terms:
+            for member in group:
+                if " " in member and member not in seen:
+                    seen.append(member)
+        return tuple(seen)
+
 
 @dataclass(frozen=True)
 class Cursor:
@@ -329,6 +347,20 @@ class FacetPlan:
     #: silently vanished.
     skipped: tuple[str, ...] = ()
     revision: Any = None
+    #: ``{slug: {value: caption}}`` for slugs whose options are inline in the
+    #: category config. The captions were always there — the plan reads the
+    #: same option dicts to build ``closed_options`` — and not shipping them
+    #: is why a panel whose host had not threaded the schema through printed
+    #: ``b-u`` at buyers.
+    option_labels: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: ``{slug: bool}`` — whether that slug's captions are translation KEYS
+    #: (``translatable_options``, default true) or literal text. The reader
+    #: cannot guess: ``b.apple`` and ``Б/у`` are both strings.
+    translatable_labels: dict[str, bool] = field(default_factory=dict)
+    #: Reserved range slugs that address a core document column
+    #: (``index_schema.CORE_RANGE_FIELDS``). Not part of ``slugs``: there is
+    #: nothing to count, only an axis to offer.
+    core_ranges: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

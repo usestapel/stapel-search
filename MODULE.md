@@ -176,6 +176,35 @@ an honest `typo_tolerance: False`.
 for, and the shortfall travels to the caller in `degraded: [...]`. A frontend
 that cannot see the shortfall renders a confident wrong answer.
 
+**A shortfall is a property of the ANSWER, not of the engine class** (0.4.0).
+Reported per engine, `phrase_synonyms` put a yellow «Синонимы не
+подставлялись» over every SERP, on every query, for every buyer — and the
+sentence was false, because query-side expansion runs on every backend and
+`iphone` did reach `айфон`. What an engine without phrase synonyms cannot do
+is match a **multi-word** group member as a phrase, so that is the condition:
+`NormalizedQuery.multiword_expansions` names what this query would lose, and
+an empty tuple means nothing was lost and nothing is reported. `exact_total`
+was already governed this way (0.2.0); the rule is now the same for both.
+
+`degraded[]` is also **deduplicated across the layers that contribute**, not
+just within each. `_degradations` derives a shortfall from `capabilities()`
+while a backend may report the same one from the branch it took, and the
+concatenation shipped `["phrase_synonyms", "phrase_synonyms"]` on every
+query with text. The frontend deduped it on arrival, which is exactly why
+nobody saw it until a stand was read by hand.
+
+**Postgres does phrase synonyms** since 0.4.0, and the old `False` was about
+the rendering rather than the engine. Every group member used to be spliced
+into one `to_tsquery` string after stripping `'` and `\`, so a multi-word
+member produced `to_tsquery('(бу | б/у | бывший в употреблении)')` — a
+`syntax error in tsquery`, i.e. a 500 for any query whose dictionary held a
+phrase. The shipped `ru` dictionary has held one since 0.1.0.
+`_tsquery_expression` now renders single-word members as `to_tsquery`
+alternatives and multi-word ones as `phraseto_tsquery` terms, OR-ed with
+`||` inside the group and AND-ed with `&&` across groups. That is the
+adjacency the capability names, so the capability is now true rather than
+merely unreported.
+
 **Switching engines:**
 
 ```
@@ -305,6 +334,74 @@ is a form shape, not a search axis; a child worth filtering on belongs outside
 the group. A `skip` slug is also refused when a caller names it explicitly in
 `facets=`: the writer never indexed it, so planning it as a term facet would
 answer every query with an empty panel.
+
+### Core range fields (0.4.0)
+
+`r.<slug>` used to mean one thing only: an **attribute** range, resolved by an
+indexed semi-join on `SearchNumber(slug, value)`, which is written by the
+numeric `FacetMapping`s. A slug naming a column of the document itself found
+no row there and answered `count: 0` — for every bound, at HTTP 200, with
+nothing in the response saying the filter had never been applied. Live, that
+meant a classified board where a buyer could **sort** by price and not
+**filter** by it, while `index_schema.py` had declared `filter:range` among
+`price_base`'s read paths since 0.1.0.
+
+`index_schema.CORE_RANGE_FIELDS` (`{"price": "price_base"}`) is the
+declaration that makes the claim true. `backends/_shared.split_ranges` is the
+one place the two axes part company, so the three engines cannot drift about
+what `r.price` means, and `core_range_price` is a **conformance scenario**:
+a backend that forgets the split fails the suite instead of answering zero.
+A core range is a plain column comparison, so a NULL price is outside every
+bound — an unpriced listing is not a cheap one.
+
+Adding an entry reserves the slug fleet-wide (a category attribute of the
+same name would be shadowed), which is why the map is short, lives in the
+contract, and is emitted to `docs/index.json` as `core_range_fields`.
+
+The plan announces the axes in `facet_meta.core_ranges` rather than requiring
+every frontend to keep its own list of which slugs are core. They are not in
+`slugs`: there is nothing to count, only an axis to offer.
+
+### Option captions ship with the counts (0.4.0)
+
+Until 0.4.0 a bucket was `{value: count}` and nothing else, on the reasoning
+that the frontend has the category schema already. That holds for a compose
+form, which fetches the category to draw itself. It does **not** hold for a
+SERP: a host rendering a panel from the search answer alone has no schema,
+and the panel then prints storage slugs — «Состояние: **b-u**», «Вид
+объявления: **prodayu-svoe**» — at buyers.
+
+`facet_labels` is `{slug: {translatable, values: {value: caption}}}`, built
+from the very option dicts `facet_plan` already walks to compute
+`closed_options`. It costs no extra I/O. `translatable` rides along because
+the reader cannot tell a translation key from a caption by looking —
+`b.apple` and `Б/у` are both strings — and guessing wrong prints either a
+dotted key or an untranslated word. A vocabulary-backed slug is **absent**
+from the map: its level lives outside the schema, and the plan will not
+invent a caption it has not read.
+
+### What the facet budget is spent on (0.4.0)
+
+`MAX_FACET_FIELDS` is a real cap and a wide imported category overruns it.
+Until 0.4.0 the overflow was decided by *authoring order*, which is an
+accident of the feed the category came from: a live phone board counted
+parcel weight, length, height and width — the delivery block is authored
+first — and reported Colour and RAM as `skipped`, which are the two a phone
+buyer actually narrows by.
+
+`facet_plan` now ranks by what the category **already says** about each
+feature: `show_at_title`, then `show_as_badge`, then `mandatory`, then the
+authored order as a stable tie-break. No list of slugs lives in this module;
+a search library holding opinions about phones is the thing being avoided.
+
+A feature can also refuse outright: `facet: false` on the FeatureDef (or its
+config) drops it from the plan entirely, neither counted nor `skipped`. The
+default is **true**, so a category that says nothing keeps today's behaviour.
+This is the `categories.path` canon applied again — name the field the owner
+does not serve yet, consume it the moment they do — and it is what a category
+author needs in order to say "the parcel's width is a shipping input, not a
+filter", a thing no library can infer from the type, because the same `int`
+is a filter axis one category over.
 
 ---
 

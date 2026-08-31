@@ -305,10 +305,64 @@ def check_truncated_terms(app_configs, **kwargs):
     ]
 
 
+@checks.register("stapel_search")
+def check_default_language_has_a_dictionary(app_configs, **kwargs):
+    """W007: the fallback language is the one with no synonyms.
+
+    ``language`` resolves as ``lang`` -> ``Accept-Language`` ->
+    ``DEFAULT_LANGUAGE``, and it selects the dictionary. A stand serving a
+    Russian board on the ``"en"`` default therefore answers every
+    header-less request with the *English* dictionary: no ru equivalents, no
+    transliteration, and no sign of it anywhere. Measured live before this
+    check existed — ``айфон`` found 2 listings where ``iphone`` found 15,
+    and the same query with ``?lang=ru`` found 16.
+
+    The warning fires only when the module is demonstrably multilingual
+    (some other language has a dictionary and the default does not), so a
+    genuinely English deployment stays quiet.
+    """
+    from .conf import search_settings
+    from .registry import get_dictionary_sources
+    from .text import DICTIONARY_DIR
+
+    default = str(search_settings.DEFAULT_LANGUAGE or "").lower()
+
+    def has_dictionary(language: str) -> bool:
+        if not language:
+            return False
+        if (DICTIONARY_DIR / f"{language}.json").exists():
+            return True
+        return bool(get_dictionary_sources(language))
+
+    if has_dictionary(default):
+        return []
+    others = sorted(
+        {str(lang).lower() for lang in (search_settings.FTS_CONFIGS or {})}
+        | {str(lang).lower() for lang in (search_settings.DICTIONARIES or {})}
+        | {path.stem for path in DICTIONARY_DIR.glob("*.json")}
+    )
+    others = [lang for lang in others if lang != default and has_dictionary(lang)]
+    if not others:
+        return []
+    return [
+        checks.Warning(
+            f"DEFAULT_LANGUAGE is {default!r}, which has no dictionary, while "
+            f"{others} do. Every query that carries neither `lang` nor an "
+            "Accept-Language header is analyzed with no synonyms and no "
+            "transliteration — silently, and the counts simply come out lower.",
+            hint="Set STAPEL_SEARCH['DEFAULT_LANGUAGE'] to the board's own "
+                 "language, or ship a dictionary for the current default. The "
+                 "resolved language is echoed in every answer as `language`.",
+            id="stapel_search.W007",
+        )
+    ]
+
+
 __all__ = [
     "check_backend",
     "check_beat_schedule",
     "check_category_path_provider",
+    "check_default_language_has_a_dictionary",
     "check_default_facet_mappings",
     "check_popular_sort_has_a_signal",
     "check_postgres_backend_has_postgres",

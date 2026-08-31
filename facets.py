@@ -159,6 +159,56 @@ def _feature_defs(category_id: Any) -> tuple[list[dict], Any]:
     return features, revision
 
 
+def _facet_rank(feature: dict) -> int:
+    """How much of the facet budget this feature has earned, lower first.
+
+    The budget is ``MAX_FACET_FIELDS`` and a wide imported category spends
+    it in *authoring* order, which is an accident of the feed the category
+    came from. Live, on a phones board, that meant the panel counted parcel
+    weight, length, height and width — the delivery block happens to be
+    authored first — and reported Colour and RAM as *skipped*, which are
+    the two a phone buyer actually narrows by.
+
+    So rank by what the category itself already says about each feature,
+    rather than by a list of slugs kept in this module (which would be a
+    search library holding opinions about phones):
+
+    - ``show_at_title`` — the author put it in the listing's own title;
+    - ``show_as_badge`` — the author put it on the card;
+    - ``mandatory`` — every listing in the category has it, so its buckets
+      partition the corpus instead of describing a fraction of it.
+
+    Ties keep the authored order, so the ranking never reshuffles a panel
+    whose features are all flagged the same.
+    """
+    if feature.get("show_at_title"):
+        return 0
+    if feature.get("show_as_badge"):
+        return 1
+    if feature.get("mandatory"):
+        return 2
+    return 3
+
+
+def _is_facetable(feature: dict, config: dict) -> bool:
+    """Whether the category offers this feature as a filter axis.
+
+    ``facet: false`` is the opt-out, read from the FeatureDef (or from its
+    config) and **defaulting to true** so a category that says nothing keeps
+    today's behaviour. This is the ``categories.path`` canon applied again:
+    name the field the owner does not serve yet, consume it the moment they
+    do, and degrade to something sane meanwhile. It is what a category
+    author needs to say "the parcel's width is a shipping input, not a
+    filter" — a thing no library can infer from the type, because the very
+    same ``int`` is a filter axis one category over.
+    """
+    for holder in (feature, config):
+        flag = holder.get("facet")
+        if flag is not None:
+            return bool(flag)
+    return True
+
+
 def facet_plan(
     category_id: Any = None, *, requested: tuple[str, ...] | None = None
 ) -> FacetPlan:
@@ -171,6 +221,7 @@ def facet_plan(
     turning into a dozen sequential scans.
     """
     from .conf import search_settings
+    from .index_schema import CORE_RANGE_FIELDS
     from .registry import get_facet_mapping
 
     max_fields = int(search_settings.MAX_FACET_FIELDS)
@@ -178,6 +229,9 @@ def facet_plan(
 
     kinds: dict[str, str] = {}
     closed: dict[str, tuple[str, ...]] = {}
+    labels: dict[str, dict[str, str]] = {}
+    translatable: dict[str, bool] = {}
+    ranked: list[tuple[int, int, str]] = []
     ordered: list[str] = []
     #: Slugs the category declares with a `skip` kind (`header`, `group`).
     #: Kept so an explicit `facets=` list cannot re-admit them below — a slug
@@ -185,18 +239,18 @@ def facet_plan(
     #: every query with an empty panel.
     excluded: set[str] = set()
 
-    for feature in features:
+    for position, feature in enumerate(features):
         slug = feature.get("slug")
         config = feature.get("config") or {}
         type_slug = config.get("type") or ""
         if not slug or not type_slug:
             continue
         mapping = get_facet_mapping(type_slug)
-        if mapping.kind == "skip":
+        if mapping.kind == "skip" or not _is_facetable(feature, config):
             excluded.add(slug)
             continue
         kinds[slug] = mapping.kind
-        ordered.append(slug)
+        ranked.append((_facet_rank(feature), position, slug))
         if config.get("optionsRef"):
             # A vocabulary-backed field (ref_select, and any host type that
             # points at a vocabulary the same way) has no closed option set to
@@ -204,17 +258,36 @@ def facet_plan(
             # thousands of terms. Counting what is present is the whole panel.
             continue
         options = config.get("options")
-        # Labels are translation keys living in the category config, so we
-        # return codes and counts and let the frontend resolve captions from
-        # the schema it already fetched (spec §1.3).
-        if options and not config.get("allowCustom"):
-            values = tuple(
-                str(option.get("value"))
-                for option in options
-                if isinstance(option, dict) and option.get("value") is not None
-            )
+        if not options:
+            continue
+        # The caption ships WITH the count. Until 0.4.0 it did not, on the
+        # reasoning that the frontend has the schema already (spec §1.3) —
+        # and that is true of the compose form, which fetches the category
+        # to draw itself, but not of a SERP: a host that renders a panel
+        # from the search answer alone has no schema, and the panel then
+        # prints storage slugs — «Состояние: b-u», «Вид объявления:
+        # prodayu-svoe» — at buyers. The labels cost nothing here: the very
+        # next lines already walk these same option dicts.
+        #
+        # `translatable_options` rides along because the reader cannot tell
+        # a key from a caption by looking: `b.apple` and `Б/у` are both
+        # strings, and guessing wrong prints either a dotted key or an
+        # untranslated word.
+        captions = {
+            str(option["value"]): str(option.get("label") or option["value"])
+            for option in options
+            if isinstance(option, dict) and option.get("value") is not None
+        }
+        if captions:
+            labels[slug] = captions
+            translatable[slug] = bool(config.get("translatable_options", True))
+        if not config.get("allowCustom"):
+            values = tuple(captions)
             if values:
                 closed[slug] = values
+
+    ranked.sort(key=lambda row: (row[0], row[1]))
+    ordered = [slug for _, _, slug in ranked]
 
     if requested is not None:
         wanted = [slug for slug in requested if slug and slug not in excluded]
@@ -232,6 +305,15 @@ def facet_plan(
         closed_options={slug: closed[slug] for slug in selected if slug in closed},
         skipped=skipped,
         revision=revision,
+        option_labels={slug: labels[slug] for slug in selected if slug in labels},
+        translatable_labels={
+            slug: translatable[slug] for slug in selected if slug in translatable
+        },
+        # Not conditioned on the category: a core range addresses a column
+        # every document in every corpus has. Announcing it here is what
+        # lets a panel offer «Цена от … до …» without the frontend keeping
+        # its own list of which slugs are core.
+        core_ranges=tuple(CORE_RANGE_FIELDS),
     )
 
 

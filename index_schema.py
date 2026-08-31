@@ -57,6 +57,30 @@ SERVICE_READ_PATH_PREFIXES = ("result.",)
 #: names machinery outside any query builder and is proven by its test
 #: alone.
 
+#: ``r.<slug>`` slugs that address a core document COLUMN instead of the
+#: ``SearchNumber`` side table, as ``{slug: index field}``.
+#:
+#: Every other range filter is an *attribute* range: the number was written
+#: to ``SearchNumber`` by a numeric ``FacetMapping``, and the predicate is an
+#: indexed semi-join on ``(slug, value)``. Price is not an attribute — it is
+#: a column of the listing itself — so that semi-join finds no row and
+#: answers ``count: 0`` for every bound, at HTTP 200, with nothing in the
+#: response saying the filter was never applied. That is what a live
+#: classified stand shipped: a buyer could sort by price and not filter by
+#: it, and ``r.price=10000..30000`` returned an empty board.
+#:
+#: ``price_base`` has declared ``filter:range`` among its read paths since
+#: 0.1.0 — the claim was in the contract before the code was. This map is
+#: what makes it true, and ``IDX002``-style coverage of it is
+#: ``tests/test_core_ranges_and_labels.py`` plus the ``core_range_price``
+#: conformance scenario every engine must pass.
+#:
+#: Adding an entry is a deliberate act: the slug becomes reserved fleet-wide,
+#: so a category holding an attribute of the same name would be shadowed by
+#: it. That is why the map is short and why it is here, in the contract,
+#: rather than inside one backend.
+CORE_RANGE_FIELDS: dict[str, str] = {"price": "price_base"}
+
 
 @dataclass(frozen=True)
 class IndexField:
@@ -393,6 +417,7 @@ def index_schema() -> dict:
         "kinds": list(KINDS),
         "query_read_path_prefixes": list(QUERY_READ_PATH_PREFIXES),
         "service_read_path_prefixes": list(SERVICE_READ_PATH_PREFIXES),
+        "core_range_fields": dict(CORE_RANGE_FIELDS),
         "model_columns": INDEX_MODEL_COLUMNS,
         "fields": [asdict(f) for f in INDEX_FIELDS],
     }
@@ -442,6 +467,7 @@ def _collect(attribute: str) -> tuple[str, ...]:
 
 
 __all__ = [
+    "CORE_RANGE_FIELDS",
     "INDEX_FIELDS",
     "INDEX_MODEL_COLUMNS",
     "KINDS",

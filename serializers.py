@@ -42,6 +42,28 @@ class FacetMetaSerializer(serializers.Serializer):
         child=serializers.CharField(),
         help_text="Plan slugs dropped at MAX_FACET_FIELDS — reported, not vanished.",
     )
+    core_ranges = serializers.ListField(
+        child=serializers.CharField(),
+        help_text=(
+            "Range slugs that address a core document column rather than an "
+            "attribute (`r.price`). Offer them as filters unconditionally: "
+            "they exist for every document in every category, which is why "
+            "they are not in the category's own plan."
+        ),
+    )
+
+
+class FacetLabelsSerializer(serializers.Serializer):
+    """Captions for one slug's option codes."""
+
+    translatable = serializers.BooleanField(
+        help_text=(
+            "True when `values` holds translation KEYS to run through the "
+            "catalogue; false when it holds literal captions. The reader "
+            "cannot tell by looking — `b.apple` and `Б/у` are both strings."
+        )
+    )
+    values = serializers.DictField(child=serializers.CharField())
 
 
 class SearchResponseSerializer(serializers.Serializer):
@@ -51,6 +73,15 @@ class SearchResponseSerializer(serializers.Serializer):
     facets = serializers.DictField(
         child=serializers.DictField(child=serializers.IntegerField()),
         help_text="{slug: {value: count}}, counted with the slug's own filter removed.",
+    )
+    facet_labels = serializers.DictField(
+        child=FacetLabelsSerializer(),
+        help_text=(
+            "{slug: {translatable, values: {value: caption}}} for slugs whose "
+            "options are inline in the category schema. Absent for a "
+            "vocabulary-backed slug: its level lives outside the schema and "
+            "the plan will not invent a caption it has not read."
+        ),
     )
     facet_meta = FacetMetaSerializer()
     next_anchor = serializers.CharField(allow_null=True)
@@ -85,6 +116,14 @@ class SearchResponseSerializer(serializers.Serializer):
         help_text="What the configured engine could not do for this query.",
     )
     backend = serializers.CharField()
+    language = serializers.CharField(
+        help_text=(
+            "The language whose dictionary and analyzer configuration answered "
+            "— `lang`, else Accept-Language, else DEFAULT_LANGUAGE. When the "
+            "fallback is wrong the synonym layer silently does not apply, and "
+            "this field is the only place the answer says so."
+        )
+    )
     sort = serializers.CharField()
     took_ms = serializers.IntegerField()
 
