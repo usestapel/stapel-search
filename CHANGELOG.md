@@ -4,6 +4,14 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] — 2026-09-02
+
+Patch. `__version__` said `0.7.0` in the 0.8.0 artifact: the version lives in
+two places and the release moved one of them. Nothing else changed — 0.8.0 is
+functionally this release and is left on PyPI rather than yanked, but a module
+that misreports its own version is exactly the class of fact nothing
+downstream can check, so it does not stand.
+
 ## [0.8.0] — 2026-09-02
 
 ### Fixed — the two rankings that decided what a buyer never saw
