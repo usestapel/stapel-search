@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-search"
-version = "0.8.1"
+version = "0.9.0"
 description = "Search index, facets, geo-radius and ranking for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -27,8 +27,9 @@ dependencies = [
     "stapel-core>=0.31.0,<1.0",
     # L1 library, imported, NOT a Django app: the facet mapping registry is
     # keyed by attribute-type slug and caches on `registry_version()`.
-    # Floor 0.5: the two vocabulary-backed types this registry now declares.
-    "stapel-attributes>=0.5,<1.0",
+    # Floor 0.8: `stapel_attributes.visibility` — the stamp a stored DAO
+    # carries, and the predicate this indexer refuses to write a value on.
+    "stapel-attributes>=0.8,<0.9",
     # Spec §7.2 + architect verdict §18.10: the geohash prefix/haversine
     # arithmetic is IMPORTED, not copied. `stapel_geo.geohash` is pure
     # (pygeohash only, no Django), so this is a library dependency —

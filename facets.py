@@ -337,6 +337,41 @@ def _is_facetable(feature: dict, config: dict) -> bool:
     return True
 
 
+def _is_public(feature: dict, config: dict) -> bool:
+    """Whether the category lets ANY reader see this feature's values.
+
+    ``FeatureDef.visibility`` (stapel-attributes 0.8): ``public`` — the
+    default, and what every definition written before the axis existed reads
+    as — against ``owner``/``staff``, which mark a value that identifies a
+    specific physical unit (VIN, IMEI, serial, registry number).
+
+    Read with ``.get`` off the feature and then off its config, exactly like
+    :func:`_is_facetable`, because ``categories.features`` does not serve the
+    field yet: this consumes it the moment stapel-categories ships it and
+    reads ``public`` meanwhile.
+
+    Fail-closed on a value this library does not know:
+    ``normalize_visibility`` raises on a typo like ``"private"``, and the
+    answer to "I cannot tell what this means" is not to publish a VIN.
+    """
+    from stapel_attributes.visibility import PUBLIC, UnknownVisibility, normalize_visibility
+
+    for holder in (feature, config):
+        raw = holder.get("visibility")
+        if raw in (None, ""):
+            continue
+        try:
+            return normalize_visibility(raw) == PUBLIC
+        except UnknownVisibility:
+            logger.warning(
+                "unknown visibility %r on feature %r — treated as hidden",
+                raw,
+                feature.get("slug"),
+            )
+            return False
+    return True
+
+
 def facet_plan(
     category_id: Any = None, *, requested: tuple[str, ...] | None = None
 ) -> FacetPlan:
@@ -362,17 +397,30 @@ def facet_plan(
     vocabulary_refs: dict[str, tuple[str, str]] = {}
     ranked: list[tuple[tuple[int, int], int, str]] = []
     ordered: list[str] = []
-    #: Slugs the category declares with a `skip` kind (`header`, `group`).
-    #: Kept so an explicit `facets=` list cannot re-admit them below — a slug
-    #: the writer never indexes would otherwise plan as a term facet and answer
-    #: every query with an empty panel.
+    #: Slugs the category declares with a `skip` kind (`header`, `group`), or
+    #: opts out of faceting, or marks non-public. Kept so an explicit `facets=`
+    #: list cannot re-admit them below — a slug the writer never indexes would
+    #: otherwise plan as a term facet and answer every query with an empty
+    #: panel, and a NON-PUBLIC slug re-admitted that way would re-enumerate a
+    #: VIN with counts, which is the leak this exclusion exists for.
     excluded: set[str] = set()
+    #: The subset of `excluded` that is excluded because it is not public.
+    #: Reported on the plan: the read path drops these slugs' `f.`/`r.`
+    #: filters, and only the plan knows which they are.
+    hidden: set[str] = set()
 
     for position, feature in enumerate(features):
         slug = feature.get("slug")
         config = feature.get("config") or {}
         type_slug = config.get("type") or ""
         if not slug or not type_slug:
+            continue
+        # Before the type, before the opt-out: a non-public feature is not an
+        # axis at all, whatever it is made of. Ordering it first is what keeps
+        # the rule from depending on a mapping the registry happens to know.
+        if not _is_public(feature, config):
+            excluded.add(slug)
+            hidden.add(slug)
             continue
         mapping = get_facet_mapping(type_slug)
         if mapping.kind == "skip" or not _is_facetable(feature, config):
@@ -446,6 +494,7 @@ def facet_plan(
         kinds={slug: kinds.get(slug, "term") for slug in selected},
         closed_options={slug: closed[slug] for slug in selected if slug in closed},
         skipped=skipped,
+        hidden=tuple(sorted(hidden)),
         revision=revision,
         option_labels={slug: labels[slug] for slug in selected if slug in labels},
         translatable_labels={

@@ -42,6 +42,17 @@ class FacetMetaSerializer(serializers.Serializer):
         child=serializers.CharField(),
         help_text="Plan slugs dropped at MAX_FACET_FIELDS — reported, not vanished.",
     )
+    dropped_filters = serializers.ListField(
+        child=serializers.CharField(),
+        help_text=(
+            "`f.<slug>`/`r.<slug>` filters this answer did NOT apply, because "
+            "the category marks the slug non-public (`FeatureDef.visibility` "
+            "is `owner` or `staff`). A hidden value is not indexed and is not "
+            "filterable: letting `?f.vin=<value>` through would make the index "
+            "an exact-match oracle over an identifier. The answer is wider "
+            "than what was asked for, and says so here rather than silently."
+        ),
+    )
     core_ranges = serializers.ListField(
         child=serializers.CharField(),
         help_text=(

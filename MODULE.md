@@ -496,6 +496,59 @@ author needs in order to say "the parcel's width is a shipping input, not a
 filter", a thing no library can infer from the type, because the same `int`
 is a filter axis one category over.
 
+### A hidden attribute is not a search axis (0.9.0)
+
+Some attributes do not describe an object, they *identify* one: a VIN, an
+IMEI, a serial, a registry number. `FeatureDef.visibility` (stapel-attributes
+0.8) records that once, in the catalogue — `public` by default, `owner` or
+`staff` otherwise — and this module owes three separate refusals, because
+each of the index's three shapes is an exact-value oracle on its own:
+
+| shape | the question it answered |
+|---|---|
+| `facet_terms` | `?f.vin=<value>` — one hit confirms *which listing is that car* |
+| `SearchNumber` | `?r.mileage=X..X` — twenty queries bisect the exact number |
+| the counted panel | `?facets=vin` re-enumerated the values, with counts |
+
+**The writer is the fix.** `build_facets` skips a DAO whose own stamp says it
+is not public (`visibility.is_public`, fail-closed on a stamp this library
+does not recognise) and a slug the producer named in
+`SearchDocumentInput.hidden_features`. Nothing is written: no `facets` entry,
+no term, no number. The stamp travels with the value, so the indexer needs no
+schema lookup — which matters, because a comm call in the write path fails
+*open* when the provider is down.
+
+`features_search` — the lossy `{slug: [values]}` fallback — carries no stamp
+and cannot be defended by the value in hand. `hidden_features` is the channel
+a producer of that projection uses instead; it is optional and empty by
+default, so an existing mapper indexes exactly what it indexed before.
+
+**The plan is the second refusal.** A non-public feature lands in
+`facet_plan`'s hard `excluded` set, beside `facet: false` — so it is not
+counted, and an explicit `?facets=vin` does **not** re-admit it the way a
+budget-`skipped` slug can. The plan reports the set as `hidden`.
+
+**The reader is the belt**, and it is not redundant: documents indexed before
+0.9.0 still carry their terms and numbers. `services.search()` drops
+`f.<slug>` / `r.<slug>` filters on a slug the category hides, and reports
+them in `facet_meta.dropped_filters` rather than ignoring them silently. The
+answer is then a superset of what was asked for — it discriminates nothing,
+which is exactly the property that makes it not an oracle.
+
+A **cross-category** query (no `category`) has no plan and drops nothing.
+That is accepted and named rather than papered over: visibility is a property
+of a FeatureDef, which is a property of a category — the same slug can be
+public in one branch and hidden in another — so no fleet-wide slug→visibility
+map exists, and one could not be right if it did. What closes the case is the
+writer: after
+
+```
+python manage.py search_rebuild --type <doc_type>
+```
+
+there is no term and no number for a hidden slug in any document, so the
+filter matches nothing whatever category it was aimed at.
+
 ---
 
 ## Ranking, promotion and disclosure

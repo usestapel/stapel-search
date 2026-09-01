@@ -441,6 +441,13 @@
             },
             "description": "Plan slugs dropped at MAX_FACET_FIELDS — reported, not vanished."
           },
+          "dropped_filters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`f.<slug>`/`r.<slug>` filters this answer did NOT apply, because the category marks the slug non-public (`FeatureDef.visibility` is `owner` or `staff`). A hidden value is not indexed and is not filterable: letting `?f.vin=<value>` through would make the index an exact-match oracle over an identifier. The answer is wider than what was asked for, and says so here rather than silently."
+          },
           "core_ranges": {
             "type": "array",
             "items": {
@@ -454,6 +461,7 @@
           "candidates",
           "core_ranges",
           "counted",
+          "dropped_filters",
           "skipped"
         ]
       },

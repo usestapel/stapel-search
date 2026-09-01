@@ -108,6 +108,24 @@ def _truncate(term: str) -> tuple[str, bool]:
     return term[:MAX_TERM_CHARS], True
 
 
+def _indexable(dao: Any) -> bool:
+    """Whether a stored DAO may be written into a public index.
+
+    ``stapel_attributes.visibility.is_public`` with the one thing an indexer
+    owes on top of it: a stamp this library has never heard of is NOT public.
+    ``normalize_visibility`` raises ``UnknownVisibility`` on a typo — the right
+    answer for a writer, which can refuse — and the right answer here is to
+    treat it as hidden, because the alternative to "index nothing" is
+    "index a VIN because somebody wrote ``private``".
+    """
+    from stapel_attributes.visibility import UnknownVisibility, is_public
+
+    try:
+        return is_public(dao)
+    except UnknownVisibility:
+        return False
+
+
 def build_facets(doc: SearchDocumentInput) -> tuple[dict, list[str], dict, int]:
     """``(facets, facet_terms, numbers, truncated)`` from the source DAOs.
 
@@ -117,6 +135,24 @@ def build_facets(doc: SearchDocumentInput) -> tuple[dict, list[str], dict, int]:
     and cannot tell a range from a term (spec §5.3). ``features_search``
     remains a declared fallback for a host that will not hand over DAOs —
     lossy, and the loss is reported in ``degraded[]`` rather than absorbed.
+
+    **A value the document says is hidden is not indexed at all** — no
+    ``facets`` entry, no ``facet_terms`` term, no ``SearchNumber`` row. Every
+    one of the three is an exact-value oracle on its own: ``f.vin=<value>``
+    matched a synthesized ``"vin=<value>"`` term, ``r.mileage=X..X`` answered
+    off the numbers table, and ``facets=vin`` re-enumerated the values with
+    counts. A value the catalogue marked ``owner``/``staff`` must produce
+    none of them, and the cheapest place to guarantee that is here, once,
+    rather than in three read paths that each have to remember.
+
+    Two channels say a slug is hidden, and both are obeyed:
+
+    - the DAO's own ``visibility`` stamp (stapel-attributes 0.8) — the
+      authority, because it travels WITH the value and needs no schema lookup
+      at index time;
+    - ``doc.hidden_features`` — the producer's explicit denylist, which is the
+      only channel ``features_search`` has, since that projection carries
+      values and nothing else.
     """
     from .conf import search_settings
 
@@ -125,10 +161,21 @@ def build_facets(doc: SearchDocumentInput) -> tuple[dict, list[str], dict, int]:
     numbers: dict[str, Decimal] = {}
     truncated = 0
 
+    hidden = {str(slug) for slug in (doc.hidden_features or ())}
     features = dict(doc.features or {})
     if not features and doc.features_search and search_settings.ACCEPT_FEATURES_SEARCH:
-        # The lossy path: values only, no type, so everything is a term.
+        # The lossy path: values only, no type, so everything is a term — and
+        # no stamp, so `is_public` has nothing to read. `hidden_features` is
+        # the whole defence here, which is why it exists on the input rather
+        # than being derived: a producer that hands over this projection is
+        # already telling us it will not hand over DAOs, and asking the
+        # category schema per document would put a comm call (that fails OPEN
+        # when the provider is down) in the write path. A producer that
+        # declares nothing is caught at read time instead — `facet_plan`
+        # refuses to plan or count the slug and `search()` drops its filter.
         for slug, values in doc.features_search.items():
+            if slug in hidden:
+                continue
             listed = [v for v in (values or []) if v not in (None, "")]
             if not listed:
                 continue
@@ -141,6 +188,8 @@ def build_facets(doc: SearchDocumentInput) -> tuple[dict, list[str], dict, int]:
 
     for slug, dao in features.items():
         if not isinstance(dao, dict):
+            continue
+        if slug in hidden or not _indexable(dao):
             continue
         mapping = get_facet_mapping(dao.get("type") or "")
         if mapping.kind == "skip":
@@ -796,6 +845,58 @@ def _degradations(capabilities, q, facet_result, path_degraded: str, exact_total
     return tuple(dict.fromkeys(degraded))
 
 
+def _drop_hidden_filters(q, plan) -> tuple[Any, tuple[str, ...]]:
+    """Strip ``f.<slug>``/``r.<slug>`` filters on slugs the category hides.
+
+    The belt to :func:`build_facets`' braces. The writer is the real fix — a
+    hidden value never enters the index, so there is nothing to match — but
+    every document indexed BEFORE that fix still carries its terms and its
+    ``SearchNumber`` rows, and an exact-match filter over them is a working
+    oracle: ``?f.vin=<value>`` answering one hit confirms which listing is
+    that car. The read path therefore refuses the filter as well, and keeps
+    refusing it for documents nobody has reindexed yet.
+
+    Dropped, not 400'd: the slug is a legitimate attribute the caller may well
+    have got from an older panel, and a refusal teaches a frontend to retry.
+    Dropped loudly, though — the slugs come back in
+    ``facet_meta.dropped_filters``, because a filter the server silently
+    ignored is the most expensive kind of wrong answer (``query`` module
+    docstring), and here it is also the WIDER one: the answer without the
+    filter is a superset, never a leak.
+
+    **Cross-category queries.** With no ``category`` there is no plan, so
+    ``plan.hidden`` is empty and nothing is dropped. That is accepted rather
+    than papered over: visibility is a property of a FeatureDef, which is a
+    property of a CATEGORY — the same slug can be public in one branch and
+    hidden in another — so a fleet-wide slug→visibility map does not exist
+    and could not be right if it did. What closes the case is the writer:
+    after ``python manage.py search_rebuild --type <doc_type>`` there is no
+    term and no number for a hidden slug in any document, so the filter
+    matches nothing regardless of which category it was aimed at. Until that
+    rebuild runs, a cross-category query is the one hole, and it is named
+    here rather than hidden in a passing test.
+    """
+    from dataclasses import replace
+
+    hidden = set(plan.hidden)
+    if not hidden:
+        return q, ()
+    dropped = sorted(
+        {slug for slug in q.facets if slug in hidden}
+        | {r.slug for r in q.ranges if r.slug in hidden}
+    )
+    if not dropped:
+        return q, ()
+    return (
+        replace(
+            q,
+            facets={s: v for s, v in q.facets.items() if s not in hidden},
+            ranges=tuple(r for r in q.ranges if r.slug not in hidden),
+        ),
+        tuple(dropped),
+    )
+
+
 def search(params, *, accept_language: str = "") -> dict:
     """Run one query and shape the answer. The module's whole read path."""
     from .backends import get_backend
@@ -815,6 +916,15 @@ def search(params, *, accept_language: str = "") -> dict:
     q = parse_query(params, accept_language=accept_language)
     backend = get_backend()
 
+    # The plan is built BEFORE the engine sees the query, because it is what
+    # says which slugs are not filterable: a hidden slug's filter has to be
+    # gone by the time an engine could answer with it.
+    requested = parse_facet_selection(params)
+    plan = facet_plan(
+        q.category_path[-1] if q.category_path else None, requested=requested
+    )
+    q, dropped_filters = _drop_hidden_filters(q, plan)
+
     try:
         capabilities = backend.capabilities()
         result = backend.query(q)
@@ -822,10 +932,6 @@ def search(params, *, accept_language: str = "") -> dict:
         logger.exception("search backend %s failed", getattr(backend, "name", "?"))
         raise SearchBackendUnavailable(str(exc)) from exc
 
-    requested = parse_facet_selection(params)
-    plan = facet_plan(
-        q.category_path[-1] if q.category_path else None, requested=requested
-    )
     facet_result = None
     if plan.slugs and capabilities.facet_counts:
         facet_result = backend.facets(q, plan)
@@ -896,6 +1002,11 @@ def search(params, *, accept_language: str = "") -> dict:
             "candidates": facet_result.candidates if facet_result else 0,
             "counted": list(plan.slugs) if facet_result else [],
             "skipped": list(plan.skipped),
+            # Filters the caller sent that this answer did NOT apply, because
+            # the category marks the slug non-public. Never silent: the answer
+            # is wider than what was asked for, and a panel that cannot see
+            # that renders a confident wrong narrowing.
+            "dropped_filters": list(dropped_filters),
             "core_ranges": list(plan.core_ranges),
         },
         "next_anchor": next_anchor,

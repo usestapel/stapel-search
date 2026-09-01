@@ -51,6 +51,29 @@ class SearchDocumentInput:
     #: ``{slug: [values]}`` — the source's lossy projection, used only when a
     #: mapper hands over no DAOs and ``ACCEPT_FEATURES_SEARCH`` is on.
     features_search: dict[str, list] = field(default_factory=dict)
+    # stapel: index-waived hidden_features — a DENYLIST the indexer obeys, never
+    # a value it writes. Indexing it is precisely what this field exists to
+    # prevent.
+    #: Slugs whose values must not be indexed at all, declared by the producer.
+    #:
+    #: A DAO carries its own ``visibility`` stamp (stapel-attributes 0.8), so
+    #: the ``features`` path needs no declaration: :func:`is_public` reads the
+    #: value in hand. ``features_search`` cannot — it is ``{slug: [values]}``,
+    #: values only, with no stamp and no type — so a producer that hands over
+    #: that projection instead of DAOs has no way to say "this one is a VIN"
+    #: unless a channel exists. This is that channel, and it is the
+    #: ``categories.path`` canon applied again (``facets.py`` module
+    #: docstring): name the field the owner does not serve yet, obey it the
+    #: moment they do.
+    #:
+    #: It is a belt on the DAO path too — an explicit denylist wins over a
+    #: missing stamp — and it is optional and empty by default, so an existing
+    #: producer indexes exactly what it indexed before. A producer that
+    #: populates NEITHER this nor a stamped DAO cannot be defended at write
+    #: time by anything in this module; what defends it is the read path,
+    #: which reads visibility from ``categories.features`` (``facet_plan``'s
+    #: ``hidden``) and refuses to plan, count or filter on the slug.
+    hidden_features: tuple[str, ...] = ()
     price_base: Decimal | None = None
     # stapel: index-waived price — the display price rides to the card, which is
     # what a result row shows; sorting and range filters use price_base, the one
@@ -346,6 +369,14 @@ class FacetPlan:
     #: Slugs dropped because MAX_FACET_FIELDS was reached — reported, never
     #: silently vanished.
     skipped: tuple[str, ...] = ()
+    #: Slugs the category declares non-public (``FeatureDef.visibility`` is
+    #: ``owner`` or ``staff``). A HARD exclusion: not counted, not re-admitted
+    #: by an explicit ``facets=<slug>``, and their ``f.``/``r.`` filters are
+    #: dropped from the query before it reaches an engine. Carried on the plan
+    #: rather than kept private to ``facet_plan`` because the read path needs
+    #: the same list — a facet nobody may enumerate is a facet nobody may use
+    #: as an exact-match oracle either.
+    hidden: tuple[str, ...] = ()
     revision: Any = None
     #: ``{slug: {value: caption}}`` for slugs whose options are inline in the
     #: category config. The captions were always there — the plan reads the

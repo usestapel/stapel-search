@@ -4,6 +4,92 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-09-02
+
+### Security — an identifier was indexed, countable and exactly queryable
+
+Some catalogue attributes do not describe an object, they *identify* one: a
+VIN, an IMEI, a serial, a registry number. They are legitimate fields —
+mandatory, validated, moderated — and knowing one lets a stranger act as the
+owner of that specific unit. Until this release the indexer was FeatureDef-
+blind and the read path was unvalidated, so a VIN was written into all three
+index shapes and every one of them answered a question nobody should be able
+to ask:
+
+- **`?f.vin=<value>` was a working exact-match oracle.** `build_facets`
+  synthesized a `"vin=<value>"` term for every slug it saw, `parse_query`
+  turned any `f.<slug>` into a facet filter with no check against the plan or
+  the schema, and the match is exact equality. One hit confirms which listing
+  is that car.
+- **`?r.<slug>=a..b` was the same oracle for numerics.** A numeric mapping
+  wrote a `SearchNumber` row, and a range filter is an indexed semi-join on
+  it: twenty queries bisect the exact mileage or the exact serial.
+- **`?facets=vin` re-enumerated the values.** A slug ranked past
+  `MAX_FACET_FIELDS` could be re-admitted by naming it explicitly, and it came
+  back as a value list with counts.
+
+`FeatureDef.visibility` (stapel-attributes **0.8**) is the one place that
+decision is now recorded — `public` by default, so nothing that existed before
+the axis changed — and this release makes it three refusals, because each of
+the three shapes leaks on its own.
+
+**The writer is the fix.** `services.build_facets` skips a DAO whose own
+`visibility` stamp says it is not public — `stapel_attributes.visibility.
+is_public`, fail-closed on a stamp this library does not recognise, because
+the alternative to "index nothing" is "index a VIN because somebody wrote
+`private`". Nothing is written for it: no `facets` entry, no `facet_terms`
+term, no `SearchNumber` row. The stamp travels WITH the value, so the indexer
+needs no schema lookup — which matters, because a comm call in the write path
+fails *open* when the provider is down.
+
+`SearchDocumentInput.hidden_features` is new, optional and empty by default:
+the producer's explicit denylist. It is the only channel the `features_search`
+fallback has, because that projection is `{slug: [values]}` — values only, no
+stamp, no type — and it is obeyed on the DAO path too, so an explicit denylist
+beats a missing stamp. An existing mapper indexes exactly what it indexed
+before.
+
+**The plan is the second refusal.** `facet_plan` puts a non-public feature in
+the HARD `excluded` set, beside `facet: false`: not counted, and an explicit
+`?facets=<slug>` does not re-admit it the way a budget-`skipped` slug can. The
+set is reported as `FacetPlan.hidden`. Visibility is read defensively off the
+FeatureDef and then off its config, the `categories.path` canon again —
+stapel-categories does not serve the field yet, and `public` is what a
+category that says nothing reads as.
+
+**The reader is the belt.** `services.search()` drops `f.<slug>` / `r.<slug>`
+filters on a slug the category hides, before the query reaches an engine, and
+reports them in the new `facet_meta.dropped_filters` — dropped, never
+silently ignored. The answer is then a superset of what was asked for, which
+is the property that makes it not an oracle: it discriminates nothing. A
+cross-category query (no `category`) has no plan and drops nothing; that is
+named in the code rather than papered over, because visibility is a property
+of a FeatureDef, which is a property of a CATEGORY — the same slug can be
+public in one branch and hidden in another — so no fleet-wide
+slug→visibility map exists and one could not be right if it did.
+
+### Existing documents stay leaky until they are reindexed
+
+This release stops the indexer from WRITING a hidden value. It does not
+retroactively remove the terms and numbers already in the index, and the read
+path's belt only covers a query that names a category. Every stand carrying
+documents indexed before 0.9.0 must run:
+
+```
+python manage.py search_rebuild --type <doc_type>
+```
+
+Pair it with the projection side: a value stored before its definition became
+non-public still carries no stamp, so `listings_reproject_features` (stapel-
+listings) has to re-stamp the values before a rebuild can see them.
+
+### Changed
+
+- Floor raised to `stapel-attributes>=0.8,<0.9` — `stapel_attributes.
+  visibility` is imported by the indexer and by the facet plan.
+- `facet_meta.dropped_filters` is a new response field (`schema.json`
+  regenerated). Additive: a client that ignores it reads the answer as before.
+
 ## [0.8.1] — 2026-09-02
 
 Patch. `__version__` said `0.7.0` in the 0.8.0 artifact: the version lives in
