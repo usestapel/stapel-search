@@ -1,7 +1,7 @@
 """The SERP axes a listing has without owning an attribute for them.
 
-Three defects found on a live classified stand (e2e, 2026-08-31) and
-the mechanisms that close them:
+Three defects found on a client fleet's live classified stand (an end-to-end
+run of 2026-08-31) and the mechanisms that close them:
 
 - **C3** ``r.price=10000..30000`` answered ``count: 0`` for every corpus.
   A range filter resolved only against the ``SearchNumber`` side table,
