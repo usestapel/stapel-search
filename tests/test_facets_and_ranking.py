@@ -90,6 +90,142 @@ def ref_category_schema():
     function_registry._schemas.pop("categories.features", None)
 
 
+@pytest.fixture
+def wide_import_schema():
+    """A 59-feature leaf, shaped like the widest one an import produces.
+
+    Not invented: this is the live shape of an imported cars leaf, measured
+    2026-09-01 — two vocabulary-backed identity fields flagged into the
+    title, a vocabulary CHAIN below them that is flagged nothing at all, a
+    handful of mandatory vocabulary fields, one mandatory inline `select`,
+    one badge, a mandatory `int` body number, four free-text discount
+    blurbs and nine `int` dealer promotions. 59 features against a budget of
+    12, which is what makes the ORDER the whole product.
+    """
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    def ref(slug, level, **flags):
+        return {
+            "id": 0, "slug": slug, "name": slug, "translate": "none",
+            "mandatory": False, "show_at_title": False, "show_as_badge": False,
+            **flags,
+            "config": {
+                "type": "ref_select",
+                "optionsRef": {"vocabulary": "autocatalog", "level": level},
+                "minSelected": 0, "maxSelected": 1,
+            },
+        }
+
+    def plain(slug, type_slug, **flags):
+        config = {"type": type_slug}
+        if type_slug == "select":
+            config["options"] = [{"value": "a", "label": "a"}, {"value": "b", "label": "b"}]
+        return {
+            "id": 0, "slug": slug, "name": slug, "translate": "none",
+            "mandatory": False, "show_at_title": False, "show_as_badge": False,
+            **flags, "config": config,
+        }
+
+    features = [
+        ref("make", "Make", mandatory=True, show_at_title=True),
+        ref("model", "Model", mandatory=True, show_at_title=True),
+        plain("generation_id", "string"),
+        ref("generation", "Generation"),
+        plain("modification_id", "string"),
+        ref("modification", "Modification"),
+        plain("complectation_id", "string"),
+        ref("complectation", "Complectation"),
+        ref("fuel_type", "FuelType", mandatory=True),
+        ref("transmission", "Transmission", mandatory=True),
+        ref("engine_size", "EngineSize"),
+        plain("year", "int", mandatory=True),
+        ref("doors", "Doors", mandatory=True),
+        ref("body_type", "BodyType", mandatory=True),
+        ref("drive_type", "DriveType", mandatory=True),
+        ref("power", "Power"),
+        plain("wheel_side", "select", mandatory=True),
+        *[plain(f"{name}_discount", "string")
+          for name in ("tradein", "credit", "insurance", "max")],
+        plain("availability", "select", mandatory=True, show_as_badge=True),
+        plain("colour", "select", mandatory=True, show_at_title=True),
+        plain("video_url", "string"),
+        plain("video_file_url", "string"),
+        # The comfort block: 22 optional inline selects, authored here.
+        *[plain(f"comfort_{index}", "select") for index in range(22)],
+        plain("body_number", "int", mandatory=True),
+        plain("plate", "string"),
+        plain("registered_locally", "select"),
+        # The dealer's promotions: nine numeric flags the feed carries.
+        *[plain(f"offer_{index}", "int") for index in range(9)],
+    ]
+    assert len(features) == 59, len(features)
+
+    def provider(payload):
+        return {"category_id": payload["category_id"], "revision": 1, "features": features}
+
+    register_function("categories.features", provider)
+    yield features
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+def test_a_choice_outranks_a_measurement_in_a_59_feature_category(wide_import_schema):
+    """The live defect: the body number was counted, the make was not offered.
+
+    Measured on the stand 2026-09-01. The 12 slots went to the author's
+    flags alone, so a mandatory `int` (the body number) took the last one
+    and the vocabulary chain — generation, modification, complectation,
+    engine size, power — fell past the cap. The SERP then offered a car
+    buyer the body number and nine dealer promotions to filter by, and not
+    the make.
+    """
+    from stapel_search.facets import facet_plan
+
+    plan = facet_plan("7")
+
+    assert plan.slugs == (
+        # flagged into the title, in authored order
+        "make", "model", "colour",
+        # then the vocabulary chain, in authored order
+        "generation", "modification", "complectation", "fuel_type",
+        "transmission", "engine_size", "doors", "body_type", "drive_type",
+    )
+    assert len(plan.slugs) == 12
+
+
+def test_a_free_text_and_a_numeric_slug_never_outrank_a_choice(wide_import_schema):
+    """A `string` is a term axis with no option set — a list, not a choice.
+
+    `body_number` is mandatory and `plate` is free text; both used to sort
+    above an unflagged vocabulary field. Numbers lose nothing by the demotion:
+    a range axis is drawn from the category schema and from `core_ranges`,
+    neither of which this budget caps.
+    """
+    from stapel_search.facets import facet_plan
+
+    plan = facet_plan("7")
+
+    for slug in ("body_number", "plate", "year", "tradein_discount"):
+        assert slug not in plan.slugs
+        assert slug in plan.skipped
+    for slug in plan.skipped[:9]:
+        assert slug in ("power", "wheel_side", "availability") or slug.startswith(
+            "comfort_"
+        ), slug
+    assert "price" in facet_plan("7").core_ranges
+
+
+def test_the_budget_still_spends_on_choices_before_promotions(wide_import_schema):
+    """Nine `offer_*` flags are the feed's, not a buyer's, and they sort last."""
+    from stapel_search.facets import facet_plan
+
+    plan = facet_plan("7")
+    offers = [slug for slug in plan.skipped if slug.startswith("offer_")]
+    assert len(offers) == 9
+    assert plan.skipped[-9:] == tuple(offers), "the feed's flags are the last thing counted"
+
+
 def test_the_plan_comes_from_the_category_schema(category_schema):
     from stapel_search.facets import facet_plan
 

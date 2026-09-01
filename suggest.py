@@ -77,6 +77,19 @@ logger = logging.getLogger(__name__)
 #: Cache key prefix for the per-doc_type category count map.
 _COUNT_CACHE_PREFIX = "stapel_search:catcount:"
 
+#: How a category name matched the query, best first — the vocabulary
+#: ``categories.suggest`` reports in each row's ``match``. Its ORDER is the
+#: ranking key below; an unknown value sorts last, so a provider that grows a
+#: fifth kind degrades to "worst" rather than crashing a dropdown.
+MATCH_QUALITY: tuple[str, ...] = ("exact", "prefix", "word", "substring")
+
+
+def _match_rank(match: Any) -> int:
+    try:
+        return MATCH_QUALITY.index(str(match))
+    except ValueError:
+        return len(MATCH_QUALITY)
+
 
 def counts_cache_key(doc_type: str) -> str:
     return f"{_COUNT_CACHE_PREFIX}{doc_type}"
@@ -171,14 +184,33 @@ def suggest_categories(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Ranked category suggestions for *q*, plus any degradations.
 
-    Ranking is **live listing count descending, then depth ascending, then
-    name** — and the order of those three is the product decision. Count
-    first because a dropdown is a prediction of what the buyer will find,
-    and a path with two listings above a path with two hundred is a
-    prediction that is wrong on the only axis the buyer cares about. Depth
-    second because among equals the broader place is the safer landing.
-    Name last so the answer is stable rather than incidentally ordered by
-    whatever the tree read happened to return.
+    Ranking is **stocked before empty, then match quality, then live listing
+    count descending, then depth ascending, then name**, and every one of
+    those five is load-bearing on a real catalogue.
+
+    *Stocked before empty* keeps 0.7.0's product decision where it was right:
+    a dropdown is a prediction of what the buyer will find, and a place with
+    listings belongs above a place without. What it is NOT is a filter. A
+    3036-leaf catalogue with 100 listings in it is 2924 empty leaves, and
+    dropping them left «шорты» and «квартира» with no panel at all — a
+    catalogue you cannot navigate because almost none of it is stocked yet.
+    An empty row is offered, and it says «0» rather than pretending.
+
+    *Match quality* second, and this is the fix 0.7.0 did not have: it sorted
+    an all-zero result set by depth and then by NAME, so «Личные вещи ›
+    Мужская одежда › **Шорты**» — the node the buyer typed, letter for
+    letter — came third behind two «Брюки и шорты», because Б precedes Ш.
+    ``categories.suggest`` grades every hit ``exact`` / ``prefix`` / ``word``
+    / ``substring`` (stapel-categories 0.10) and the grade is the only signal
+    that survives an empty corpus. It is also what keeps a transliterated
+    fragment in its place: «iphone» normalizes to «ифон», which is a
+    mid-word substring of «Сифоны» and nothing else on the board — a plumbing
+    trap that must never outrank a word-boundary hit.
+
+    Count, then depth, then name break what remains, in that order: among
+    equally-well-matched places the busier one is the better prediction, the
+    broader one is the safer landing, and the name makes the answer stable
+    rather than incidentally ordered by whatever the tree read returned.
     """
     from stapel_core.comm import call
     from stapel_core.comm.exceptions import CommError
@@ -240,11 +272,20 @@ def suggest_categories(
             }
         )
 
-    rows.sort(key=lambda row: (-row["count"], row["depth"], row["name"]))
+    rows.sort(
+        key=lambda row: (
+            0 if row["count"] > 0 else 1,
+            _match_rank(row["match"]),
+            -row["count"],
+            row["depth"],
+            row["name"],
+        )
+    )
     return rows[:limit], degraded
 
 
 __all__ = [
+    "MATCH_QUALITY",
     "category_counts",
     "counts_cache_key",
     "invalidate_counts",

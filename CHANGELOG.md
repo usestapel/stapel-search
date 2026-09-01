@@ -4,6 +4,66 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-09-02
+
+### Fixed — the two rankings that decided what a buyer never saw
+
+Both defects were measured on a live board at full catalogue scale (3583
+categories, 3036 leaves, ~100 listings) and both were RANKING, not matching:
+the right answer was computed, ranked below something worse, and cut.
+
+**1. `/suggest` ranked an empty catalogue by name.** 0.7.0 sorted by live
+count, then depth, then name. On a board where almost every leaf is still
+empty every count is `0`, so the tie-break was the NAME — and «Мужская
+одежда › Шорты», the node the buyer typed letter for letter, came THIRD
+behind two «Брюки и шорты», because Б precedes Ш. A transliterated fragment
+made it worse: «iphone» normalizes to «ифон», which is a mid-word substring
+of «Сифоны» and of nothing else on the board, so a plumbing trap was the
+single suggestion offered.
+
+The order is now **stocked before empty, then match quality, then count,
+then depth, then name**:
+
+- stocked first keeps 0.7.0's product decision where it was right — a
+  dropdown is a prediction of what the buyer will find;
+- match quality is the new key and the only evidence that survives an empty
+  corpus. `categories.suggest` grades every hit `exact` / `prefix` / `word` /
+  `substring` (stapel-categories **0.10**), and the grade is what puts a
+  word-boundary hit above one buried inside a word.
+
+`MATCH_QUALITY` is exported and states the order once. An unknown grade
+sorts last rather than raising, so a provider that grows a fifth kind
+degrades instead of breaking a dropdown.
+
+**Pairing:** deploy with stapel-categories >= 0.10. Against an older
+provider every hit still arrives as `prefix` or `substring` and the ranking
+still runs — it just cannot tell an exact name from a prefix, or a
+word-boundary hit from a mid-word one.
+
+**2. The facet plan spent its last budget slot on a body number.** On an
+imported cars leaf — 59 features against `MAX_FACET_FIELDS` of 12 — 0.7.0
+ranked on the author's flags alone (`show_at_title`, `show_as_badge`,
+`mandatory`). `vin`, a mandatory `int`, took a slot; the vocabulary chain
+(generation, modification, complectation, engine size, power) fell past the
+cap. The SERP then offered a car buyer the body number and nine dealer
+promotions to filter by, and not the make.
+
+`_facet_rank` now sorts on TWO keys. First the band: a feature with a
+bounded option set — inline `options`, or an `optionsRef` into a vocabulary
+— outranks one without, always. That is not a slug list; it is the
+difference between an axis a panel can draw as a list of choices and one it
+cannot, and numbers lose nothing by it, because a range axis is drawn from
+the category schema and from `core_ranges`, neither of which this budget
+caps. Then the author's own flags, with one insertion: a vocabulary-backed
+field ranks directly under `show_at_title`, because a catalogue's identity
+chain is made of vocabulary values and a hand-written five-option `select`
+is not.
+
+Measured against the same 59-feature shape, the plan is now make, model,
+colour, generation, modification, complectation, fuel type, transmission,
+engine size, doors, body type, drive type — and the body number, the plate
+and the nine promotions are the last things counted.
+
 ## [0.7.0] — 2026-08-31
 
 ### Added — the type-ahead offers CATEGORIES, with the SERP's own counts

@@ -144,6 +144,103 @@ def test_ranking_is_by_live_count_not_by_the_provider_order(api_client, shorts, 
     assert body["categories"][0]["slug"] == MENS["slug"]
 
 
+def test_an_empty_category_is_offered_and_says_so(api_client, conformance, provider):
+    """A catalogue nobody has stocked yet is still a catalogue you can walk.
+
+    Live measurement, 2026-09-01: 3036 leaves, 100 listings, so 2924 leaves
+    read zero. Hiding them left «шорты», «квартира» and «камри» with no
+    suggestion panel at all — the type-ahead answering "that does not exist"
+    about six categories that do. Empty rows sort BELOW stocked ones and
+    carry an honest 0; they are not dropped.
+    """
+    from stapel_search.services import index_documents
+
+    index_documents(
+        DOC_TYPE,
+        [_document(doc_key="w1", title="Шорты женские", category_path=("46", "47", "102"))],
+    )
+    provider.answers_with(MENS, WOMENS, KIDS)
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "шорты", "lang": "ru"}).json()
+
+    assert [row["count"] for row in body["categories"]] == [1, 0, 0]
+    assert {row["slug"] for row in body["categories"]} == {
+        MENS["slug"],
+        WOMENS["slug"],
+        KIDS["slug"],
+    }
+    assert body["categories"][0]["slug"] == WOMENS["slug"]
+
+
+def test_an_all_empty_catalogue_is_ranked_by_match_quality(
+    api_client, conformance, provider
+):
+    """The defect this closes, exactly as it was measured on the stand.
+
+    «шорты» answered six rows, every count 0, and the node the buyer typed —
+    «Личные вещи › Одежда, обувь, аксессуары › Мужская одежда › **Шорты**» —
+    came THIRD, behind two «Брюки и шорты», because the tie-break after count
+    was depth and then the NAME, and Б precedes Ш. With no stock anywhere,
+    the grade `categories.suggest` puts on each hit is the only evidence left.
+    """
+    exact = {**MENS, "match": "exact"}
+    word = {
+        "id": 201,
+        "slug": "dlya-devochek-bryuki-i-shorty",
+        "name": "Брюки и шорты",
+        "path": ["Личные вещи", "Для девочек", "Брюки и шорты"],
+        "path_ids": ["70", "71", "201"],
+        "depth": 3,
+        "match": "word",
+    }
+    buried = {
+        "id": 202,
+        "slug": "sifony",
+        "name": "Сифоны",
+        "path": ["Для дома", "Трубы и фитинги", "Сифоны"],
+        "path_ids": ["80", "81", "202"],
+        "depth": 3,
+        "match": "substring",
+    }
+    provider.answers_with(buried, word, exact)
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "шорты", "lang": "ru"}).json()
+
+    assert [row["match"] for row in body["categories"]] == [
+        "exact",
+        "word",
+        "substring",
+    ]
+    assert body["categories"][0]["slug"] == MENS["slug"]
+    assert [row["count"] for row in body["categories"]] == [0, 0, 0]
+
+
+def test_stock_outranks_match_quality(api_client, shorts, provider):
+    """The dropdown is still a prediction first: a stocked word-hit leads."""
+    provider.answers_with(
+        {**MENS, "match": "word"},
+        {**CLOTHES, "match": "exact", "path_ids": ["99"], "id": 99, "slug": "empty"},
+    )
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "одежда", "lang": "ru"}).json()
+
+    assert [(row["match"], row["count"]) for row in body["categories"]] == [
+        ("word", 3),
+        ("exact", 0),
+    ]
+
+
+def test_an_unknown_match_grade_sorts_last_and_does_not_crash(
+    api_client, conformance, provider
+):
+    """A provider that grows a fifth kind degrades to "worst", never to a 500."""
+    provider.answers_with({**MENS, "match": "fuzzy-ngram"}, {**KIDS, "match": "prefix"})
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "шорты", "lang": "ru"}).json()
+
+    assert [row["match"] for row in body["categories"]] == ["prefix", "fuzzy-ngram"]
+
+
 def test_a_tie_puts_the_broader_place_first(api_client, conformance, provider):
     """Count first, then depth: among equals the shallower page is the safer landing."""
     from stapel_search.services import index_documents

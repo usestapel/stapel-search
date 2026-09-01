@@ -248,7 +248,23 @@ def _feature_defs(category_id: Any) -> tuple[list[dict], Any]:
     return features, revision
 
 
-def _facet_rank(feature: dict) -> int:
+def _is_choice(config: dict, mapping: Any) -> bool:
+    """Does this feature offer a BOUNDED set of values to choose from?
+
+    Two things have to hold, and the second is the one a type alone cannot
+    tell you: the axis has to be discrete (``term``/``path`` — a number is
+    narrowed with two bounds, not with a checkbox per value), and it has to
+    have an option set — inline ``options``, or an ``optionsRef`` pointing at
+    a vocabulary level. A ``string`` is a term axis with neither, and it
+    enumerates as many values as there are documents: on the live cars leaf
+    those are ``grn`` (a plate number) and four discount blurbs.
+    """
+    if getattr(mapping, "kind", "") not in ("term", "path"):
+        return False
+    return bool(config.get("options") or config.get("optionsRef"))
+
+
+def _facet_rank(feature: dict, config: dict, mapping: Any) -> tuple[int, int]:
     """How much of the facet budget this feature has earned, lower first.
 
     The budget is ``MAX_FACET_FIELDS`` and a wide imported category spends
@@ -260,9 +276,29 @@ def _facet_rank(feature: dict) -> int:
 
     So rank by what the category itself already says about each feature,
     rather than by a list of slugs kept in this module (which would be a
-    search library holding opinions about phones):
+    search library holding opinions about phones). Two keys, and the first
+    one is 0.8.0's fix.
+
+    **The BAND: a choice outranks a measurement, always.** 0.7.0 ranked on
+    the author's flags alone, and on the imported cars leaf — 59 features —
+    that spent the last budget slot on ``vin``, a mandatory ``int``, while
+    the vocabulary chain «Поколение → Модификация → Комплектация» and
+    «Мощность» fell past the cap. A buyer was offered the body number and
+    nine dealer promotions to filter a car by, and not the make. The band is
+    not a slug list: it asks whether the feature has a bounded option set at
+    all (:func:`_is_choice`), which is exactly the difference between an
+    axis a panel can draw as a list of choices and one it cannot. Numbers
+    lose nothing by it — a range axis is drawn from the category schema and
+    from ``core_ranges``, neither of which is capped by this budget — so a
+    numeric slug in the plan buys a bucket-per-distinct-number and costs an
+    axis somebody could actually click.
+
+    **Then the author's own flags**, unchanged except for one insertion:
 
     - ``show_at_title`` — the author put it in the listing's own title;
+    - an ``optionsRef`` — the value comes from a VOCABULARY, which is what a
+      catalogue's identity chain is made of (make, model, generation) and
+      what a hand-written ``select`` of five options is not;
     - ``show_as_badge`` — the author put it on the card;
     - ``mandatory`` — every listing in the category has it, so its buckets
       partition the corpus instead of describing a fraction of it.
@@ -270,13 +306,16 @@ def _facet_rank(feature: dict) -> int:
     Ties keep the authored order, so the ranking never reshuffles a panel
     whose features are all flagged the same.
     """
+    band = 0 if _is_choice(config, mapping) else 1
     if feature.get("show_at_title"):
-        return 0
+        return (band, 0)
+    if band == 0 and config.get("optionsRef"):
+        return (band, 1)
     if feature.get("show_as_badge"):
-        return 1
+        return (band, 2)
     if feature.get("mandatory"):
-        return 2
-    return 3
+        return (band, 3)
+    return (band, 4)
 
 
 def _is_facetable(feature: dict, config: dict) -> bool:
@@ -321,7 +360,7 @@ def facet_plan(
     labels: dict[str, dict[str, str]] = {}
     translatable: dict[str, bool] = {}
     vocabulary_refs: dict[str, tuple[str, str]] = {}
-    ranked: list[tuple[int, int, str]] = []
+    ranked: list[tuple[tuple[int, int], int, str]] = []
     ordered: list[str] = []
     #: Slugs the category declares with a `skip` kind (`header`, `group`).
     #: Kept so an explicit `facets=` list cannot re-admit them below — a slug
@@ -340,7 +379,7 @@ def facet_plan(
             excluded.add(slug)
             continue
         kinds[slug] = mapping.kind
-        ranked.append((_facet_rank(feature), position, slug))
+        ranked.append((_facet_rank(feature, config, mapping), position, slug))
         if config.get("optionsRef"):
             # A vocabulary-backed field (ref_select, and any host type that
             # points at a vocabulary the same way) has no closed option set to
