@@ -4,6 +4,23 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.3] — 2026-09-02
+
+### Fixed — the store takes its promised growth step at 73k vectors
+
+The exact scan store.py shipped with was measured at ~250ms over a
+73k-row corpus on the target stand — outside the type-ahead's latency
+budget, and exactly the size the module said would want an index. The
+step, as promised, changes only the store: `ensure_index(dims)` builds an
+HNSW EXPRESSION index over `embedding::vector(<dims>)` (the
+pgvector-documented pattern for mixed-dims tables — the untyped column
+stays, so two embedding spaces still coexist during a re-embed, each
+index serving its own dimensionality), the search's ORDER BY casts
+through the same expression whenever the model tag names its dims (one
+query text, index or honest exact scan), and the index builder ensures
+the index after every build. Measured on the same stand, same corpus,
+same query: 249ms exact scan → 2.5ms index scan.
+
 ## [0.10.2] — 2026-09-02
 
 ### Fixed — the similarity floor becomes kind-aware

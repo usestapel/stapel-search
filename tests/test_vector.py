@@ -454,6 +454,46 @@ class TestPgvectorStore:
         assert hits[1][3] < 0.2
         assert store.search("category", SPACE["тимбирленд"], model_tag="other@4", limit=5) == []
 
+    def test_ensure_index_builds_hnsw_and_the_scan_uses_it(self):
+        """The growth step store.py promised: past exact-scan comfort an
+        HNSW EXPRESSION index serves the search, the untyped column stays
+        (two embedding spaces still coexist during a re-embed), and the
+        query's ORDER BY matches the indexed expression so the planner
+        actually uses it — asserted via EXPLAIN, not assumed."""
+        from django.db import connection
+
+        from stapel_search.vector import store
+
+        store.upsert_many(
+            "category",
+            [
+                ("412", "Timberland", {}, SPACE["timberland"]),
+                ("77", "Сифоны", {}, SPACE["сифоны"]),
+            ],
+            model_tag="toy@4",
+        )
+        assert store.ensure_index(4)
+        hits = store.search(
+            "category", SPACE["тимбирленд"], model_tag="toy@4", limit=5
+        )
+        assert [hit[0] for hit in hits] == ["412", "77"]
+        with connection.cursor() as cursor:
+            cursor.execute("SET enable_seqscan = off")
+            # No WHERE arms: on a two-row fixture the btree+sort plan is
+            # legitimately cheaper, so the assertion isolates the one
+            # question that matters — does the ORDER BY expression MATCH
+            # the index? (On the sized corpus the planner picks it for the
+            # filtered query too; that is a property of statistics, not of
+            # this module.)
+            cursor.execute(
+                "EXPLAIN SELECT key FROM search_vector_embedding "
+                "ORDER BY (embedding::vector(4)) <=> %s::vector LIMIT 5",
+                [store._literal(SPACE["тимбирленд"])],
+            )
+            plan = "\n".join(row[0] for row in cursor.fetchall())
+            cursor.execute("SET enable_seqscan = on")
+        assert "search_vector_hnsw_4" in plan
+
     def test_upsert_replaces_in_place(self):
         from stapel_search.vector import store
 

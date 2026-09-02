@@ -130,22 +130,36 @@ def upsert_many(kind: str, rows, *, model_tag: str) -> int:
     return written
 
 
+def _tag_dims(model_tag: str) -> int | None:
+    """The dimensionality a ``<model>@<dims>`` tag names, or ``None``."""
+    _, _, dims = model_tag.rpartition("@")
+    return int(dims) if dims.isdigit() else None
+
+
 def search(kind: str, query_vector, *, model_tag: str, limit: int):
-    """Exact cosine top-*limit* of *kind* rows in *model_tag*'s space.
+    """Cosine top-*limit* of *kind* rows in *model_tag*'s space.
 
     Returns ``[(key, text, payload, similarity)]``, best first. The floor
     is applied by the CALLER: it is a product decision about dropdowns,
     not a storage property.
+
+    The ORDER BY casts through ``vector(<dims>)`` when the tag names its
+    dimensionality — the exact expression :func:`ensure_index`'s HNSW
+    index is built over, so the planner uses the index when it exists and
+    falls back to the same exact scan when it does not. One query text,
+    both regimes.
     """
     from django.db import connection
 
+    dims = _tag_dims(model_tag)
+    order_expr = f"(embedding::vector({dims}))" if dims else "embedding"
     literal = _literal(query_vector)
     with connection.cursor() as cursor:
         cursor.execute(
             f"SELECT key, text, payload, 1 - (embedding <=> %s::vector) "
             f"FROM {TABLE} "
             "WHERE kind = %s AND model_tag = %s AND embedding IS NOT NULL "
-            "ORDER BY embedding <=> %s::vector ASC LIMIT %s",
+            f"ORDER BY {order_expr} <=> %s::vector ASC LIMIT %s",
             [literal, kind, model_tag, literal, int(limit)],
         )
         out = []
@@ -154,6 +168,29 @@ def search(kind: str, query_vector, *, model_tag: str, limit: int):
                 payload = json.loads(payload or "{}")
             out.append((key, text, payload or {}, float(similarity)))
         return out
+
+
+def ensure_index(dims: int) -> bool:
+    """An HNSW index over ``embedding::vector(dims)`` — the growth step.
+
+    An EXPRESSION index (the pgvector-documented pattern for mixed-dims
+    tables) rather than typing the column: the untyped column is what
+    lets two embedding spaces coexist during a re-embed, and each space
+    gets its own index by its own dimensionality. Idempotent; called by
+    the index builder after a build lands. Cosine ops, matching
+    :func:`search`'s operator.
+    """
+    from django.db import connection
+
+    if not available():
+        return False
+    name = f"search_vector_hnsw_{int(dims)}"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS {name} ON {TABLE} "
+            f"USING hnsw ((embedding::vector({int(dims)})) vector_cosine_ops)"
+        )
+    return True
 
 
 def prune(kind: str, *, model_tag: str, before) -> int:
@@ -182,6 +219,7 @@ def count(kind: str | None = None) -> int:
 __all__ = [
     "TABLE",
     "available",
+    "ensure_index",
     "count",
     "ensure_schema",
     "prune",

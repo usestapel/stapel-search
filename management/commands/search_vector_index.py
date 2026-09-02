@@ -112,3 +112,7 @@ class Command(BaseCommand):
                 f"{kind}: {written} embedded ({tag}), {pruned} pruned, "
                 f"{time.monotonic() - clock:.1f}s"
             )
+
+        dims = store._tag_dims(tag)
+        if dims and store.ensure_index(dims):
+            self.stdout.write(f"hnsw index ensured for {dims} dims")
