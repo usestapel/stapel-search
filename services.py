@@ -750,6 +750,45 @@ def reindex_stale(doc_type: str, *, limit: int = 500) -> IndexReport:
     return ingest(doc_type, keys)
 
 
+def reconcile(doc_type: str, *, batch_size: int = 500) -> IndexReport:
+    """Sweep every VISIBLE row against the source of truth; drop the ghosts.
+
+    The deterministic answer to a write that never became an event — a
+    queryset ``.update(status=...)``, a raw save on an emitter too old to
+    guard its own boundary, a lost delivery. Each visible row's key is
+    re-pulled through the same :func:`ingest` path a live signal uses, so the
+    pulled document's status decides (``visible_statuses``), and a key the
+    source no longer serves is removed — no second predicate, no special
+    cases.
+
+    Differs from :func:`rebuild` (which replays the source's whole snapshot —
+    heavier, and also *adds* missing documents) and from
+    :func:`reindex_stale` (the rolling beat catch-up over a bounded batch):
+    this one asks exactly one question — "is everything the index still
+    SHOWS actually there?" — which is the question a ghost card fails.
+
+    Keyset-paged by ``doc_key`` so tombstoning a row mid-sweep cannot shift
+    the cursor under the reader.
+    """
+    from .models import SearchDocument
+
+    report = IndexReport()
+    last_key = ""
+    while True:
+        keys = list(
+            SearchDocument.objects.filter(doc_type=doc_type, visible=True)
+            .filter(doc_key__gt=last_key)
+            .order_by("doc_key")
+            .values_list("doc_key", flat=True)[: max(1, int(batch_size))]
+        )
+        if not keys:
+            break
+        report = report.merge(ingest(doc_type, keys))
+        last_key = keys[-1]
+    logger.info("search reconcile %s: %s", doc_type, report)
+    return report
+
+
 def apply_settings(doc_type: str) -> None:
     """Push the engine-side schema and the dictionary halves it owns."""
     from .backends import get_backend

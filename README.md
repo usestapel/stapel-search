@@ -24,12 +24,12 @@ pip install stapel-search
 
 | Fact | Value |
 |---|---|
-| Version | `0.10.4` |
+| Version | `0.10.5` |
 | Python | `>=3.11` (3.11, 3.12, 3.13) |
 | Django | `djangorestframework>=3.14` |
 | HTTP operations | 5 |
 | Config axes | 8 |
-| Usage surface | 40 |
+| Usage surface | 41 |
 | Extension points | 6 |
 | Error codes | 54 |
 | Fleet dependencies | [`stapel-attributes`](https://github.com/usestapel/stapel-attributes) · [`stapel-categories`](https://github.com/usestapel/stapel-categories) (optional) · [`stapel-core`](https://github.com/usestapel/stapel-core) · [`stapel-geo`](https://github.com/usestapel/stapel-geo) · [`stapel-listings`](https://github.com/usestapel/stapel-listings) (optional) |

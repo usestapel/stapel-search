@@ -249,6 +249,13 @@
       "intent": "Re-pull the documents the source has moved on from. The safety net for a lost event; on a healthy deployment it should find nothing.",
       "instead_of": []
     },
+    "reconcile": {
+      "kind": "factory",
+      "intent": "Re-pull every VISIBLE row and tombstone the ones whose source document is gone or no longer publicly served. The sweep for writes that never became events (a queryset .update(status=...), a lost delivery) — the cure for ghost cards whose click answers 'no longer published'.",
+      "instead_of": [
+        "deleting SearchDocument rows by hand"
+      ]
+    },
     "apply_signal": {
       "kind": "factory",
       "intent": "Apply one boost/popularity/promotion signal with its audit row, idempotently. Writes columns disjoint from the source document, so re-indexing never undoes a promotion.",

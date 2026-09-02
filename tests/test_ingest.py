@@ -268,3 +268,65 @@ def test_features_search_fallback_is_lossy_but_declared():
     # The loss is real and visible: no type means no range, so nothing lands
     # in the numeric side table.
     assert numbers == {}
+
+
+# --- reconcile: the sweep for writes that never became events ---------------
+#
+# The Д50 ghosts: `Listing.status = "archived"; save()` through a path that
+# emitted nothing (a queryset .update(), an older stapel-listings) leaves the
+# index serving cards whose click answers «снято с публикации». reconcile()
+# re-pulls every VISIBLE row through the same ingest path an event uses, so
+# the pulled document's status — not the missing event — decides.
+
+
+def test_reconcile_drops_rows_whose_source_is_no_longer_published(wired):
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import reconcile
+
+    wired["1"] = {"key": "1", "status": "published", "title": "Live", "seq": 1000}
+    wired["2"] = {"key": "2", "status": "published", "title": "Ghost-archived", "seq": 1000}
+    wired["3"] = {"key": "3", "status": "published", "title": "Ghost-deleted", "seq": 1000}
+    for key in ("1", "2", "3"):
+        _dispatch(_event("listing.published", {"listing_id": int(key)}, event_id=f"e{key}"))
+    assert SearchDocument.objects.filter(visible=True).count() == 3
+
+    # The source moves on WITHOUT an event: one archived, one gone entirely.
+    wired["2"]["status"] = "archived"
+    wired["2"]["seq"] = 2000
+    del wired["3"]
+
+    report = reconcile(DOC_TYPE)
+    assert report.removed == 1  # key "3": absent from the source's answer
+    assert SearchDocument.objects.get(doc_key="1").visible is True
+    assert SearchDocument.objects.get(doc_key="2").visible is False
+    assert SearchDocument.objects.get(doc_key="3").visible is False
+
+
+def test_reconcile_pages_past_rows_it_just_tombstoned(wired):
+    """Keyset paging: flipping a row invisible must not shift the cursor."""
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import reconcile
+
+    for i in range(1, 6):
+        wired[str(i)] = {"key": str(i), "status": "published", "title": f"t{i}", "seq": 1000}
+        _dispatch(_event("listing.published", {"listing_id": i}, event_id=f"e{i}"))
+    for i in range(1, 5):
+        wired[str(i)]["status"] = "archived"
+        wired[str(i)]["seq"] = 2000
+
+    reconcile(DOC_TYPE, batch_size=2)
+    assert SearchDocument.objects.filter(visible=True).count() == 1
+    assert SearchDocument.objects.get(doc_key="5").visible is True
+
+
+def test_reconcile_management_command(wired):
+    from django.core.management import call_command
+    from stapel_search.models import SearchDocument
+
+    wired["9"] = {"key": "9", "status": "published", "title": "Ghost", "seq": 1000}
+    _dispatch(_event("listing.published", {"listing_id": 9}, event_id="e9"))
+    wired["9"]["status"] = "archived"
+    wired["9"]["seq"] = 2000
+
+    call_command("search_reconcile", "--type", DOC_TYPE)
+    assert SearchDocument.objects.get(doc_key="9").visible is False

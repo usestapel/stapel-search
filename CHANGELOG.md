@@ -4,6 +4,37 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.5] — 2026-09-02
+
+Patch (additive): `services.reconcile` + `manage.py search_reconcile`.
+
+### Added — the sweep for writes that never became events
+
+An index is only as honest as the events it is fed. A source write that
+skipped its own emitter — a queryset `.update(status=...)`, a raw
+`Model.save()` on an emitter too old to guard its index boundary, a lost
+delivery — leaves rows the index still SHOWS and the source no longer
+serves: ghost cards whose click answers «no longer published». Six of them
+sat at the top of a client stand's feed and search results.
+
+`reconcile(doc_type)` re-pulls every VISIBLE row through the same `ingest`
+path a live signal uses, so the pulled document's `status` decides
+(`visible_statuses`) and a key the source no longer serves is removed — no
+second predicate, no special case for the ghost. Keyset-paged by `doc_key`,
+so tombstoning a row mid-sweep cannot shift the cursor under the reader.
+Idempotent, safe on a live stand.
+
+It is deliberately distinct from the two jobs already here: `rebuild`
+replays the source's whole snapshot (heavier, and also ADDS what is
+missing), `reindex_stale` is the rolling beat catch-up over a bounded
+batch. This one asks exactly one question — "is everything the index still
+shows actually there?" — which is the question a ghost card fails.
+
+`manage.py search_reconcile [--type X] [--batch-size N]` runs it over one
+source or every registered one, and reports the ghost count per type: zero
+is `SUCCESS`, anything else is a `WARNING`, because a sweep that keeps
+finding something is a signal about the emitter, not routine hygiene.
+
 ## [0.10.4] — 2026-09-02
 
 ### Fixed — the goods verb broke the count law on Postgres; 0.10.3 shipped it red

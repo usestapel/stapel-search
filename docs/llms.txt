@@ -1,8 +1,8 @@
-# stapel-search 0.10.4
+# stapel-search 0.10.5
 
 A materialized search index with one swappable engine seam: full-text with per-language configs and a typo-tolerant second arm, drill-down facet counts with a benchmark-calibrated candidate cap and an approximate fallback, indexed range filters over a numeric side table, geo radius and bounding-box search including the antimeridian, five sorts with an opaque keyset cursor whose envelope matches AnchorPagination, a registry-generated P2B Art. 5 ranking disclosure with a mandatory promoted marker on every result, and an event-to-pull indexer carrying the four Projection guarantees (idempotency, ordering, rebuild, drift_check). Ships three engines behind the same conformance suite: Postgres FTS (default, zero new infrastructure), Meilisearch (the [meili] extra) and a declared naive backend for SQLite demos.
 
-Contract: axes 8 · surface 40 · extension points 6 · operations 5 · error codes 54.
+Contract: axes 8 · surface 41 · extension points 6 · operations 5 · error codes 54.
 Generated from docs/capabilities.json by `stapel-llms-txt` — do not edit; drift-gated by `make contract-check`.
 
 ## Configuration axes — what a product switches on
@@ -85,6 +85,9 @@ This is the answer to "does Stapel already have something for X?". `instead of` 
   Re-index every document from one owner_key onto another — table and engine both. What the user.merged handler calls when an account is folded into another; not a re-pull, because the source may not have processed the same merge yet and a missing document there means delete.
 - rebuild — stapel_search.services.rebuild
   Rebuild a whole doc_type from the owner's cursor snapshot and drop what the source no longer has. The backfill, the recovery path, and the engine-switch procedure.
+- reconcile — stapel_search.services.reconcile
+  instead of: deleting SearchDocument rows by hand
+  Re-pull every VISIBLE row and tombstone the ones whose source document is gone or no longer publicly served. The sweep for writes that never became events (a queryset .update(status=...), a lost delivery) — the cure for ghost cards whose click answers 'no longer published'.
 - register_dictionary — stapel_search.registry.register_dictionary
   instead of: editing the packaged dictionaries in site-packages
   Add synonym groups, query rewrites or stopwords for a language at runtime, on top of the shipped JSON.

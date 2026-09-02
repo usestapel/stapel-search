@@ -1,6 +1,6 @@
 {
   "module": "stapel-search",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "provides": "A materialized search index with one swappable engine seam: full-text with per-language configs and a typo-tolerant second arm, drill-down facet counts with a benchmark-calibrated candidate cap and an approximate fallback, indexed range filters over a numeric side table, geo radius and bounding-box search including the antimeridian, five sorts with an opaque keyset cursor whose envelope matches AnchorPagination, a registry-generated P2B Art. 5 ranking disclosure with a mandatory promoted marker on every result, and an event-to-pull indexer carrying the four Projection guarantees (idempotency, ordering, rebuild, drift_check). Ships three engines behind the same conformance suite: Postgres FTS (default, zero new infrastructure), Meilisearch (the [meili] extra) and a declared naive backend for SQLite demos.",
   "axes": [
     {
@@ -356,6 +356,15 @@
       "kind": "factory",
       "path": "stapel_search.services.rebuild",
       "intent": "Rebuild a whole doc_type from the owner's cursor snapshot and drop what the source no longer has. The backfill, the recovery path, and the engine-switch procedure."
+    },
+    {
+      "name": "reconcile",
+      "kind": "factory",
+      "path": "stapel_search.services.reconcile",
+      "intent": "Re-pull every VISIBLE row and tombstone the ones whose source document is gone or no longer publicly served. The sweep for writes that never became events (a queryset .update(status=...), a lost delivery) — the cure for ghost cards whose click answers 'no longer published'.",
+      "instead_of": [
+        "deleting SearchDocument rows by hand"
+      ]
     },
     {
       "name": "reindex_stale",
