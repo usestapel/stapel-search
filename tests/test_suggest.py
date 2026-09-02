@@ -215,8 +215,15 @@ def test_an_all_empty_catalogue_is_ranked_by_match_quality(
     assert [row["count"] for row in body["categories"]] == [0, 0, 0]
 
 
-def test_stock_outranks_match_quality(api_client, shorts, provider):
-    """The dropdown is still a prediction first: a stocked word-hit leads."""
+def test_stock_outranks_grade_only_inside_the_strong_class(api_client, shorts, provider):
+    """What survives of 0.7.0's "stock first": stock breaks ties BETWEEN real hits.
+
+    Both rows here matched a whole word of the name or better — the strong
+    class — and inside that class the stocked place is still the better
+    prediction: a word-graded row with three listings leads an exact-graded
+    row with none. What stock may no longer do is lift a mid-word fragment
+    over a real hit; that boundary has its own test below.
+    """
     provider.answers_with(
         {**MENS, "match": "word"},
         {**CLOTHES, "match": "exact", "path_ids": ["99"], "id": 99, "slug": "empty"},
@@ -228,6 +235,53 @@ def test_stock_outranks_match_quality(api_client, shorts, provider):
         ("word", 3),
         ("exact", 0),
     ]
+
+
+def test_a_stocked_substring_never_outranks_a_word_hit(api_client, conformance, provider):
+    """The live defect, exactly as a buyer met it on a classified stand.
+
+    «айфон» answered ONE suggestion: «Сифоны» — plumbing siphons — because
+    the transliterated fragment «ифон» is a mid-word substring of that name,
+    the siphon category happened to be stocked, and the sort put
+    stocked-before-empty ahead of every grade. A word-boundary hit with no
+    stock yet must beat a stocked mid-word accident: match CLASS first,
+    stock only within it.
+    """
+    from stapel_search.services import index_documents
+
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(doc_key="s1", title="Сифон для раковины", category_path=("80", "81", "202")),
+            _document(doc_key="s2", title="Сифон для ванны", category_path=("80", "81", "202")),
+        ],
+    )
+    siphons = {
+        "id": 202,
+        "slug": "sifony",
+        "name": "Сифоны",
+        "path": ["Для дома", "Трубы и фитинги", "Сифоны"],
+        "path_ids": ["80", "81", "202"],
+        "depth": 3,
+        "match": "substring",
+    }
+    phones = {
+        "id": 205,
+        "slug": "telefony",
+        "name": "Телефоны",
+        "path": ["Электроника", "Телефоны"],
+        "path_ids": ["90", "205"],
+        "depth": 2,
+        "match": "word",
+    }
+    provider.answers_with(siphons, phones)
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "айфон", "lang": "ru"}).json()
+
+    assert [(row["match"], row["count"]) for row in body["categories"]] == [
+        ("word", 0),
+        ("substring", 2),
+    ], "a stocked plumbing trap must not lead the dropdown"
 
 
 def test_an_unknown_match_grade_sorts_last_and_does_not_crash(
@@ -331,6 +385,37 @@ def test_a_curated_synonym_group_reaches_it_too(api_client, shorts, provider):
     assert "iphone" in provider.payloads[-1]["terms"]
 
 
+def test_a_mid_word_fragment_never_reaches_the_category_matcher(
+    api_client, shorts, provider
+):
+    """«ифон» exists for SERP recall; against category NAMES it is poison.
+
+    The ru group ["iphone", "айфон", "ифон", ...] is right for the SERP,
+    where every variant meets full document text under AND-of-groups. The
+    category matcher substring-matches NAMES, and there the fragment «ифон»
+    finds exactly one thing on a real board: «Сифоны». A variant that is
+    buried MID-WORD in a sibling of its own group is dropped for this path
+    only; a variant that is a PREFIX of a sibling is a stem («самсунг» ⊂
+    «самсунга», «авто» ⊂ «автомобиль») and must survive, or an exact-named
+    category stops matching its own name. The dictionary itself is untouched
+    — the SERP keeps its recall.
+    """
+    from stapel_search.suggest import query_terms
+
+    terms = query_terms("айфон", "ru")
+    assert "ифон" not in terms, "the fragment must not meet category names"
+    assert "айфон" in terms
+    assert "iphone" in terms
+
+    # Stems that are prefixes of their inflected siblings survive.
+    assert "самсунг" in query_terms("самсунг", "ru")
+    assert "авто" in query_terms("авто", "ru")
+
+    # And the wire payload to `categories.suggest` is the filtered set.
+    api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "айфон", "lang": "ru"})
+    assert "ифон" not in provider.payloads[-1]["terms"]
+
+
 def test_accept_language_selects_the_dictionary(api_client, shorts, provider):
     """No `lang` parameter: the header must still load the ru dictionary."""
     provider.answers_with(MENS)
@@ -339,6 +424,242 @@ def test_accept_language_selects_the_dictionary(api_client, shorts, provider):
     ).json()
     assert body["language"] == "ru"
     assert "iphone" in provider.payloads[-1]["terms"]
+
+
+# --------------------------------------------------------------------------
+# goods-driven suggestions: when no NAME matches, the documents answer
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def samsung_stock(conformance):
+    """Brand-word listings. No category NAME on any board contains «samsung».
+
+    The conformance harness has already loaded its fixed corpus, whose doc 2
+    («Samsung Galaxy», electronics/phones) matches the same query — so three
+    categories hold matching goods, which is exactly the multi-destination
+    shape the dropdown exists for.
+    """
+    from stapel_search.services import index_documents
+
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(doc_key="g1", title="Samsung Galaxy S21", category_path=("90", "205")),
+            _document(doc_key="g2", title="Samsung Galaxy A52", category_path=("90", "205")),
+            _document(doc_key="g3", title="Чехол Samsung", category_path=("90", "206")),
+        ],
+    )
+    return conformance
+
+
+def test_goods_lead_where_names_cannot(api_client, samsung_stock, provider):
+    """«samsung» found nothing by NAME and real listings by SERP — a dropdown
+    that answers "that does not exist" about goods the very next page shows
+    is the second half of the live defect. When the name matcher has no
+    strong answer, the backend is asked which categories hold matching
+    documents, and those become rows graded ``listings``.
+    """
+    provider.answers_with()
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    rows = body["categories"]
+    assert rows, "the goods exist; the dropdown must lead to them"
+    assert [row["match"] for row in rows] == ["listings", "listings", "listings"]
+    # Busier place first, and the filter is ready to paste into /query.
+    assert rows[0]["category"] == "90/205"
+    assert rows[0]["count"] == 2
+    assert {(row["category"], row["count"]) for row in rows[1:]} == {
+        ("90/206", 1),
+        ("electronics/phones", 1),
+    }
+
+
+def test_a_goods_row_count_is_the_serp_count(api_client, samsung_stock, provider):
+    """The suggest gate, applied to the new rows: the number shown is the
+    number the tap finds. Asserted against the query endpoint, not a
+    hand-written expectation, for the same reason as the name-matched gate."""
+    provider.answers_with()
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    assert body["categories"]
+    for row in body["categories"]:
+        serp = api_client.get(
+            QUERY,
+            {
+                "type": DOC_TYPE,
+                "q": "samsung",
+                "lang": "ru",
+                "category": row["category"],
+                "facets": "off",
+            },
+        ).json()
+        assert row["count"] == serp["count"], row["category"]
+
+
+def test_a_strong_name_match_keeps_the_goods_fallback_silent(
+    api_client, samsung_stock, provider
+):
+    """The canon, half one: a name that really says the word IS the answer.
+
+    Goods-driven rows are a fallback, not a second voice: when the name
+    matcher produced anything in the strong class (exact/prefix/word), the
+    backend is not consulted and no ``listings`` row appears. A name row is
+    a promise about the whole category; a co-occurrence in documents is
+    weaker evidence and must not dilute it.
+    """
+    phones = {
+        "id": 205,
+        "slug": "telefony",
+        "name": "Телефоны",
+        "path": ["Электроника", "Телефоны"],
+        "path_ids": ["90", "205"],
+        "depth": 2,
+        "match": "word",
+    }
+    provider.answers_with(phones)
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    assert [row["match"] for row in body["categories"]] == ["word"]
+
+
+def test_goods_outrank_a_substring_name_row(api_client, samsung_stock, provider):
+    """The canon, half two: goods beat a mid-word accident.
+
+    A substring row is not a strong name answer, so the fallback still runs
+    beside it — and the documents themselves are better evidence of where
+    the query leads than a fragment buried in an unrelated name. The
+    substring row is kept (it may still be the right place on a sparse
+    board), below.
+    """
+    from stapel_search.services import index_documents
+
+    index_documents(
+        DOC_TYPE,
+        [_document(doc_key="s1", title="Сифон для раковины", category_path=("80", "81", "202"))],
+    )
+    siphons = {
+        "id": 202,
+        "slug": "sifony",
+        "name": "Сифоны",
+        "path": ["Для дома", "Трубы и фитинги", "Сифоны"],
+        "path_ids": ["80", "81", "202"],
+        "depth": 3,
+        "match": "substring",
+    }
+    provider.answers_with(siphons)
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    assert [row["match"] for row in body["categories"]] == [
+        "listings",
+        "listings",
+        "listings",
+        "substring",
+    ]
+    assert body["categories"][0]["category"] == "90/205"
+
+
+def test_a_backend_without_the_verb_degrades_loudly(
+    api_client, samsung_stock, provider, monkeypatch
+):
+    """`suggest_categories` is an OPTIONAL backend verb: an engine that does
+    not implement it answers exactly what 0.9.0 answered, and the shortfall
+    travels in `degraded[]` rather than being absorbed — the same rule every
+    other engine difference follows."""
+    from stapel_search.backends import get_backend
+
+    # Whichever engine this suite runs under (naive on SQLite, Postgres on a
+    # real server), strip the verb from ITS class so the probe finds nothing.
+    monkeypatch.delattr(type(get_backend()), "suggest_categories", raising=False)
+    provider.answers_with()
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    assert body["categories"] == []
+    assert "category_listing_suggestions" in body["degraded"]
+
+
+@pytest.fixture
+def names_provider():
+    """Register a stand-in for ``categories.names`` — the id -> display-name
+    read the goods rows resolve through. Same division of labour as the
+    ``categories.suggest`` stand-in above: the real provider is
+    stapel-categories\' business; what is under test HERE is that this module
+    asks, applies the answer, and says so when no answer comes.
+    """
+    calls: list[dict] = []
+    names: dict[str, dict] = {}
+
+    def _provider(payload):
+        calls.append(payload)
+        return {"names": {k: dict(v) for k, v in names.items()}}
+
+    register_function("categories.names", _provider)
+
+    class Handle:
+        payloads = calls
+
+        @staticmethod
+        def resolves(mapping):
+            names.clear()
+            names.update(mapping)
+
+    try:
+        yield Handle
+    finally:
+        function_registry._providers.pop("categories.names", None)
+
+
+def test_goods_rows_carry_display_names(api_client, samsung_stock, provider, names_provider):
+    """A goods row is a place, not a number: every path segment the names
+    provider knows is rendered by its display name, the leaf name and slug
+    ride the row, and the ``category`` filter string keeps the IDS — the
+    tap must land on ``?category=90/205`` exactly as before.
+    """
+    provider.answers_with()
+    names_provider.resolves(
+        {
+            "90": {"name": "Электроника", "slug": "elektronika"},
+            "205": {"name": "Телефоны", "slug": "telefony"},
+            "206": {"name": "Аксессуары", "slug": "aksessuary"},
+        }
+    )
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    rows = {row["category"]: row for row in body["categories"]}
+    assert rows["90/205"]["name"] == "Телефоны"
+    assert rows["90/205"]["slug"] == "telefony"
+    assert rows["90/205"]["path"] == ["Электроника", "Телефоны"]
+    assert rows["90/206"]["name"] == "Аксессуары"
+    # A segment the provider does not know keeps its id — a truthful
+    # segment, never an invented name (the conformance corpus path).
+    assert rows["electronics/phones"]["name"] == "phones"
+    assert "category_names" not in body["degraded"]
+    # One batched round trip, ids deduplicated.
+    assert len(names_provider.payloads) == 1
+    assert sorted(names_provider.payloads[0]["ids"]) == [
+        "205", "206", "90", "electronics", "phones",
+    ]
+
+
+def test_goods_rows_without_a_names_provider_keep_ids_and_declare_it(
+    api_client, samsung_stock, provider
+):
+    """No ``categories.names`` responder: the rows still lead somewhere (id
+    segments are truthful), and the shortfall travels as
+    ``degraded: ["category_names"]`` instead of being absorbed."""
+    provider.answers_with()
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    rows = {row["category"]: row for row in body["categories"]}
+    assert rows["90/205"]["name"] == "205"
+    assert "category_names" in body["degraded"]
 
 
 # --------------------------------------------------------------------------

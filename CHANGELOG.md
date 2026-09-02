@@ -4,6 +4,63 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] — 2026-09-02
+
+### Fixed — «айфон» suggested plumbing siphons; «samsung» suggested nothing
+
+The type-ahead on a classified stand answered «айфон» with exactly one
+suggestion: «Сифоны» — the plumbing traps. Three small correctnesses lined
+up to produce it. The ru dictionary's iphone group carries «ифон», a
+loose-typing fragment that exists for SERP recall; against category NAMES
+that fragment substring-matches exactly one thing on a real board, and it is
+not phones. The siphon category happened to be stocked. And the ranking
+sorted stocked-before-empty FIRST, across grades, so a stocked mid-word
+accident outranked every word-boundary hit on the board. Meanwhile «samsung»
+— a query the SERP answers with real listings — suggested nothing at all,
+because no category name anywhere contains a brand word. A dropdown is a
+promise about the next page; both halves of it were broken in opposite
+directions. Three mechanisms, each with the failing case as its test:
+
+- **Match class now outranks stock.** The strong grades (`exact` / `prefix`
+  / `word`) sort as one class above `substring`; stocked-before-empty
+  decides only BETWEEN real hits, where 0.7.0's product decision was right
+  all along. A stocked «Сифоны» substring row loses to an empty «Телефоны»
+  word row, and a substring-only answer still shows when nothing better
+  exists — on a sparse board it may genuinely be the place.
+- **Mid-word fragments no longer reach the name matcher.** `query_terms` —
+  the suggest-only path; SERP normalization is untouched — drops a group
+  member that is buried mid-word inside a sibling of its own group, with
+  combining marks stripped for the containment test («ифон» is «айфон»
+  minus the breve, which is precisely why the group carries it). Prefix
+  stems survive («самсунг» ⊂ «самсунга», «авто» ⊂ «автомобиль»): the
+  shipped groups inflect almost every brand, and a literal drop-every-
+  substring rule would have deleted the brands themselves. The dictionary
+  file is unchanged; the SERP keeps its recall.
+- **When no name answers, the goods do.** A new OPTIONAL backend verb —
+  `suggest_categories(doc_type, query, *, language, limit) -> [(category
+  path, count)]`, implemented by the Postgres backend (one `GROUP BY
+  category_path_arr` over `_where`'s candidate set, trigram fallback
+  mirroring `query()`) and by the naive backend (the reference walk) —
+  answers which categories hold documents matching the query. When the name
+  matcher yields nothing in the strong class, those pairs become rows
+  graded `listings`, ranked below `word` and above `substring`, each
+  carrying the count the `?q=…&category=…` tap will actually show
+  (asserted against the query endpoint, like the name-matched count gate).
+  An engine without the verb — Meilisearch and OpenSearch today — answers
+  exactly what 0.9.0 answered plus `degraded:
+  ["category_listing_suggestions"]`; `search.E002` does not require it and
+  the conformance scenario skips it.
+- **Goods-driven rows read as places, not numbers.** Their display names
+  resolve through ONE batched read of a new comm Function,
+  `categories.names` (`CATEGORY_NAMES_FUNCTION`, stapel-categories 0.13+):
+  `{ids: […]}` in, `{names: {id: {name, slug}}}` out. Ids are this
+  module's, names are the tree provider's — the same ownership rule as
+  every other category fact here. A segment the provider does not answer
+  for keeps its id (a truthful segment, never an invented name), and a
+  provider that is missing or down leaves every id in place with
+  `degraded: ["category_names"]`. The `category` filter string keeps the
+  IDS regardless: display changed, the tap did not.
+
 ## [0.9.0] — 2026-09-02
 
 ### Security — an identifier was indexed, countable and exactly queryable

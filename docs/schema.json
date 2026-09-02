@@ -348,22 +348,22 @@
         "properties": {
           "id": {
             "type": "integer",
-            "description": "Category id."
+            "description": "Category id. A `listings`-graded row derives it from the path's leaf segment."
           },
           "slug": {
             "type": "string",
-            "description": "Category slug."
+            "description": "Category slug. Empty on a `listings`-graded row: no comm Function in the fleet resolves a path id to its slug or name yet."
           },
           "name": {
             "type": "string",
-            "description": "The category's own display name."
+            "description": "The category's own display name. On a `listings`-graded row this is the leaf id as a truthful segment — render such rows by their `count` instead."
           },
           "path": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Display names root->leaf, e.g. ['Мужская одежда', 'Шорты']. This is what distinguishes three categories that share a name."
+            "description": "Display names root->leaf, e.g. ['Мужская одежда', 'Шорты']. This is what distinguishes three categories that share a name. `listings`-graded rows carry the id segments here."
           },
           "category": {
             "type": "string",
@@ -371,7 +371,7 @@
           },
           "count": {
             "type": "integer",
-            "description": "Live listings a buyer would see under this category, descendants included — the same number the SERP reports for it."
+            "description": "Live listings a buyer would see under this category, descendants included — the same number the SERP reports for it. On a `listings`-graded row: how many of them match the typed query, which is the count a `?q=…&category=…` tap will show."
           },
           "depth": {
             "type": "integer",
@@ -383,7 +383,7 @@
                 "$ref": "#/components/schemas/MatchEnum"
               }
             ],
-            "description": "How the name matched. Informational; ranking is by `count`.\n\n* `prefix` - prefix\n* `substring` - substring"
+            "description": "How the row earned its place: the four name grades from `categories.suggest`, or `listings` — a goods-driven row, offered because documents matching the query live there even though no category name says the word. Ranking: strong grades (exact/prefix/word) and `listings` sort as one class above `substring`; within a class, stocked before empty, then grade, then count desc, then depth, then name.\n\n* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings"
           }
         },
         "required": [
@@ -508,11 +508,14 @@
       },
       "MatchEnum": {
         "enum": [
+          "exact",
           "prefix",
-          "substring"
+          "word",
+          "substring",
+          "listings"
         ],
         "type": "string",
-        "description": "* `prefix` - prefix\n* `substring` - substring"
+        "description": "* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings"
       },
       "RankingResponse": {
         "type": "object",
@@ -776,7 +779,7 @@
             "items": {
               "$ref": "#/components/schemas/CategorySuggestion"
             },
-            "description": "Destinations, ranked by live listing count desc, then depth, then name."
+            "description": "Destinations, ranked by match class (strong name grades and goods-driven rows above substring), then stocked before empty, then grade, then live listing count desc, then depth, then name."
           },
           "terms": {
             "type": "array",
@@ -801,7 +804,7 @@
             "items": {
               "type": "string"
             },
-            "description": "What this answer could not do: `category_suggestions` (no provider for category names), `category_rollup` (no ancestry, so counts would read 0)."
+            "description": "What this answer could not do: `category_suggestions` (no provider for category names), `category_rollup` (no ancestry, so counts would read 0), `category_listing_suggestions` (no name matched and the configured engine does not implement the optional goods-driven verb, or it failed)."
           },
           "backend": {
             "type": "string"

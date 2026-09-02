@@ -94,6 +94,13 @@ DEFAULTS = {
     # dropdown keeps its `terms` half and says `degraded:
     # ["category_suggestions"]` (search.W007).
     "CATEGORY_SUGGEST_FUNCTION": "categories.suggest",
+    # Display names for category ids, by comm name — what lets a GOODS-driven
+    # suggestion row (a category offered because matching documents live
+    # there, not because its name says the word) read as a place instead of
+    # a number. Same ownership rule again: ids are this module's, names are
+    # stapel-categories'. Unreachable, the rows keep their id segments and
+    # the answer says `degraded: ["category_names"]`.
+    "CATEGORY_NAMES_FUNCTION": "categories.names",
     "CATEGORY_CACHE_TIMEOUT": 300,
     # Source document pull, by comm name; overridable per source entry.
     "REINDEX_SCHEDULE": {"hour": 3, "minute": 20},

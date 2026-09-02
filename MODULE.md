@@ -217,8 +217,12 @@ No module code changes — and that is an assertion, not a claim:
 `e2e/run_e2e.py` runs one identical assertion function against both engines.
 
 **Writing your own.** Implement nine verbs
-(`stapel_search.backends.base.SearchBackend`) and run the public conformance
-suite. The release rule: **a new backend without a green conformance run does
+(`stapel_search.backends.base.SearchBackend`) — plus one OPTIONAL tenth,
+`suggest_categories`, the goods-driven half of the type-ahead: an engine
+without it still passes (`search.E002` does not ask for it, the scenario
+skips), and the service layer degrades to name-matched suggestions with
+`category_listing_suggestions` in `degraded[]` — and run the public
+conformance suite. The release rule: **a new backend without a green conformance run does
 not merge.** Differences are legitimate only through `capabilities()` — a
 scenario is skipped when the matching capability is `False`, and it *fails*
 when the capability is `True` and the behaviour diverges.
@@ -309,7 +313,7 @@ degraded, backend}`. `terms` is the 0.1.0 title-prefix half, still second;
 ancestor path, a `count`, and a `category` string ready to paste into
 `/query?category=`.
 
-Four decisions carry it.
+Five decisions carry it.
 
 **Names are not matched here.** Names, ancestry and the retired/test/
 soft-deleted state of a node belong to stapel-categories and are asked for
@@ -348,12 +352,33 @@ backend. A `category_counts` verb on the protocol would oblige four engines
 to reimplement a group-by over a column this module maintains itself, and the
 first engine to get it subtly wrong would be invisible.
 
-**Ranking is count desc, then depth asc, then name**, and the order of the
-three is the product decision. Count first because the row is a prediction of
-what the buyer will find, and a path with two listings above one with two
-hundred is wrong on the only axis they care about. Depth second because among
-equals the broader place is the safer landing. Name last so the answer is
-stable rather than incidentally ordered by whatever the tree read returned.
+**Ranking is match class, then stocked-before-empty, then grade, then count
+desc, then depth asc, then name** — and the order of the first two is a
+lesson a live stand taught the hard way. «айфон» expands to a ru group whose
+SERP-recall fragment «ифон» is a mid-word substring of exactly one category
+name on a real board — «Сифоны», the plumbing traps — and 0.9.0's
+stocked-before-empty-first sort put that stocked accident above every real
+hit: one suggestion, and it was siphons. So the strong grades
+(`exact`/`prefix`/`word`) plus `listings` rows now sort as one class above
+`substring`, stock decides only BETWEEN real hits, and the fragment itself no
+longer reaches the matcher at all — `query_terms` drops a group member that
+is buried mid-word inside a sibling (combining marks stripped for the test:
+«ифон» is «айфон» minus the breve), while keeping prefix stems («самсунг» ⊂
+«самсунга»), so the SERP keeps its recall and the dropdown loses the poison.
+
+**When no NAME answers, the goods do.** Category names carry nouns, not
+brands: nothing is named «Samsung», so «samsung» suggested nothing while the
+SERP found real listings. When the name matcher yields nothing in the strong
+class, the engine is asked which categories hold matching documents —
+`suggest_categories`, the optional tenth verb, implemented by the naive and
+Postgres backends over their own SERP predicate so the count on the row is
+the count the tap will find (asserted end to end, like the name-matched
+gate). Those rows are graded `listings`, sort below `word` (a name that says
+the word is a promise about the whole category; a co-occurrence in documents
+is weaker evidence) and above `substring`, and carry the path IDS as their
+display segments: no comm Function in the fleet resolves category ids to
+names yet, so the id is served as a truthful segment — the
+stapel-categories convention — rather than invented here.
 
 `type` is optional here, unlike on `query`: a deployment with one registered
 document type has one answer, and making a storefront name it on every
@@ -372,7 +397,11 @@ Without a `categories.suggest` provider the endpoint still answers its
 `terms` half, reports `degraded: ["category_suggestions"]`, and `search.W008`
 says so at deploy time. Without `categories.path` the stored paths are one
 segment long and no candidate's ancestry can match, so the answer reports
-`degraded: ["category_rollup"]` rather than printing a column of zeros.
+`degraded: ["category_rollup"]` rather than printing a column of zeros. And
+when no name matched and the configured engine does not implement (or fails)
+the optional goods-driven verb, the answer is 0.9.0's answer plus
+`degraded: ["category_listing_suggestions"]` — the difference is declared,
+never absorbed.
 
 **The transliteration table gained a rule** in the same release, and it is a
 SERP fix as much as a dropdown one. GOST sends both `й` and `ы` to `y`, so

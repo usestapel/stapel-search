@@ -47,6 +47,18 @@ VERBS = (
     "suggest",
 )
 
+#: One OPTIONAL verb exists beside the nine and is deliberately NOT in
+#: ``VERBS``: ``suggest_categories(doc_type, query, *, language, limit) ->
+#: list[(category path tuple, count)]`` — which categories hold documents
+#: matching *query*, busiest first, powering the goods-driven half of the
+#: type-ahead. Optional because it needs the engine's own text predicate
+#: (the reason it crosses the seam at all — see ``suggest.py``) and an
+#: engine that has not implemented it yet must not fail ``search.E002``: the
+#: service layer probes with ``getattr``, answers what 0.9.0 answered, and
+#: reports ``category_listing_suggestions`` in ``degraded[]``. Naive and
+#: Postgres implement it; the conformance scenario ``suggest_categories``
+#: skips engines without it and holds the rest to the naive reference.
+
 #: Value prefix a backend uses in ``READ_PATH_IMPL`` when it answers a
 #: declared read path through a NATIVE engine capability rather than
 #: through a hand-written clause — e.g. Meilisearch answers ``geo:prefilter``

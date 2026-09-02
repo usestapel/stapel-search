@@ -142,13 +142,25 @@ class SearchResponseSerializer(serializers.Serializer):
 class CategorySuggestionSerializer(serializers.Serializer):
     """One destination in the dropdown, ready to render and ready to follow."""
 
-    id = serializers.IntegerField(help_text="Category id.")
-    slug = serializers.CharField(help_text="Category slug.")
-    name = serializers.CharField(help_text="The category's own display name.")
+    id = serializers.IntegerField(
+        help_text="Category id. A `listings`-graded row derives it from the "
+        "path's leaf segment.",
+    )
+    slug = serializers.CharField(
+        allow_blank=True,
+        help_text="Category slug. Empty on a `listings`-graded row: no comm "
+        "Function in the fleet resolves a path id to its slug or name yet.",
+    )
+    name = serializers.CharField(
+        help_text="The category's own display name. On a `listings`-graded "
+        "row this is the leaf id as a truthful segment — render such rows by "
+        "their `count` instead.",
+    )
     path = serializers.ListField(
         child=serializers.CharField(),
         help_text="Display names root->leaf, e.g. ['Мужская одежда', 'Шорты']. "
-        "This is what distinguishes three categories that share a name.",
+        "This is what distinguishes three categories that share a name. "
+        "`listings`-graded rows carry the id segments here.",
     )
     category = serializers.CharField(
         help_text="The ancestry as ids joined with '/'. Pass it verbatim as the "
@@ -156,20 +168,31 @@ class CategorySuggestionSerializer(serializers.Serializer):
     )
     count = serializers.IntegerField(
         help_text="Live listings a buyer would see under this category, "
-        "descendants included — the same number the SERP reports for it.",
+        "descendants included — the same number the SERP reports for it. On a "
+        "`listings`-graded row: how many of them match the typed query, which "
+        "is the count a `?q=…&category=…` tap will show.",
     )
     depth = serializers.IntegerField(help_text="Number of segments in `path`.")
     match = serializers.ChoiceField(
-        choices=["prefix", "substring"],
-        help_text="How the name matched. Informational; ranking is by `count`.",
+        choices=["exact", "prefix", "word", "substring", "listings", "vector"],
+        help_text="How the row earned its place: the four name grades from "
+        "`categories.suggest`, or `listings` — a goods-driven row, offered "
+        "because documents matching the query live there even though no "
+        "category name says the word. Ranking: strong grades "
+        "(exact/prefix/word) and `listings` sort as one class above "
+        "`substring`; within a class, stocked before empty, then grade, then "
+        "count desc, then depth, then name. `vector` rows — embedding-space "
+        "neighbours offered when nothing first-class matched — always sit "
+        "below every deterministic row, ordered by similarity.",
     )
 
 
 class SuggestResponseSerializer(serializers.Serializer):
     categories = CategorySuggestionSerializer(
         many=True,
-        help_text="Destinations, ranked by live listing count desc, then depth, "
-        "then name.",
+        help_text="Destinations, ranked by match class (strong name grades and "
+        "goods-driven rows above substring), then stocked before empty, then "
+        "grade, then live listing count desc, then depth, then name.",
     )
     terms = serializers.ListField(
         child=serializers.CharField(), help_text="Title prefixes from the index."
@@ -185,7 +208,9 @@ class SuggestResponseSerializer(serializers.Serializer):
         child=serializers.CharField(),
         help_text="What this answer could not do: `category_suggestions` (no "
         "provider for category names), `category_rollup` (no ancestry, so counts "
-        "would read 0).",
+        "would read 0), `category_listing_suggestions` (no name matched and the "
+        "configured engine does not implement the optional goods-driven verb, "
+        "or it failed).",
     )
     backend = serializers.CharField()
 

@@ -285,5 +285,43 @@ class NaiveSearchBackend:
                 break
         return seen
 
+    def suggest_categories(
+        self, doc_type: str, query: str, *, language: str, limit: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        """OPTIONAL verb: the categories whose DOCUMENTS match *query*.
+
+        The goods-driven half of the type-ahead (see ``suggest.py``): when
+        no category NAME matches, these pairs — ``(category path, matching
+        document count)`` — become the suggestion rows. The predicate is
+        this backend's own SERP predicate, on purpose and asserted
+        (``test_a_goods_row_count_is_the_serp_count``): the count shown is
+        the count the tap will find, because it is computed by the same
+        ``_text_score`` walk a ``?q=…&category=…`` page runs.
+
+        Grouped by the document's FULL path, so each count is exact for the
+        page that path opens; a category with matching stock deeper down
+        simply appears as its own deeper row. Being pure Python over the
+        module's own table, this is also the reference semantics the
+        conformance scenario holds the real engines to.
+        """
+        from ..text import normalize_query
+
+        text = normalize_query(query, language)
+        if text.is_empty:
+            return []
+        q = SearchQuery(doc_type=doc_type, language=language, text=text)
+        counts: dict[tuple[str, ...], int] = {}
+        for row in self._candidates(q).iterator():
+            if self._text_score(row, q) is None:
+                continue
+            path = tuple(str(segment) for segment in (row.category_path or []))
+            if not path:
+                continue
+            counts[path] = counts.get(path, 0) + 1
+        # Busiest first; the path itself breaks ties so the answer is stable
+        # rather than dictionary-ordered by insertion.
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return ranked[:limit]
+
 
 __all__ = ["READ_PATH_IMPL", "NaiveSearchBackend"]

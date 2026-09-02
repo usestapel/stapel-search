@@ -711,6 +711,42 @@ def _s_suggest_empty_prefix(ctx: Context) -> None:
     assert isinstance(ctx.backend.suggest(DOC_TYPE, "", limit=5), list)
 
 
+def _s_suggest_categories_from_goods(ctx: Context) -> None:
+    """The OPTIONAL tenth verb, held to the naive reference semantics.
+
+    ``suggest_categories`` is not in ``VERBS`` (``backends/base.py``): an
+    engine without it is skipped here and degrades loudly at the service
+    layer. An engine WITH it must answer the same pairs the naive walk
+    answers over this corpus — the count is the SERP's count for the tap the
+    row invites, which is the whole value of the row.
+    """
+    fn = getattr(ctx.backend, "suggest_categories", None)
+    if fn is None:
+        raise ConformanceSkip("suggest_categories")
+    from .text import normalize_query
+
+    pairs = fn(DOC_TYPE, "iphone", language="ru", limit=5)
+    assert pairs, "the corpus holds an iPhone; the goods must answer"
+    assert ("electronics", "phones") in [path for path, _count in pairs]
+    # The invariant is NOT a fixed number — a typo-tolerant engine may
+    # legitimately widen «iphone» to more documents than the naive walk
+    # (Postgres' trigram arm reaches «телефон» here, and so does its SERP).
+    # The invariant is that each pair's count is the count the tap will
+    # find: the engine's OWN query() total for the same text and category.
+    for path, count in pairs:
+        answer = ctx.backend.query(
+            ctx.query(
+                language="ru",
+                text=normalize_query("iphone", "ru"),
+                category_path=path,
+            )
+        )
+        assert count == answer.total, path
+    # The two honest silences: no query, and no matching goods at all.
+    assert fn(DOC_TYPE, "", language="ru", limit=5) == []
+    assert fn(DOC_TYPE, "квадрокоптер", language="ru", limit=5) == []
+
+
 def _s_capabilities_are_declared(ctx: Context) -> None:
     caps = ctx.capabilities
     assert isinstance(caps.max_result_window, int) and caps.max_result_window > 0
@@ -816,6 +852,11 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario("suggest", _s_suggest, "prefix suggestions come from the index"),
     Scenario("suggest_empty_prefix", _s_suggest_empty_prefix, "an empty prefix is not a crash"),
+    Scenario(
+        "suggest_categories",
+        _s_suggest_categories_from_goods,
+        "the optional goods-driven verb answers the SERP's own counts",
+    ),
     Scenario("capabilities_are_declared", _s_capabilities_are_declared, "the seam is described"),
     Scenario("health", _s_health, "the engine reports itself"),
     Scenario(

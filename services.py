@@ -1100,11 +1100,28 @@ def suggest(params, *, accept_language: str = "") -> dict:
     language = resolve_language(params, accept_language=accept_language)
 
     backend = get_backend()
+    # The backend rides along for the goods-driven fallback: when no
+    # category NAME matches, the engine that runs the SERP is asked which
+    # categories hold matching documents (an optional verb — see
+    # suggest.py's module docstring for why that half crosses the seam).
     categories, degraded = (
-        suggest_categories(doc_type, prefix, language=language, limit=limit)
+        suggest_categories(doc_type, prefix, language=language, limit=limit, backend=backend)
         if prefix
         else ([], [])
     )
+    if prefix:
+        # The vector net, below the deterministic floor (vector/integration
+        # .py). Flag off — the default — returns the same objects untouched.
+        from .vector import augment_category_suggestions
+
+        categories, degraded = augment_category_suggestions(
+            categories,
+            degraded,
+            doc_type=doc_type,
+            q=prefix,
+            language=language,
+            limit=limit,
+        )
     terms = backend.suggest(doc_type, prefix, limit=limit) if prefix else []
     return {
         "categories": categories,

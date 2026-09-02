@@ -818,5 +818,61 @@ class PostgresSearchBackend:
             cursor.execute(sql, params)
             return [row[0] for row in cursor.fetchall()]
 
+    def suggest_categories(
+        self, doc_type: str, query: str, *, language: str, limit: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        """OPTIONAL verb: the categories whose DOCUMENTS match *query*.
+
+        The goods-driven half of the type-ahead (see ``suggest.py``): when
+        no category NAME matches, ``(category path, matching document
+        count)`` pairs from HERE become the suggestion rows. The candidate
+        set is :meth:`_where` — the single place that decides what "a
+        candidate" means — over the same normalized query the SERP runs, so
+        the count on the row is the count ``?q=…&category=…`` will show
+        (``test_a_goods_row_count_is_the_serp_count`` compares the two
+        ends). One aggregate: ``GROUP BY category_path_arr`` over the
+        matching set, busiest paths first, the array itself breaking ties
+        so the answer is stable across plans.
+
+        The typo fallback mirrors :meth:`query`: below
+        ``TYPO_FALLBACK_THRESHOLD`` matching documents the trigram arm runs
+        too, because the SERP a tap opens would widen the same way and the
+        dropdown must not disagree with the page it predicts.
+        """
+        self._require_postgres()
+        from ..conf import search_settings
+        from ..text import normalize_query
+
+        text = normalize_query(query, language)
+        if text.is_empty:
+            return []
+        q = SearchQuery(doc_type=doc_type, language=language, text=text)
+        pairs = self._category_groups(q, trigram=False, limit=limit)
+        matched = sum(count for _path, count in pairs)
+        if matched < int(search_settings.TYPO_FALLBACK_THRESHOLD) and self.has_trigram():
+            pairs = self._category_groups(q, trigram=True, limit=limit)
+        return pairs
+
+    def _category_groups(
+        self, q: SearchQuery, *, trigram: bool, limit: int
+    ) -> list[tuple[tuple[str, ...], int]]:
+        where_sql, where_params = self._where(q, trigram=trigram)
+        sql = f"""
+            SELECT d.category_path_arr, count(*) AS n
+              FROM {_TABLE} d
+             WHERE {where_sql}
+             GROUP BY d.category_path_arr
+             ORDER BY n DESC, d.category_path_arr ASC
+             LIMIT %s
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(sql, list(where_params) + [limit])
+            rows = cursor.fetchall()
+        return [
+            (tuple(str(segment) for segment in path), int(n))
+            for path, n in rows
+            if path
+        ]
+
 
 __all__ = ["READ_PATH_IMPL", "PostgresBackendUnavailable", "PostgresSearchBackend"]
