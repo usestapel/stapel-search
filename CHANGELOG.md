@@ -4,6 +4,14 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] — 2026-09-03
+
+### Fixed
+
+- A client fleet's hostnames were named in 0.11.0's changelog entry. No code
+  change; the sweep that catches this runs pre-push in some repos of the
+  fleet and not in this one, which is the actual gap.
+
 ## [0.11.0] — 2026-09-03
 
 ### Added
@@ -18,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   kinds count different things — a NAME row is a place and its count ignores
   the typed text; a goods-driven (`listings`) row is «where your words lead»
   and its count is already text-conditioned — and the answer did not say
-  which. A storefront reading it had one rule for both. On the darom/ruberi
-  stand it appended the query to every link, so «Одежда, обувь, аксессуары ·
-  2» opened `?category=140/145&q=одежда` and showed NOTHING (no listing under
+  which. A storefront reading it had one rule for both. On a live stand it
+  appended the query to every link, so «Одежда, обувь, аксессуары · 2» opened
+  `?category=140/145&q=одежда` and showed NOTHING (no listing under
   that category spells the category's own name), and «Телефоны · 47» opened a
   page with 3. Both existing gates passed throughout: each hard-coded the
   destination its own row kind assumes, so between them they proved every
