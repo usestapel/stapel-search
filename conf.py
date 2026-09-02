@@ -138,6 +138,10 @@ DEFAULTS = {
     # Below this cosine similarity a hit does not exist. Embeddings degrade
     # into noise gracefully; a dropdown must not.
     "VECTOR_SIMILARITY_FLOOR": 0.6,
+    # {kind: floor} overrides of the global floor, because one floor cannot
+    # serve two corpora: a model's similarity range depends on what it is
+    # ranging over. Calibrate per corpus on real typos (see CONFIG.MD).
+    "VECTOR_KIND_FLOORS": {},
     "VECTOR_TOP_K": 10,
     # Seconds a query embedding is cached (a week): type-ahead traffic is
     # Zipfian, and every repeat of a popular misspelling is a cache hit

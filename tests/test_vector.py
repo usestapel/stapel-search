@@ -293,6 +293,45 @@ class TestVectorFallback:
         assert len(fake_embed) == 1
 
 
+class TestKindFloors:
+    """One floor cannot serve two corpora — measured on a live board.
+
+    LaBSE's similarity range differs by corpus: cross-script brand labels
+    separate cleanly around 0.65, while 3.4k short Russian category names
+    put character-overlap accidents («кросовки»~«Креветки») at 0.85. So
+    the floor is kind-aware: ``VECTOR_KIND_FLOORS[kind]`` overrides the
+    global default, and an explicit ``floor`` argument overrides both.
+    """
+
+    def test_a_kind_floor_overrides_the_global(self, db, fake_embed, fake_store):
+        from stapel_search.vector import service
+
+        fake_store.seed(TIMBERLAND_ROW, {**TIMBERLAND_ROW, "kind": "other_kind"})
+        with override_settings(
+            STAPEL_SEARCH={
+                **VECTOR_ON,
+                "VECTOR_SIMILARITY_FLOOR": 0.2,
+                "VECTOR_KIND_FLOORS": {"category": 0.999},
+            }
+        ):
+            hits, _ = service.similar("category", "тимбирленд", language="ru")
+            assert hits == []
+            hits, _ = service.similar("other_kind", "тимбирленд", language="ru")
+        assert [h["text"] for h in hits] == ["Timberland"]
+
+    def test_an_explicit_floor_still_wins(self, db, fake_embed, fake_store):
+        from stapel_search.vector import service
+
+        fake_store.seed(TIMBERLAND_ROW)
+        with override_settings(
+            STAPEL_SEARCH={**VECTOR_ON, "VECTOR_KIND_FLOORS": {"category": 0.999}}
+        ):
+            hits, _ = service.similar(
+                "category", "тимбирленд", language="ru", floor=0.2
+            )
+        assert [h["text"] for h in hits] == ["Timberland"]
+
+
 # ─── The seam to the deterministic normalization layer ──────────────────
 
 

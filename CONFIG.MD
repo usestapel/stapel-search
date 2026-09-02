@@ -111,6 +111,7 @@ request, no cache read.
 | `VECTOR_MODEL` | `"text-embedding-3-small"` | The embedding model. Together with `VECTOR_DIMENSIONS` it forms the model tag `<model>@<dims>` stamped on every stored row and cached query vector — changing either makes the needed re-embed detectable instead of silently wrong. |
 | `VECTOR_DIMENSIONS` | `256` | Matryoshka cut requested from the provider. Short typed strings do not need 1536 dims; 256 keeps 100k vectors around 100MB. |
 | `VECTOR_SIMILARITY_FLOOR` | `0.6` | Below this cosine similarity a hit does not exist. Embeddings degrade into noise gracefully; a dropdown must not. |
+| `VECTOR_KIND_FLOORS` | `{}` | `{kind: floor}` overrides of the global floor. One floor cannot serve two corpora: a model's similarity range depends on what it ranges over — measured live, LaBSE separates cross-script brand labels cleanly around 0.65 while a 3.4k-name Russian category corpus puts character-overlap accidents («кросовки»~«Креветки») at 0.85. Calibrate per corpus on real typos; an explicit `floor` in a `search.similar` payload overrides both. |
 | `VECTOR_TOP_K` | `10` | Neighbours fetched before the floor is applied. |
 | `VECTOR_QUERY_CACHE_TTL` | `604800` | Seconds a query embedding is cached (a week). Type-ahead traffic is Zipfian: every repeat of a popular misspelling is a cache hit instead of a proxied API round trip. |
 | `VECTOR_EMBED_TIMEOUT` | `3` | Hard cap (seconds) on one embedding round trip from the query path. |

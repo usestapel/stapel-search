@@ -4,6 +4,21 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.2] — 2026-09-02
+
+### Fixed — the similarity floor becomes kind-aware
+
+Calibrated on a live board: one floor cannot serve two corpora, because a
+model's similarity range depends on what it is ranging over. LaBSE
+separates cross-script brand-label matches («тимбирленд» → Timberland)
+over a wide gap, but against 3.4k short Russian category names it scores
+character-overlap accidents («кросовки» ~ «Креветки», 0.85) as high as
+real matches — a global floor either drowns the dropdown in accidents or
+starves the corpus where the net actually earns its keep. New
+`VECTOR_KIND_FLOORS` (`{kind: floor}`, default `{}`) overrides
+`VECTOR_SIMILARITY_FLOOR` per corpus; an explicit `floor` in a
+`search.similar` payload still overrides both.
+
 ## [0.10.1] — 2026-09-02
 
 ### Fixed — 0.10.0's wheel did not carry the package 0.10.0 was

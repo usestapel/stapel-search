@@ -139,7 +139,15 @@ def similar(
     if limit is None:
         limit = int(search_settings.VECTOR_TOP_K)
     if floor is None:
-        floor = float(search_settings.VECTOR_SIMILARITY_FLOOR)
+        # One floor cannot serve two corpora (measured live: LaBSE puts
+        # cross-script brand matches near 0.85+ over a wide gap, but a
+        # 3.4k-name Russian category corpus puts character-overlap
+        # accidents at the same height). VECTOR_KIND_FLOORS overrides the
+        # global per corpus; an explicit argument overrides both.
+        kind_floors = search_settings.VECTOR_KIND_FLOORS or {}
+        floor = float(
+            kind_floors.get(kind, search_settings.VECTOR_SIMILARITY_FLOOR)
+        )
     hits = store.search(kind, vector, model_tag=model_tag(), limit=limit)
     return [
         {
