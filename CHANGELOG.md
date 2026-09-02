@@ -4,6 +4,19 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] — 2026-09-02
+
+### Fixed — 0.10.0's wheel did not carry the package 0.10.0 was
+
+Same wound as 0.9.1, one layer down: pyproject's explicit
+`[tool.setuptools] packages` list did not name `stapel_search.vector`, so
+the PUBLISHED 0.10.0 wheel imports fine, boots fine, and raises
+`ModuleNotFoundError` on the first suggest request with a query — for
+every PyPI consumer; a git checkout was unaffected. The package is listed
+now, and `test_every_python_subpackage_ships_in_the_wheel` derives the
+required list from the tree itself, so an explicit list can no longer
+silently under-ship. **Pin `!=0.9.1,!=0.10.0`.**
+
 ## [0.10.0] — 2026-09-02
 
 ### Added — the vector net under the deterministic floor

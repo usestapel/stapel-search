@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-search"
-version = "0.10.0"
+version = "0.10.1"
 description = "Search index, facets, geo-radius and ranking for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -61,6 +61,7 @@ packages = [
     "stapel_search.backends",
     "stapel_search.management",
     "stapel_search.management.commands",
+    "stapel_search.vector",
 ]
 
 [tool.setuptools.package-data]

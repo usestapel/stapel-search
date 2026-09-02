@@ -234,3 +234,27 @@ def test_the_version_matches_pyproject():
 
     data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     assert stapel_search.__version__ == data["project"]["version"]
+
+def test_every_python_subpackage_ships_in_the_wheel():
+    """0.9.1 shipped a call into a package the wheel did not carry, and
+    0.10.0 shipped the package missing from pyproject's explicit
+    ``packages`` list — the same wound twice: a green publish of a wheel
+    that 500s at runtime. The list is explicit for good reasons, so the
+    gate makes it COMPLETE: every directory under the repo root holding an
+    ``__init__.py`` (tests and caches aside) must be named."""
+    import tomllib
+
+    with open(REPO / "pyproject.toml", "rb") as fh:
+        listed = set(tomllib.load(fh)["tool"]["setuptools"]["packages"])
+    expected = {"stapel_search"}
+    skip = {"tests", "e2e", "docs", "build", "dist"}
+    for init in REPO.rglob("__init__.py"):
+        parts = init.relative_to(REPO).parent.parts
+        if not parts or parts[0] in skip or any(p.startswith(".") for p in parts):
+            continue
+        expected.add(".".join(("stapel_search", *parts)))
+    assert listed == expected, (
+        f"pyproject packages drifted from the tree: missing {expected - listed}, "
+        f"stale {listed - expected}"
+    )
+
