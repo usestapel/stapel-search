@@ -380,7 +380,7 @@ class TestSuggestEndToEnd:
 
 # ─── The real store, on a real Postgres with pgvector ───────────────────
 
-from .marks import POSTGRES_URL, requires_postgres  # noqa: E402
+from .marks import requires_postgres  # noqa: E402
 
 
 @requires_postgres
