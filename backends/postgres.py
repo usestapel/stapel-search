@@ -834,24 +834,24 @@ class PostgresSearchBackend:
         matching set, busiest paths first, the array itself breaking ties
         so the answer is stable across plans.
 
-        The typo fallback mirrors :meth:`query`: below
-        ``TYPO_FALLBACK_THRESHOLD`` matching documents the trigram arm runs
-        too, because the SERP a tap opens would widen the same way and the
-        dropdown must not disagree with the page it predicts.
+        STRICT arm only — no trigram fallback, and that asymmetry with
+        :meth:`query` is deliberate (0.10.3; the conformance scenario
+        ``goods_suggestions_do_not_guess`` pins it). The SERP may widen a
+        near-miss and can say so on the page; a suggestion row has no room
+        for the caveat — it is a promise with a count on it, and on a live
+        stand the widened arm offered an unrelated category as the
+        confident top destination for a brand-word typo. A query the strict
+        predicate cannot match yields no goods rows; the terms half and the
+        SERP's own typo tolerance still catch the buyer.
         """
         self._require_postgres()
-        from ..conf import search_settings
         from ..text import normalize_query
 
         text = normalize_query(query, language)
         if text.is_empty:
             return []
         q = SearchQuery(doc_type=doc_type, language=language, text=text)
-        pairs = self._category_groups(q, trigram=False, limit=limit)
-        matched = sum(count for _path, count in pairs)
-        if matched < int(search_settings.TYPO_FALLBACK_THRESHOLD) and self.has_trigram():
-            pairs = self._category_groups(q, trigram=True, limit=limit)
-        return pairs
+        return self._category_groups(q, trigram=False, limit=limit)
 
     def _category_groups(
         self, q: SearchQuery, *, trigram: bool, limit: int

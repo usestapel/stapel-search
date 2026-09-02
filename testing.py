@@ -747,6 +747,29 @@ def _s_suggest_categories_from_goods(ctx: Context) -> None:
     assert fn(DOC_TYPE, "квадрокоптер", language="ru", limit=5) == []
 
 
+def _s_goods_suggestions_do_not_guess(ctx: Context) -> None:
+    """A near-miss query yields NO goods pairs — a misspelling is the SERP's
+    business to widen, never a destination to promise.
+
+    The live incident (a classified stand): a brand word that strictly
+    matched nothing brushed real titles through the typo arm, and the
+    dropdown offered an unrelated category as a confident destination with
+    a confident count. The SERP may widen a near-miss — the page can say
+    "showing results for a similar spelling" — but a suggestion row has no
+    room for that caveat: it is a promise, so it may only be built from the
+    strict predicate. «gaalxy» below is one transposition off a corpus
+    title; a strict text predicate misses it, a trigram arm brushes it.
+    """
+    fn = getattr(ctx.backend, "suggest_categories", None)
+    if fn is None:
+        raise ConformanceSkip("suggest_categories")
+    pairs = fn(DOC_TYPE, "gaalxy", language="ru", limit=5)
+    assert pairs == [], (
+        f"a near-miss spelling produced goods suggestions {pairs!r} — "
+        "the typo widening belongs to the SERP, not to a promised destination"
+    )
+
+
 def _s_capabilities_are_declared(ctx: Context) -> None:
     caps = ctx.capabilities
     assert isinstance(caps.max_result_window, int) and caps.max_result_window > 0
@@ -856,6 +879,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         "suggest_categories",
         _s_suggest_categories_from_goods,
         "the optional goods-driven verb answers the SERP's own counts",
+    ),
+    Scenario(
+        "goods_suggestions_do_not_guess",
+        _s_goods_suggestions_do_not_guess,
+        "a near-miss spelling promises no destination",
     ),
     Scenario("capabilities_are_declared", _s_capabilities_are_declared, "the seam is described"),
     Scenario("health", _s_health, "the engine reports itself"),
