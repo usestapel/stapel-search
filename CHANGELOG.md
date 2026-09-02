@@ -4,6 +4,29 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.4] — 2026-09-02
+
+### Fixed — the goods verb broke the count law on Postgres; 0.10.3 shipped it red
+
+The strict-predicate fix that stopped a brand-word typo from being offered
+an unrelated category (`goods_suggestions_do_not_guess`) collided with the
+older law the same verb lives under: the count on an offered row is the
+count the tap will show (`suggest_categories`), and the tap's query()
+widens through the trigram arm below `TYPO_FALLBACK_THRESHOLD`. On
+Postgres the two scenarios could not both pass, main went red, and the
+v0.10.3 wheel carries the collision. Reconciled by splitting the two
+promises the verb was conflating:
+
+- **WHICH** categories may be offered is the strict predicate's answer
+  alone — a near-miss still nominates nothing;
+- **THE COUNT** on each strictly-nominated path is re-answered by exactly
+  query()'s own decision procedure for that (text, category) request —
+  strict at or above the threshold, the trigram arm's grouped count below
+  it, and a path whose faithful count lands on zero is dropped, because a
+  promise of zero goods is not a destination.
+
+Both conformance scenarios pass on naive and on a real Postgres 16.
+
 ## [0.10.3] — 2026-09-02
 
 ### Fixed — the store takes its promised growth step at 73k vectors
