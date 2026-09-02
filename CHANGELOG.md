@@ -4,6 +4,31 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] — 2026-09-03
+
+### Added
+
+- Every category suggestion now carries **its own destination**: `count_scope`
+  (`category` | `query_in_category`) and `query`, the exact `/query`
+  parameters the row's `count` was computed for. Send them verbatim.
+
+### Fixed
+
+- **A suggestion's count promised a page the tap never opened.** The two row
+  kinds count different things — a NAME row is a place and its count ignores
+  the typed text; a goods-driven (`listings`) row is «where your words lead»
+  and its count is already text-conditioned — and the answer did not say
+  which. A storefront reading it had one rule for both. On the darom/ruberi
+  stand it appended the query to every link, so «Одежда, обувь, аксессуары ·
+  2» opened `?category=140/145&q=одежда` and showed NOTHING (no listing under
+  that category spells the category's own name), and «Телефоны · 47» opened a
+  page with 3. Both existing gates passed throughout: each hard-coded the
+  destination its own row kind assumes, so between them they proved every
+  arithmetic and nothing about the seam.
+  `test_every_row_count_is_the_count_of_the_page_it_opens` is the replacement
+  gate — it follows what the ROW declares, for every kind of row present and
+  future.
+
 ## [0.10.5] — 2026-09-02
 
 Patch (additive): `services.reconcile` + `manage.py search_reconcile`.

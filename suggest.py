@@ -18,16 +18,29 @@ no opinion here about what "excluded" means. This module owns the query
 language and hands over already-normalized terms; that module owns the
 catalogue and hands back nodes.
 
-**2. The count is the SERP's count, not a number that resembles it.** The
-whole value of the row is that «Мужская одежда › Шорты · 128» predicts what
-the next page shows. So the count is taken over the same index, with the
-same two predicates a SERP starts from (``doc_type`` and ``visible``) and
-the same category rule the SERP's ``category=`` filter applies — a path
-PREFIX, so a parent counts its descendants. ``tests/test_suggest.py::
-test_suggest_count_equals_the_serp_count`` is the gate: it asks this
-module for the count and the query endpoint for the same category, and
-fails if they disagree. Code that merely looks like the SERP's would pass
-review; only that assertion proves it.
+**2. The count is the SERP's count, not a number that resembles it, AND the
+row says which SERP.** The whole value of the row is that «Мужская одежда ›
+Шорты · 128» predicts what the next page shows. So the count is taken over
+the same index, with the same two predicates a SERP starts from
+(``doc_type`` and ``visible``) and the same category rule the SERP's
+``category=`` filter applies — a path PREFIX, so a parent counts its
+descendants.
+
+That arithmetic was right and still shipped a lie, because the two row kinds
+count different things and the answer did not say so. A NAME row is a place:
+its number ignores the typed text. A goods-driven row (``listings``) is
+«where your words lead»: its number is already text-conditioned. A storefront
+had one rule for both, appended the query to every row's link, and «Одежда,
+обувь, аксессуары · 2» opened an EMPTY page — no listing under it spells the
+category's own name. Both of the older gates passed throughout, each having
+hard-coded the destination its own row kind assumes.
+
+So since 0.11.0 every row carries :func:`destination` — ``count_scope`` and a
+``query`` mapping of the exact ``/query`` parameters its count was computed
+for. ``tests/test_suggest.py::
+test_every_row_count_is_the_count_of_the_page_it_opens`` is the gate that
+means something: it follows what the ROW declares, for every kind of row,
+and fails when a count and its own destination disagree.
 
 **3. Counting is one aggregate, ever.** ``GROUP BY category_path`` over the
 index, once, then a prefix rollup in Python — never one count per
@@ -104,6 +117,34 @@ MATCH_QUALITY: tuple[str, ...] = ("exact", "prefix", "word", "listings", "substr
 
 #: The grade a goods-driven row carries.
 LISTINGS_MATCH = "listings"
+
+#: What a row's ``count`` counted, and therefore which page its ``query``
+#: opens. The two row kinds mean different things by the number, and until
+#: 0.11.0 the answer never said which — so a storefront had one rule for
+#: both and it was wrong for one of them. See :func:`destination`.
+COUNT_SCOPE_CATEGORY = "category"
+COUNT_SCOPE_QUERY_IN_CATEGORY = "query_in_category"
+
+
+def destination(category: str, *, q: str = "") -> dict[str, str]:
+    """The ``/query`` parameters a row's ``count`` was computed for.
+
+    A row is a promise: "follow me and you will see this many". Keeping the
+    promise means the answer, not the storefront, decides what to send —
+    ``category`` alone for a place, ``category`` plus ``q`` for a
+    goods-driven row whose number is already text-conditioned. A frontend
+    that assembles its own parameters is guessing, and on a live stand it
+    guessed wrong for every name row: «Одежда, обувь, аксессуары · 2» was
+    followed to ``?category=140/145&q=одежда`` and opened an EMPTY page,
+    because no listing under it spells the category's own name.
+
+    Returned as a mapping rather than a URL on purpose: this module owns the
+    query language, not the storefront's routing.
+    """
+    params = {"category": category}
+    if q:
+        params["q"] = q
+    return params
 
 #: The STRONG name grades: the query is the name, starts it, or starts a
 #: word inside it. This is the class boundary of the ranking — see
@@ -328,6 +369,11 @@ def _listing_rows(
                 "path": list(path_ids),
                 "category": "/".join(path_ids),
                 "count": int(count),
+                # The engine counted this row WITH the text predicate, so the
+                # destination keeps the query: it is «where your words lead»,
+                # not «what is stocked here».
+                "count_scope": COUNT_SCOPE_QUERY_IN_CATEGORY,
+                "query": destination("/".join(path_ids), q=q),
                 "depth": len(path_ids),
                 "match": LISTINGS_MATCH,
             }
@@ -483,6 +529,12 @@ def suggest_categories(
                     # frontend cannot invent a different join and silently miss.
                     "category": "/".join(path_ids),
                     "count": counts.get(tuple(path_ids), 0),
+                    # A name row is a PLACE, and `counts` is the stock of the
+                    # place — doc_type + visible + the path prefix, no text
+                    # predicate. So the destination carries no text either,
+                    # or the number describes a page the tap never opens.
+                    "count_scope": COUNT_SCOPE_CATEGORY,
+                    "query": destination("/".join(path_ids)),
                     "depth": int(candidate.get("depth") or len(path_ids)),
                     "match": candidate.get("match") or "substring",
                 }
@@ -513,11 +565,14 @@ def suggest_categories(
 
 
 __all__ = [
+    "COUNT_SCOPE_CATEGORY",
+    "COUNT_SCOPE_QUERY_IN_CATEGORY",
     "LISTINGS_MATCH",
     "MATCH_QUALITY",
     "STRONG_NAME_MATCHES",
     "category_counts",
     "counts_cache_key",
+    "destination",
     "invalidate_counts",
     "query_terms",
     "suggest_categories",

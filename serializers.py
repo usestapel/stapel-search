@@ -172,6 +172,25 @@ class CategorySuggestionSerializer(serializers.Serializer):
         "`listings`-graded row: how many of them match the typed query, which "
         "is the count a `?q=…&category=…` tap will show.",
     )
+    count_scope = serializers.ChoiceField(
+        choices=["category", "query_in_category"],
+        help_text="What `count` counted. `category`: everything live under "
+        "this category, the typed text ignored — the row is a PLACE. "
+        "`query_in_category`: only the documents matching the typed text, "
+        "which is what a `listings`-graded row is about. The two are "
+        "different numbers about different pages, which is why the row says "
+        "which one it is instead of leaving a storefront to guess.",
+    )
+    query = serializers.DictField(
+        child=serializers.CharField(),
+        help_text="The /query parameters this row's `count` was computed for "
+        "— send them VERBATIM (plus your own `type`/`lang`/paging) when the "
+        "buyer follows the row. Always carries `category`; carries `q` only "
+        "when `count_scope` is `query_in_category`. Assembling these "
+        "yourself re-opens the defect this field exists to close: a place "
+        "row followed with the typed text opens an empty page while its "
+        "count promised stock.",
+    )
     depth = serializers.IntegerField(help_text="Number of segments in `path`.")
     match = serializers.ChoiceField(
         choices=["exact", "prefix", "word", "substring", "listings", "vector"],

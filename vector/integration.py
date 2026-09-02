@@ -36,7 +36,7 @@ def augment_category_suggestions(
     if not enabled():
         return rows, degraded
 
-    from ..suggest import _FIRST_CLASS, category_counts
+    from ..suggest import COUNT_SCOPE_CATEGORY, _FIRST_CLASS, category_counts, destination
 
     if any(str(row.get("match")) in _FIRST_CLASS for row in rows):
         return rows, degraded
@@ -67,6 +67,11 @@ def augment_category_suggestions(
                 "path": list(payload.get("path") or []),
                 "category": category,
                 "count": counts.get(tuple(path_ids), 0),
+                # A neighbour in embedding space is still a PLACE, and the
+                # count is the place's stock — same scope, same query-free
+                # destination as a name row (``suggest.destination``).
+                "count_scope": COUNT_SCOPE_CATEGORY,
+                "query": destination(category),
                 "depth": int(payload.get("depth") or len(path_ids)),
                 "match": "vector",
                 "similarity": hit["similarity"],

@@ -780,3 +780,89 @@ def test_a_changed_answer_changes_the_etag(api_client, shorts, provider):
     )
     after = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "шорты", "lang": "ru"})["ETag"]
     assert before != after
+
+
+# --------------------------------------------------------------------------
+# the destination the row itself declares (0.11.0)
+# --------------------------------------------------------------------------
+
+
+def _follow(api_client, row, *, doc_type, language):
+    """Run /query with EXACTLY the parameters the row declares, and count."""
+    params = {"type": doc_type, "lang": language, "facets": "off", **row["query"]}
+    return api_client.get(QUERY, params).json()["count"]
+
+
+def test_a_name_row_declares_a_query_free_destination(api_client, shorts, provider):
+    """A name row is a PLACE. Its count is the place's stock, so its
+    destination must not carry the typed text.
+
+    The live defect this closes: «одежда» offered «Одежда, обувь,
+    аксессуары · 2», the storefront followed it to `?category=…&q=одежда`,
+    and the page was EMPTY — no listing spells the category's own name in
+    its title. The count was honest about a page the tap never opened.
+    """
+    provider.answers_with(CLOTHES)
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "одежда", "lang": "ru"}).json()
+
+    row = body["categories"][0]
+    assert row["count_scope"] == "category"
+    assert row["query"] == {"category": "46"}, "a place is not a text query"
+
+
+def test_a_goods_row_declares_a_destination_that_keeps_the_query(
+    api_client, samsung_stock, provider
+):
+    """A goods row is «where your words lead», so its destination keeps them.
+
+    The two row kinds mean different things by `count`, and before 0.11.0
+    the answer never said which — so one storefront rule had to be wrong for
+    one of them. The row now carries its own parameters.
+    """
+    provider.answers_with()
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    rows = body["categories"]
+    assert rows
+    for row in rows:
+        assert row["count_scope"] == "query_in_category"
+        assert row["query"] == {"category": row["category"], "q": "samsung"}
+
+
+@pytest.mark.parametrize(
+    "stock,answers,q",
+    [
+        ("shorts", (MENS, WOMENS, KIDS, CLOTHES), "шорты"),
+        ("shorts", (CLOTHES,), "одежда"),
+        ("samsung_stock", (), "samsung"),
+    ],
+)
+def test_every_row_count_is_the_count_of_the_page_it_opens(
+    api_client, request, provider, stock, answers, q
+):
+    """THE gate, and the one the two older ones could not be.
+
+    ``test_suggest_count_equals_the_serp_count`` follows a name row with no
+    ``q``; ``test_a_goods_row_count_is_the_serp_count`` follows a goods row
+    WITH ``q``. Each hard-codes the destination its own row kind assumes, so
+    between them they prove every arithmetic and nothing about the seam: a
+    storefront reading the answer has no field telling it which rule applies
+    and must guess — and the guess it made on the stand was wrong for every
+    name row.
+
+    This one follows what the ROW declares. It fails on any row whose
+    ``query`` does not open the page its ``count`` promises, whatever kind
+    of row it is and whatever kinds are added later.
+    """
+    request.getfixturevalue(stock)
+    provider.answers_with(*answers)
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": q, "lang": "ru"}).json()
+
+    assert body["categories"], "nothing to prove"
+    for row in body["categories"]:
+        assert _follow(api_client, row, doc_type=DOC_TYPE, language="ru") == row["count"], (
+            row["category"],
+            row["match"],
+            row["query"],
+        )
