@@ -97,6 +97,32 @@ lone event until the next one arrived, trading the ≤5s freshness target for a
 saving the keyed-batch pull already provides on rebuild. Signals are indexed
 on delivery.
 
+## Vector similarity (flag-gated; default off)
+
+The net under the deterministic floor: on a suggest miss the query is
+embedded through the fleet's embedding seam and cosine-matched against the
+registered corpora (`vector/`). Off means off — byte-identical answers, no
+request, no cache read.
+
+| key | default | what it decides |
+|---|---|---|
+| `VECTOR_SUGGEST` | `False` | The master switch. Off, the suggest answer is byte-identical to a deployment without the layer, and `search.similar` answers `degraded: ["vector_disabled"]`. |
+| `VECTOR_EMBED_FUNCTION` | `"llm.embed"` | Comm name of the embedding Function (stapel-agent's provider seam). API keys, base URLs and proxies live behind THAT seam, never here. |
+| `VECTOR_MODEL` | `"text-embedding-3-small"` | The embedding model. Together with `VECTOR_DIMENSIONS` it forms the model tag `<model>@<dims>` stamped on every stored row and cached query vector — changing either makes the needed re-embed detectable instead of silently wrong. |
+| `VECTOR_DIMENSIONS` | `256` | Matryoshka cut requested from the provider. Short typed strings do not need 1536 dims; 256 keeps 100k vectors around 100MB. |
+| `VECTOR_SIMILARITY_FLOOR` | `0.6` | Below this cosine similarity a hit does not exist. Embeddings degrade into noise gracefully; a dropdown must not. |
+| `VECTOR_TOP_K` | `10` | Neighbours fetched before the floor is applied. |
+| `VECTOR_QUERY_CACHE_TTL` | `604800` | Seconds a query embedding is cached (a week). Type-ahead traffic is Zipfian: every repeat of a popular misspelling is a cache hit instead of a proxied API round trip. |
+| `VECTOR_EMBED_TIMEOUT` | `3` | Hard cap (seconds) on one embedding round trip from the query path. |
+| `VECTOR_QUERY_NORMALIZER` | `"stapel_search.vector.seam.fold_normalizer"` | The seam to the deterministic normalization layer: dotted path of a `Callable[[str, str], str]` — `(raw query, language) -> canonical string`, used as both embedding input and cache key. Point it at the shared translit/alias canon when that layer exports one. |
+| `VECTOR_CORPORA` | `{}` | MERGE registry `{kind: dotted path}` of zero-arg providers yielding `{"key", "text", "payload"}`. Empty by design (the `SOURCES` rule): the composite that knows categories and vocabularies declares the entries. Build/refresh with `manage.py search_vector_index` (`--estimate` prices the corpus first). |
+
+The store is Postgres + the `pgvector` extension; the metadata table exists
+everywhere (migration `0003`), the `vector` column only where the extension
+does. Without it the layer degrades to `degraded: ["vector_suggestions"]`
+and `stapel_search.W009` says so at boot — same posture as every other
+engine difference.
+
 ## Meilisearch (read only by that backend)
 
 | key | default | what it decides |

@@ -171,7 +171,7 @@ def test_no_emitted_event_is_declared_without_an_emitter():
 
 def test_every_provided_function_carries_a_schema():
     provided = {p.stem for p in (REPO / "schemas" / "functions").glob("*.json")}
-    assert provided == {"search.query", "search.reindex"}
+    assert provided == {"search.query", "search.reindex", "search.similar"}
 
 
 # --- public API pin ---------------------------------------------------------

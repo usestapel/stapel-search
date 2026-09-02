@@ -118,6 +118,42 @@ DEFAULTS = {
     # Largest `limit` a suggest request may ask for.
     "MAX_SUGGEST_LIMIT": 25,
     "DEFAULT_SUGGEST_LIMIT": 10,
+    # --- vector similarity (flag-gated; default OFF) ----------------------
+    # The net under the deterministic floor: on a suggest miss the query is
+    # embedded (through the fleet's `llm.embed` seam) and cosine-matched
+    # against the corpora registered in VECTOR_CORPORA. Off means off:
+    # byte-identical answers, no request, no cache read. See vector/.
+    "VECTOR_SUGGEST": False,
+    # Comm name of the embedding Function (stapel-agent's provider seam).
+    # Keys, base URLs and proxies live THERE, never here.
+    "VECTOR_EMBED_FUNCTION": "llm.embed",
+    # The embedding space, jointly: <model> at <dimensions> is stamped on
+    # every stored row and every cached query vector as `<model>@<dims>`,
+    # so changing either makes the needed re-embed DETECTABLE (searches
+    # filter by tag and find nothing) instead of silently wrong.
+    # text-embedding-3-small at 256 (matryoshka cut): short typed strings
+    # do not need 1536 dims, and 256 keeps 100k vectors ~100MB.
+    "VECTOR_MODEL": "text-embedding-3-small",
+    "VECTOR_DIMENSIONS": 256,
+    # Below this cosine similarity a hit does not exist. Embeddings degrade
+    # into noise gracefully; a dropdown must not.
+    "VECTOR_SIMILARITY_FLOOR": 0.6,
+    "VECTOR_TOP_K": 10,
+    # Seconds a query embedding is cached (a week): type-ahead traffic is
+    # Zipfian, and every repeat of a popular misspelling is a cache hit
+    # instead of a proxied API round trip.
+    "VECTOR_QUERY_CACHE_TTL": 604800,
+    # Hard cap (seconds) on one embedding round trip from the query path.
+    "VECTOR_EMBED_TIMEOUT": 3,
+    # The seam to the deterministic normalization layer: dotted path of a
+    # Callable[[str, str], str] (raw query, language) -> canonical string,
+    # used as both embedding input and cache key. Point it at the shared
+    # translit/alias canon when that layer exports one.
+    "VECTOR_QUERY_NORMALIZER": "stapel_search.vector.seam.fold_normalizer",
+    # MERGE registry {kind: dotted path of a zero-arg provider yielding
+    # {"key", "text", "payload"}}. Empty by design (the SOURCES rule):
+    # the composite that knows categories and vocabularies declares these.
+    "VECTOR_CORPORA": {},
     # --- HTTP ------------------------------------------------------------
     "QUERY_THROTTLE": "120/min",
     "SUGGEST_THROTTLE": "300/min",

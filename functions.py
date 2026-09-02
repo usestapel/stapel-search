@@ -54,4 +54,33 @@ def reindex_function(payload: dict) -> dict:
     }
 
 
-__all__ = ["query_function", "reindex_function"]
+@function("search.similar", schema=_schema("search.similar"))
+def similar_function(payload: dict) -> dict:
+    """Vector neighbours of a query in one registered corpus.
+
+    The door a sibling module's type-ahead knocks on when its own
+    deterministic matching came back thin: stapel-vocabularies asks
+    ``{"kind": "vocab_label", "q": "тимбирленд"}`` and gets the labels an
+    embedding space places next to the typo, floor applied, best first.
+    The caller maps labels back onto its own rows — this module never
+    learns what a vocabulary is.
+
+    Flag-gated like the rest of the layer: OFF answers
+    ``degraded: ["vector_disabled"]`` without paying for an embedding, so
+    a caller can leave its side wired and follow this module's switch.
+    """
+    from .vector import service
+
+    if not service.enabled():
+        return {"results": [], "degraded": ["vector_disabled"]}
+    hits, shortfall = service.similar(
+        payload["kind"],
+        payload["q"],
+        language=str(payload.get("language") or ""),
+        limit=payload.get("limit"),
+        floor=payload.get("floor"),
+    )
+    return {"results": hits, "degraded": [shortfall] if shortfall else []}
+
+
+__all__ = ["query_function", "reindex_function", "similar_function"]

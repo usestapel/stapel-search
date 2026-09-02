@@ -383,7 +383,7 @@
                 "$ref": "#/components/schemas/MatchEnum"
               }
             ],
-            "description": "How the row earned its place: the four name grades from `categories.suggest`, or `listings` — a goods-driven row, offered because documents matching the query live there even though no category name says the word. Ranking: strong grades (exact/prefix/word) and `listings` sort as one class above `substring`; within a class, stocked before empty, then grade, then count desc, then depth, then name.\n\n* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings"
+            "description": "How the row earned its place: the four name grades from `categories.suggest`, or `listings` — a goods-driven row, offered because documents matching the query live there even though no category name says the word. Ranking: strong grades (exact/prefix/word) and `listings` sort as one class above `substring`; within a class, stocked before empty, then grade, then count desc, then depth, then name. `vector` rows — embedding-space neighbours offered when nothing first-class matched — always sit below every deterministic row, ordered by similarity.\n\n* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings\n* `vector` - vector"
           }
         },
         "required": [
@@ -512,10 +512,11 @@
           "prefix",
           "word",
           "substring",
-          "listings"
+          "listings",
+          "vector"
         ],
         "type": "string",
-        "description": "* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings"
+        "description": "* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings\n* `vector` - vector"
       },
       "RankingResponse": {
         "type": "object",

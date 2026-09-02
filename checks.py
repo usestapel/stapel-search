@@ -404,3 +404,76 @@ __all__ = [
     "check_sources",
     "check_truncated_terms",
 ]
+
+@checks.register("stapel_search")
+def check_vector_layer(app_configs, **kwargs):
+    """W009: VECTOR_SUGGEST is on but the layer cannot actually answer.
+
+    Three legs, each reported by name: the pgvector store (extension +
+    column), the embedding Function (``VECTOR_EMBED_FUNCTION``), and at
+    least one registered corpus. A flag that is on while any leg is
+    missing means every fallback quietly answers nothing and every answer
+    carries ``degraded: ["vector_suggestions"]`` — working as designed for
+    an outage, wrong as a permanent state.
+    """
+    from .conf import search_settings
+    from .vector import corpus, service
+
+    if not service.enabled():
+        return []
+    findings = []
+    from .vector import store
+
+    try:
+        store_ok = store.available()
+    except Exception:  # noqa: BLE001 - no database at check time
+        return []
+    if not store_ok:
+        findings.append(
+            checks.Warning(
+                "VECTOR_SUGGEST is on but the pgvector store is unavailable "
+                "(Postgres with CREATE EXTENSION vector, then "
+                "`manage.py search_vector_index`).",
+                hint="Install the extension and rebuild, or turn the flag off.",
+                id="stapel_search.W009",
+            )
+        )
+    from stapel_core.comm import function_unreachable_reason
+
+    name = search_settings.VECTOR_EMBED_FUNCTION
+    try:
+        reason = function_unreachable_reason(name)
+    except Exception:  # noqa: BLE001 - comm not configured yet at check time
+        reason = None
+    if reason:
+        findings.append(
+            checks.Warning(
+                f"VECTOR_SUGGEST is on but the embedding Function {name!r} is "
+                f"unreachable ({reason}).",
+                hint="Point VECTOR_EMBED_FUNCTION at a reachable provider "
+                     "(stapel-agent's llm.embed).",
+                id="stapel_search.W009",
+            )
+        )
+    try:
+        registered = corpus.providers()
+    except Exception as exc:  # noqa: BLE001 - a bad dotted path is the finding
+        registered = None
+        findings.append(
+            checks.Warning(
+                f"VECTOR_CORPORA does not resolve: {exc}",
+                id="stapel_search.W009",
+            )
+        )
+    if registered == {}:
+        findings.append(
+            checks.Warning(
+                "VECTOR_SUGGEST is on but VECTOR_CORPORA is empty — there is "
+                "nothing to search.",
+                hint="Register corpus providers (the composite declares them, "
+                     "like SOURCES).",
+                id="stapel_search.W009",
+            )
+        )
+    return findings
+

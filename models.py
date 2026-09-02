@@ -197,4 +197,48 @@ class SearchSignal(models.Model):
         return f"{self.doc_type}:{self.doc_key} {self.kind}={self.value}"
 
 
-__all__ = ["SearchDocument", "SearchNumber", "SearchSignal"]
+
+
+@access.ops  # derived rows: rebuilt from the corpora, never hand-edited
+class VectorEmbedding(models.Model):
+    """Metadata half of the vector store — one row per embedded string.
+
+    The ``embedding`` column itself is NOT here: it is an extension type
+    (pgvector), added by migration ``0003`` only where the extension
+    exists and touched only by ``vector/store.py``'s raw SQL. This model
+    carries what every deployment can carry — which string, of which
+    corpus, embedded under which model tag — so admin, counts and pruning
+    work even where the vectors cannot.
+    """
+
+    #: Corpus name from ``VECTOR_CORPORA`` («category», «vocab_label», ...).
+    kind = models.CharField(max_length=32)
+    #: Stable id within the kind — a pk, or a hash of the folded text.
+    key = models.CharField(max_length=160)
+    #: The exact string that was embedded.
+    text = models.TextField()
+    #: What a consumer needs to render a row from a bare hit.
+    payload = models.JSONField(default=dict, blank=True)
+    #: ``<model>@<dims>`` — the embedding SPACE this row lives in. A tag
+    #: mismatch is how a needed re-embed is detected, never searched across.
+    model_tag = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "search_vector_embedding"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "key"], name="search_vector_kind_key_uniq"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["kind", "model_tag"], name="search_vector_kind_tag_idx"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind}:{self.key} ({self.model_tag})"
+
+
+__all__ = ["SearchDocument", "SearchNumber", "SearchSignal", "VectorEmbedding"]

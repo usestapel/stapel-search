@@ -4,6 +4,65 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] — 2026-09-02
+
+### Added — the vector net under the deterministic floor
+
+«тимбирленд» is not a prefix of «Timberland», not a substring, and no
+transliteration table maps one onto the other — it is a phonetic spelling,
+the class of query every deterministic layer (fold, synonyms, translit,
+trigram) misses in its own honest way. An embedding space catches it,
+because closeness there is learned from how people actually spell things.
+New `vector/` package, flag-gated and OFF by default — off means off:
+byte-identical answers, no request, no cache read.
+
+- **Storage: pgvector, behind an honest gate.** One metadata table
+  (`search_vector_embedding`, migration `0003`) exists everywhere; the
+  `vector` column and every piece of SQL touching it exist only where the
+  extension does (`vector/store.py`, raw SQL — no driver dependency, no
+  ORM field). Untyped column + a `<model>@<dims>` tag on every row: two
+  embedding spaces can coexist during a re-embed and are never compared,
+  and changing the model makes the needed re-embed DETECTABLE. Exact
+  cosine scans — perfect recall, single-digit ms at the intended corpus
+  (10³–10⁵ short strings); the ANN growth step is one module's change.
+  Without the extension: `degraded: ["vector_suggestions"]` and
+  `stapel_search.W009` at boot, the usual posture.
+- **Embeddings by comm name** (`VECTOR_EMBED_FUNCTION` → `llm.embed`,
+  stapel-agent's provider seam): no HTTP client, key or proxy here. Query
+  embeddings are cached a week under the NORMALIZED query — type-ahead
+  traffic is Zipfian; every repeat of a popular misspelling is a cache
+  hit, not a proxied round trip.
+- **The normalizer is a seam, not a copy** (`VECTOR_QUERY_NORMALIZER`,
+  `vector/seam.py`): `(raw query, language) -> canonical string`, used as
+  both embedding input and cache key. Defaults to a `text.fold` wrapper;
+  point it at the shared translit/alias canon when that layer exports a
+  single-string form.
+- **Suggest integration, below everything.** Vector rows are considered
+  only when NO first-class row exists (the goods-driven fallback's own
+  trigger), appended under whatever determinism produced, graded
+  `match: "vector"` — a grade the ranking already sorts last-class, so
+  the two layers cannot disagree about precedence. A destination already
+  offered is never offered twice; the similarity floor
+  (`VECTOR_SIMILARITY_FLOOR`) turns nearest-garbage into nothing.
+- **`search.similar`** — the comm door for sibling modules
+  (stapel-vocabularies' term typeahead): `{kind, q, language?, limit?,
+  floor?}` → `{results: [{key, text, payload, similarity}], degraded}`.
+  Flag off answers `degraded: ["vector_disabled"]` without paying for an
+  embedding, so a caller can stay wired and follow this module's switch.
+- **`VECTOR_CORPORA`** — MERGE registry `{kind: provider dotted path}`,
+  empty by design (the `SOURCES` rule): the composite that knows
+  categories and vocabularies declares the entries.
+  `manage.py search_vector_index` builds the store; `--estimate` prices
+  the corpus BEFORE any request is made.
+
+### Fixed — 0.9.1 shipped half of this feature's wiring
+
+The 0.9.1 release commit carried the `services.suggest` call into
+`stapel_search.vector` without the package (a concurrent-release seam
+defect in our own tree): on 0.9.1 every suggest request WITH a query
+raises `ModuleNotFoundError`. 0.9.1 is superseded the hour it appeared;
+pin `!=0.9.1`.
+
 ## [0.9.1] — 2026-09-02
 
 ### Fixed — «айфон» suggested plumbing siphons; «samsung» suggested nothing

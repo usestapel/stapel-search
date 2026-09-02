@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "search.similar",
+  "description": "Vector-similarity lookup over one registered corpus (VECTOR_CORPORA kind). Embeds the query through the fleet's embedding seam (cached) and answers cosine neighbours above VECTOR_SIMILARITY_FLOOR, best first. Flag-gated: with VECTOR_SUGGEST off the answer is {results: [], degraded: [\"vector_disabled\"]}; a deployment without pgvector or without a reachable embedder answers {results: [], degraded: [\"vector_suggestions\"]} — declared, never absorbed.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Corpus kind, a key of STAPEL_SEARCH['VECTOR_CORPORA'] (e.g. 'category', 'vocab_label')."
+    },
+    "q": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The raw user query. Normalization (VECTOR_QUERY_NORMALIZER) happens inside — callers never pre-fold."
+    },
+    "language": {
+      "type": "string",
+      "description": "Language hint handed to the query normalizer."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "description": "Top-k before the floor (default VECTOR_TOP_K)."
+    },
+    "floor": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Cosine similarity floor overriding VECTOR_SIMILARITY_FLOOR."
+    }
+  },
+  "required": ["kind", "q"],
+  "additionalProperties": false
+}
