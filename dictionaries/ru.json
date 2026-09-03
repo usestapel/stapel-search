@@ -1,7 +1,7 @@
 {
-  "version": 2,
+  "version": 3,
   "language": "ru",
-  "_comment": "Contract data, not code: shipped in the wheel and extended through STAPEL_SEARCH['DICTIONARIES']. `equivalents` are symmetric groups (any member expands to the whole group) — the only form both shipped engines understand natively. `rewrites` normalize the QUERY only, never the index. `stopwords` are removed from the query only: a corpus indexed without them can only be repaired by reindexing everything. The brand groups exist because transliteration cannot reach them: a Russian buyer types the brand as it SOUNDS (эпл, ксиоми, реалми), and no letter table turns `эпл` into `apple` — `stapel_search.text.transliterate` produces `epl`. Every member is a form measured on a live board, not a guess.",
+  "_comment": "Contract data, not code: shipped in the wheel and extended through STAPEL_SEARCH['DICTIONARIES']. `equivalents` are symmetric groups (any member expands to the whole group) — the only form both shipped engines understand natively. `rewrites` normalize the QUERY only, never the index. `stopwords` are removed from the query only: a corpus indexed without them can only be repaired by reindexing everything. The brand groups exist because transliteration cannot reach them: a Russian buyer types the brand as it SOUNDS (эпл, ксиоми, реалми), and no letter table turns `эпл` into `apple` — `stapel_search.text.transliterate` produces `epl`. Every member is a form measured on a live board, not a guess. The `брюки`/`штаны` pair is the same rule applied to a CATEGORY word rather than a brand: on the 2026-09-03 labelled eval «красные штаны» scored 0.10 recall under every condition because «штаны»~«Брюки» is 0.784 in the embedding space — below any floor that is safe to apply — and no letter table reaches it either. The colour half resolved fine; the category half is what failed.",
   "equivalents": [
     [
       "iphone",
@@ -152,6 +152,10 @@
       "airpods",
       "аирподс",
       "эйрподс"
+    ],
+    [
+      "брюки",
+      "штаны"
     ]
   ],
   "rewrites": {

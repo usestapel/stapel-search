@@ -17,7 +17,7 @@ from the owner's snapshot Function, and ``drift_check``.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
@@ -997,6 +997,54 @@ def _apply_extraction(q, extraction):
     )
 
 
+#: Marker for an extraction that was undone because it emptied the page.
+UNDERSTANDING_WITHDRAWN = "understanding_withdrawn"
+
+
+def _unextract_if_empty(q, unextracted, extraction, result, backend, plan):
+    """Undo the extraction when its filters left nothing to show.
+
+    An extracted filter is a GUESS about what a reader meant, and the one
+    outcome that proves the guess wrong is an empty page over a catalogue
+    that is not empty. Falling back to the plain text search is the single
+    measured win of the 2026-09-03 labelled eval: recall@10 +0.057, paired
+    bootstrap CI [+0.011, +0.125], P(gain) = 1.00 — larger than anything
+    embedding listing titles bought, and free.
+
+    Only on the FIRST page: a cursor mid-walk names an anchor inside a
+    population, and quietly changing the population underneath it would
+    repeat or skip rows rather than rescue the reader.
+
+    The chips come back stamped ``applied=False`` and the answer carries
+    ``understanding_withdrawn``, because a chip that is not filtering must
+    not render as one that is — the whole point of showing them.
+    """
+    if extraction is None or unextracted is None or result.hits:
+        return q, extraction, result
+    if q.cursor is not None:
+        return q, extraction, result
+    if not any(f.applied for f in extraction.filters):
+        return q, extraction, result
+
+    retry, _ = _drop_hidden_filters(unextracted, plan)
+    try:
+        widened = backend.query(retry)
+    except Exception:  # noqa: BLE001 - the empty answer we already have is valid
+        logger.exception("retry without extraction failed; keeping the empty answer")
+        return q, extraction, result
+    if not widened.hits:
+        # The catalogue really has nothing. Leave the chips applied — they
+        # are a true description of what was searched for.
+        return q, extraction, result
+
+    withdrawn = replace(
+        extraction,
+        filters=tuple(replace(f, applied=False) for f in extraction.filters),
+        degraded=tuple(dict.fromkeys(extraction.degraded + (UNDERSTANDING_WITHDRAWN,))),
+    )
+    return retry, withdrawn, widened
+
+
 def _understanding_payload(extraction) -> dict:
     """The ``query_understanding`` block: what the words turned into.
 
@@ -1126,6 +1174,7 @@ def search(params, *, accept_language: str = "") -> dict:
     # to a non-public slug is dropped by the same guard an explicit
     # `f.vin=` is — an extracted oracle is still an oracle.
     extraction = None
+    unextracted = None
     if parse_understanding(params):
         from .understanding import extract
 
@@ -1137,6 +1186,9 @@ def search(params, *, accept_language: str = "") -> dict:
                 plan=plan,
                 category_path=q.category_path,
             )
+            # Kept so an extraction that empties the page can be undone. The
+            # query BEFORE extraction is the one the reader actually typed.
+            unextracted = q
             q, extraction = _apply_extraction(q, extraction)
 
     q, dropped_filters = _drop_hidden_filters(q, plan)
@@ -1147,6 +1199,10 @@ def search(params, *, accept_language: str = "") -> dict:
     except Exception as exc:  # noqa: BLE001 - any engine failure is a 503, not a 500
         logger.exception("search backend %s failed", getattr(backend, "name", "?"))
         raise SearchBackendUnavailable(str(exc)) from exc
+
+    q, extraction, result = _unextract_if_empty(
+        q, unextracted, extraction, result, backend, plan
+    )
 
     facet_result = None
     if plan.slugs and capabilities.facet_counts:

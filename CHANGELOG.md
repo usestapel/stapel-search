@@ -89,6 +89,34 @@ coordinates, so the reader loses no accuracy.
 
 ### Fixed
 
+**The filtered ANN search was silently returning short answers — and this
+one bites 0.11.x in production, not just the new code.** Every corpus shares
+one `search_vector_embedding` table and one HNSW index, so an HNSW search
+walks the graph for the whole space and only THEN drops the rows whose `kind`
+does not match; a caller asking for N gets however many of its own kind
+happened to survive. Measured on the live stand at 78k vectors, asking for
+50: `vocab_label` returned **40**. Measured on a 118k-vector corpus with five
+kinds: `vocab_label` returned 41 and a 20,000-row kind returned **0**. It
+degrades invisibly — a short answer is indistinguishable from a corpus with
+nothing more to offer — and it gets worse as other kinds grow.
+`vector/store.search` now sets `hnsw.iterative_scan = relaxed_order`, probed
+with `current_setting(name, true)` (a failed `SET` would abort the whole
+transaction) and scoped with `SET LOCAL` inside an explicit `atomic()`, since
+outside a transaction `SET LOCAL` is a warning and a no-op.
+
+**An extraction that empties the page is withdrawn.** An extracted filter is
+a guess about what a reader meant, and an empty page over a catalogue that is
+not empty is the one outcome that proves the guess wrong: the query is re-run
+without the extraction and the chips come back stamped `applied: false` with
+`understanding_withdrawn` in `degraded`. First page only — a cursor names an
+anchor inside a population, and changing the population underneath it would
+repeat or skip rows rather than rescue anybody. When the plain text search
+finds nothing either, the filters were a true description of what was
+searched for and stay applied. This is the single measured win of the
+2026-09-03 labelled eval: recall@10 **+0.057**, paired bootstrap CI
+[+0.011, +0.125], P(gain) = 1.00 — larger than embedding every listing title
+bought, and free.
+
 `_shared.geo_distance_km` returned `OUT_OF_RANGE` for a coordinate-less row
 whenever a centre was given even with no `radius_km`, so the naive backend
 dropped such rows while Postgres kept them. A bare centre bounds nothing; it
@@ -102,6 +130,15 @@ document is a draft.
 `text.token_spans()` — `tokenize()` with each token's offsets in the original
 string, one regex and one definition of a word, so a caller pointing back at
 what the reader typed cannot drift from what the normalizer saw.
+
+One equivalents group in `dictionaries/ru.json`: `["брюки", "штаны"]`. The
+same rule the brand groups follow, applied to a CATEGORY word — on the
+labelled eval «красные штаны» scored 0.10 recall under every condition
+because «штаны»~«Брюки» is 0.784 in the embedding space, below any floor
+safe to apply, and no letter table reaches it either. The colour half always
+resolved; the category half is what failed. Only that pair was added: «кеды»
+is a different shoe and «порты» would have been a guess, and this file's rule
+is measured-not-guessed.
 
 ## [0.11.2] — 2026-09-03
 

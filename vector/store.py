@@ -148,13 +148,36 @@ def search(kind: str, query_vector, *, model_tag: str, limit: int):
     index is built over, so the planner uses the index when it exists and
     falls back to the same exact scan when it does not. One query text,
     both regimes.
+
+    ``hnsw.iterative_scan`` is what makes the ``kind`` predicate honest.
+    Every corpus shares one table and one index, so an HNSW search walks
+    the graph for the whole space and only THEN drops the rows whose kind
+    does not match — and a caller asking for N gets however many of its
+    own kind happened to survive. Measured on the live stand at 78k
+    vectors: a ``vocab_label`` search for 50 returned 40. It gets worse as
+    other kinds grow, and it degrades silently — a short answer looks
+    exactly like a corpus with nothing more to offer.
+
+    Set per statement and best-effort: pgvector added the GUC in 0.8, and
+    a server without it must keep answering rather than fail a dropdown.
     """
-    from django.db import connection
+    from django.db import connection, transaction
 
     dims = _tag_dims(model_tag)
     order_expr = f"(embedding::vector({dims}))" if dims else "embedding"
     literal = _literal(query_vector)
-    with connection.cursor() as cursor:
+    # `SET LOCAL` outside a transaction is a WARNING and a no-op, so the
+    # atomic block is what makes the setting apply at all — and what keeps
+    # it from leaking onto a pooled connection the way a session-level SET
+    # would.
+    with transaction.atomic(), connection.cursor() as cursor:
+        # Probed, never attempted-and-caught: a failed SET aborts the whole
+        # transaction, which would turn a missing optimisation into a broken
+        # request. `current_setting(name, true)` answers NULL for a GUC the
+        # server does not have, and raises nothing.
+        cursor.execute("SELECT current_setting('hnsw.iterative_scan', true)")
+        if (cursor.fetchone() or [None])[0] is not None:
+            cursor.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
         cursor.execute(
             f"SELECT key, text, payload, 1 - (embedding <=> %s::vector) "
             f"FROM {TABLE} "

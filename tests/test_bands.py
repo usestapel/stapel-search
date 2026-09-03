@@ -598,3 +598,65 @@ def test_an_unknown_geo_mode_is_refused_inside_the_feature(bad, corpus):
     # changed, so there is nothing to refuse.
     with _settings(GEO_BANDS=False):
         assert parse_query({"type": DOC_TYPE, "geo_mode": bad}).near is None
+
+
+@pytest.fixture
+def mislabelled(db):
+    """One row whose TEXT says apple and whose brand facet says nokia.
+
+    This is the shape the fallback exists for: the extraction is defensible
+    («apple» really is a brand) and still wrong for this catalogue, so the
+    filter empties a page the text search can fill.
+    """
+    from stapel_search.models import SearchDocument
+    from stapel_search.testing import harness
+
+    with harness() as ctx:
+        SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+        ctx.reindex(documents=[
+            _at("m0", CENTER, day=1,
+                title="apple pie recipe book",
+                features={"brand": _feature("string", "nokia")}),
+        ])
+        yield ctx
+
+
+def test_an_extraction_that_empties_the_page_is_withdrawn(
+    api_client, mislabelled, brand_schema
+):
+    """The one measured win of the 2026-09-03 labelled eval.
+
+    An extracted filter is a GUESS about what a reader meant, and an empty
+    page over a catalogue that is not empty is the outcome that proves the
+    guess wrong. Falling back to the plain text search bought recall@10
+    +0.057, paired bootstrap CI [+0.011, +0.125], P(gain) = 1.00 — more
+    than embedding every listing title did, and free.
+    """
+    with _settings(QUERY_UNDERSTANDING=True):
+        # `f.brand=apple` matches nothing here; the WORD is in the title.
+        body = _get(api_client, category="electronics/phones", q="apple", limit=50)
+
+    assert body["items"], "the fallback must not leave the reader an empty page"
+    assert {item["key"] for item in body["items"]} == {"m0"}
+    understanding = body["query_understanding"]
+    # The chips come back, but stamped as NOT applied — a chip that is not
+    # filtering must never render as one that is.
+    assert all(f["applied"] is False for f in understanding["filters"])
+    assert "understanding_withdrawn" in body["degraded"]
+
+
+def test_a_genuinely_empty_catalogue_keeps_its_chips(
+    api_client, mislabelled, brand_schema
+):
+    """Withdrawal is for a wrong guess, not for an honest nothing.
+
+    When the plain text search finds nothing either, the filters were a true
+    description of what was searched for and stay applied — otherwise the
+    answer would claim a narrowing was undone that changed nothing.
+    """
+    with _settings(QUERY_UNDERSTANDING=True):
+        body = _get(
+            api_client, category="electronics/phones", q="zzzznotathing", limit=50
+        )
+    assert body["items"] == []
+    assert "understanding_withdrawn" not in body["degraded"]
