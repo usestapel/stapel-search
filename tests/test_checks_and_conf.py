@@ -298,3 +298,42 @@ def test_config_md_documents_every_default():
     documented = set(re.findall(r"`([A-Z][A-Z0-9_]+)`", text))
     missing = sorted(set(DEFAULTS) - documented)
     assert not missing, f"settings absent from CONFIG.MD: {missing}"
+
+
+def test_a_disagreeing_public_precision_is_reported(monkeypatch):
+    """W010: the card's area and the search grid are one published area.
+
+    Two settings, two namespaces, one promise — and nothing structural keeps
+    them equal until the shared helper moves to stapel-core. Two areas around
+    one point intersect, and the intersection is smaller than either, so the
+    finer of the two decides what a stranger can resolve.
+    """
+    import sys
+    import types
+
+    from django.test import override_settings
+
+    from stapel_search.checks import check_public_grid_matches_the_card
+
+    def _listings(precision):
+        module = types.ModuleType("stapel_listings.conf")
+        module.listings_settings = types.SimpleNamespace(
+            PUBLIC_COORD_PRECISION=precision
+        )
+        parent = types.ModuleType("stapel_listings")
+        parent.conf = module
+        return {"stapel_listings": parent, "stapel_listings.conf": module}
+
+    # Not installed: this module does not require it, so silence is correct.
+    assert check_public_grid_matches_the_card(None) == []
+
+    for name, module in _listings(3).items():
+        monkeypatch.setitem(sys.modules, name, module)
+    with override_settings(STAPEL_SEARCH={"CARD_COORD_PRECISION": 2}):
+        found = check_public_grid_matches_the_card(None)
+    assert [warning.id for warning in found] == ["stapel_search.W010"]
+
+    for name, module in _listings(2).items():
+        monkeypatch.setitem(sys.modules, name, module)
+    with override_settings(STAPEL_SEARCH={"CARD_COORD_PRECISION": 2}):
+        assert check_public_grid_matches_the_card(None) == []

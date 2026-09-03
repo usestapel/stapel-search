@@ -392,12 +392,63 @@ def check_default_language_has_a_dictionary(app_configs, **kwargs):
     ]
 
 
+@checks.register("stapel_search")
+def check_public_grid_matches_the_card(app_configs, **kwargs):
+    """W010: this module and stapel-listings coarsen to different areas.
+
+    Two settings in two namespaces describe ONE published area:
+    ``STAPEL_SEARCH['CARD_COORD_PRECISION']`` — the grid every geo answer
+    here is measured against — and ``STAPEL_LISTINGS['PUBLIC_COORD_PRECISION']``,
+    the rounding the public card and detail payload apply. They must agree,
+    and nothing structural makes them.
+
+    Divergence is not a cosmetic mismatch, it is the leak both of them exist
+    to close. Two differently-sized areas around one point INTERSECT, and the
+    intersection is smaller than either — which is precisely why
+    ``AudienceRedactionMixin`` blanks the public geohash instead of
+    truncating it. If listings publishes 2 decimals and search resolves 3,
+    the finer answer simply wins and the card's promise is worth nothing.
+
+    Silent when stapel-listings is not installed: this module does not
+    require it, and a deployment indexing something else has one grid.
+    """
+    from .conf import search_settings
+
+    try:
+        from stapel_listings.conf import listings_settings
+    except Exception:  # noqa: BLE001 - not installed is not a finding
+        return []
+    try:
+        ours = int(search_settings.CARD_COORD_PRECISION)
+        theirs = int(listings_settings.PUBLIC_COORD_PRECISION)
+    except Exception:  # noqa: BLE001 - an unreadable setting is another check's
+        return []
+    if ours == theirs:
+        return []
+    return [
+        checks.Warning(
+            f"STAPEL_SEARCH['CARD_COORD_PRECISION'] is {ours} and "
+            f"STAPEL_LISTINGS['PUBLIC_COORD_PRECISION'] is {theirs}, so the "
+            "area a listing publishes and the grid its search answers are "
+            "measured against are different sizes. Two areas around one point "
+            "intersect, and the intersection is smaller than either: the "
+            "finer of the two decides what a stranger can resolve, whichever "
+            "module it belongs to.",
+            hint="Set both to the same number. They describe one published "
+                 "area, and until the shared helper moves to stapel-core "
+                 "nothing but this check says so.",
+            id="stapel_search.W010",
+        )
+    ]
+
+
 __all__ = [
     "check_backend",
     "check_beat_schedule",
     "check_category_path_provider",
     "check_category_suggest_provider",
     "check_default_language_has_a_dictionary",
+    "check_public_grid_matches_the_card",
     "check_default_facet_mappings",
     "check_popular_sort_has_a_signal",
     "check_postgres_backend_has_postgres",

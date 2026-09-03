@@ -93,6 +93,10 @@ says how wide the area is.
 
 ### Also
 
+- New deploy check **`stapel_search.W010`**: `CARD_COORD_PRECISION` and
+  stapel-listings' `PUBLIC_COORD_PRECISION` are one published area described
+  twice, and until the shared helper moves to `stapel-core` nothing else keeps
+  them equal. Silent when stapel-listings is not installed.
 - `docs/index.json`, `docs/schema.json` and the `search.query` schema
   regenerated; `SearchItemSerializer.distance_km` and `.card` now describe
   what they actually contain.

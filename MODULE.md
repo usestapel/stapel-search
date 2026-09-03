@@ -608,6 +608,11 @@ The quantum is derived, not chosen: the grid declares one square cell of side
 points it calls the same place is that cell's diagonal, `side × √2`. A finer
 quantum would separate two points the card does not.
 
+`CARD_COORD_PRECISION` and stapel-listings' `PUBLIC_COORD_PRECISION` are one
+published area described twice, and `stapel_search.W010` fails the deploy check
+when they disagree — until the shared helper moves to `stapel-core`, nothing
+else keeps them equal.
+
 The audience is `stapel_attributes.visibility`'s — the same axis, resolved by
 the same rule as `stapel_listings.serializers.AudienceRedactionMixin`, because
 the coordinates this gates are the coordinates that mixin coarsens.
