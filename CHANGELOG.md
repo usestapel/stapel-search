@@ -96,9 +96,18 @@ walks the graph for the whole space and only THEN drops the rows whose `kind`
 does not match; a caller asking for N gets however many of its own kind
 happened to survive. Measured on the live stand at 78k vectors, asking for
 50: `vocab_label` returned **40**. Measured on a 118k-vector corpus with five
-kinds: `vocab_label` returned 41 and a 20,000-row kind returned **0**. It
-degrades invisibly — a short answer is indistinguishable from a corpus with
-nothing more to offer — and it gets worse as other kinds grow.
+kinds: `vocab_label` returned 41, and a kind holding 20,000 rows returned
+between **0 and 17** depending on the probe.
+
+What that costs, measured on the labelled eval by changing nothing but this
+setting: an arm searching listing vectors alone lost **75% of its recall**
+(0.300 → 0.075) and **20 of 28 queries came back empty** (against 4). The
+isolated arm is the honest measure — a fused condition confounds it, because
+a starved facet rung also produces fewer spurious filters and so looks better
+on some rows for the wrong reason.
+
+It degrades invisibly — a short answer is indistinguishable from a corpus
+with nothing more to offer — and it gets worse as other kinds grow.
 `vector/store.search` now sets `hnsw.iterative_scan = relaxed_order`, probed
 with `current_setting(name, true)` (a failed `SET` would abort the whole
 transaction) and scoped with `SET LOCAL` inside an explicit `atomic()`, since
@@ -113,9 +122,11 @@ anchor inside a population, and changing the population underneath it would
 repeat or skip rows rather than rescue anybody. When the plain text search
 finds nothing either, the filters were a true description of what was
 searched for and stay applied. This is the single measured win of the
-2026-09-03 labelled eval: recall@10 **+0.057**, paired bootstrap CI
-[+0.011, +0.125], P(gain) = 1.00 — larger than embedding every listing title
-bought, and free.
+2026-09-03 labelled eval: recall@10 **+0.057**, CI [+0.011, +0.125]; MRR@10 **+0.096**,
+CI [+0.012, +0.203]; both P(gain) = 1.00, paired bootstrap over 28 queries.
+It fired on 7 of them — every one a query whose extraction ANDed the page to
+empty, e.g. «телефон на гарантии» picking up `brand=garantnik` at cosine
+0.864. Larger than embedding every listing title bought, and free.
 
 `_shared.geo_distance_km` returned `OUT_OF_RANGE` for a coordinate-less row
 whenever a centre was given even with no `radius_km`, so the naive backend
@@ -136,7 +147,11 @@ same rule the brand groups follow, applied to a CATEGORY word — on the
 labelled eval «красные штаны» scored 0.10 recall under every condition
 because «штаны»~«Брюки» is 0.784 in the embedding space, below any floor
 safe to apply, and no letter table reaches it either. The colour half always
-resolved; the category half is what failed. Only that pair was added: «кеды»
+resolved; the category half is what failed. Confirmed rather than assumed:
+that one line takes q01 from recall 0.10 to **1.00** under every condition
+and moves no other query. It also SUPPRESSES a wrong answer — without it
+«штаны» is uncurated, so it transliterates to `shtany`, which matches nothing
+in a Russian corpus. Only that pair was added: «кеды»
 is a different shoe and «порты» would have been a guess, and this file's rule
 is measured-not-guessed.
 
