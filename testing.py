@@ -880,6 +880,38 @@ def _s_suggest_categories_from_goods(ctx: Context) -> None:
     assert fn(DOC_TYPE, "квадрокоптер", language="ru", limit=5) == []
 
 
+def _s_category_counts(ctx: Context) -> None:
+    """The OPTIONAL eleventh verb, held to the same naive reference.
+
+    ``category_counts`` is what the facet plan is drawn from when the
+    queried category owns no axes — a branch, or a text query naming no
+    category at all (D175). Two invariants, and the second is the one that
+    makes the plan honest: the aggregate describes the QUERY's candidate
+    set, not the corpus, so a category filter narrows it exactly as it
+    narrows the page.
+    """
+    fn = getattr(ctx.backend, "category_counts", None)
+    if fn is None:
+        raise ConformanceSkip("category_counts")
+
+    whole = dict(fn(ctx.query(), limit=10))
+    assert whole == {
+        ("electronics", "phones"): 2,
+        ("electronics", "laptops"): 1,
+        ("marine",): 1,
+    }, whole
+    # Busiest first, the path breaking ties — an order a plan can trust.
+    assert [path for path, _ in fn(ctx.query(), limit=10)][0] == ("electronics", "phones")
+
+    branch = dict(fn(ctx.query(category_path=("electronics",)), limit=10))
+    assert branch == {("electronics", "phones"): 2, ("electronics", "laptops"): 1}, branch
+
+    leaf = dict(fn(ctx.query(category_path=("marine",)), limit=10))
+    assert leaf == {("marine",): 1}, leaf
+
+    assert fn(ctx.query(category_path=("nonexistent",)), limit=10) == []
+
+
 def _s_goods_suggestions_do_not_guess(ctx: Context) -> None:
     """A near-miss query yields NO goods pairs — a misspelling is the SERP's
     business to widen, never a destination to promise.
@@ -1027,6 +1059,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         "suggest_categories",
         _s_suggest_categories_from_goods,
         "the optional goods-driven verb answers the SERP's own counts",
+    ),
+    Scenario(
+        "category_counts",
+        _s_category_counts,
+        "the optional aggregate the facet plan is drawn from",
     ),
     Scenario(
         "goods_suggestions_do_not_guess",

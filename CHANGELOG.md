@@ -4,6 +4,176 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] — 2026-09-03
+
+Minor. A branch category page and a text search each offered **zero** filters
+over a corpus that plainly had axes; both now draw a plan from the categories
+their own result set is made of.
+
+### The facet plan follows the evidence, not the URL
+
+Measured by a UX walker on a live classified stand and then re-measured
+against that stand's own API (2026-09-03, 90 listings):
+
+| surface | listings | facet groups |
+|---|---|---|
+| `/c/mobilnye-telefony` (leaf) | 46 | **12** |
+| `/c/telefony` (branch) | 46 | **0** |
+| `/c/elektronika` (root) | 52 | **0** |
+| `?q=iPhone` (text) | 14 | **0** |
+
+Forty-six phones on `/c/telefony`, every one of them carrying a manufacturer,
+under the words «Для этого поиска фильтров нет». A buyer who arrives through
+the search box — which is most of them — never saw a filter at all.
+
+**The cause was entirely in the PLAN, and nothing downstream was broken.**
+`facet_plan` asks `categories.features` for ONE category, and that Function
+resolves a category's own features plus the ones it inherits from its
+ANCESTORS. A branch therefore owns nothing — its LEAVES do; `telefony` and
+`elektronika` both declare zero features on that stand — and a text query
+names no category at all, so `facet_plan(None)` folded an empty list. Asked
+to count explicitly, the same deployed server answered both surfaces
+perfectly:
+
+```
+?category=32/149&facets=vendor   -> apple 13, samsung 10, xiaomi 9,
+                                    realme 6, google 3, honor 3
+?q=iPhone&facets=vendor          -> apple 13
+```
+
+The engine had the answer and was never asked for it, which is what makes the
+empty state a lie rather than a shortfall.
+
+**The naive repair is worse than the defect.** Union the subtree's schemas and
+`telefony` offers 83 feature definitions drawn from 27 categories — of which
+exactly ONE holds a listing; `elektronika` offers 439 from 210 categories, of
+which SEVEN hold a listing and one of those holds 88.5% of them. Against a
+budget of `MAX_FACET_FIELDS` that is the «Вес/Длина/Высота (Для Доставки)»
+shape again: twelve slots spent on axes that describe nothing.
+
+So the categories come from the corpus, not the catalogue.
+
+- **`category_counts(q, *, limit)`** — a second OPTIONAL backend verb beside
+  `suggest_categories`, answering `[(category path, documents)]` for the
+  query's own candidate set, busiest first. One `GROUP BY category_path_arr`
+  over the same `_where` and the same `trigram=False` arm `facets()` counts
+  through, so the plan is drawn from exactly the set that will be counted, and
+  the category filter, the facet filters and the geo box all narrow it.
+  Postgres reuses the `_category_groups` helper 0.10.4 already wrote; naive
+  implements the reference semantics; the conformance scenario
+  `category_counts` holds every engine to them, and Meilisearch skips it and
+  degrades loudly rather than answering an empty panel.
+- **`evidence_plan`** folds those categories' resolved features into one plan,
+  weighting each slug by the documents whose category declares it. The
+  admission rules are the SAME code `facet_plan` uses (`_collect`), extracted
+  rather than restated — non-public before anything else, `skip` kinds and
+  `facet: false` excluded and un-re-admittable — and across categories they
+  are fail-closed: one category marking a slug `owner` withholds it from a
+  branch page whose other leaves call it public.
+- **The trigger is "the queried category's own schema did not fill the
+  budget"**, not "the category is a branch" — the second needs a tree walk
+  this module has no business doing, and the first is the fact that matters.
+  A wide leaf therefore pays **nothing**: 19 authored slugs against a budget
+  of 12, no aggregate, byte-identical answer. A thin leaf pays one aggregate
+  and gets its own plan back, because the only category in its candidate set
+  is itself.
+
+### Ranking is coverage, and it is the fleet's existing one
+
+`@stapel/search-react` has ordered facet groups by `facetCoverage` — the sum
+of a group's bucket counts — on both the chip row and the rail since 0.18.0,
+because schema order on the deployed phones leaf put battery health and four
+parcel dimensions above the brand. That function needs counts, which exist
+only after counting; a planner needs to choose WHAT to count. So this ranks by
+the same quantity predicted from the aggregate, and `_facet_rank` stays
+**unchanged** as the tie-break. Two surfaces sorting by evidence and a planner
+choosing by authoring flags is how a budget gets spent on axes that describe
+nothing.
+
+**The prediction is coarse, and pretending otherwise was measured wrong.** A
+category DECLARING an axis is not the same fact as its documents carrying a
+value for it. On `/c/elektronika`, `case_condition` is declared by the
+46-listing phones leaf and by a 1-listing laptop leaf, so it predicted 47
+against `color_ref_select`'s 46 and took its budget slot — while the counts,
+once taken, were 31 and 44. Deciles do not fix that: 46 and 47 out of 52
+straddle a decile boundary, which is how it was found. What the prediction can
+honestly say is which of three things a slug is — an axis most of this page
+carries, one a tenth of it carries, or a sliver — and inside a band
+`_facet_rank` decides. `EVIDENCE_BANDS` is `(0.5, 0.1)` and is deliberately
+not a setting: it states what the prediction can resolve, not a dial.
+
+### A group with thin support is withheld, and SAID to be
+
+`FACET_MIN_COVERAGE` (default `0.05`) — a slug the aggregate borrowed from
+another category must describe at least this share of the candidate set, or it
+is counted, withheld, and named in `facet_meta.withheld` with its coverage and
+the denominator. Measured, not chosen: `/c/elektronika` holds 46 of 52
+listings in one category and one listing in each of six others, 1.9% apiece.
+
+Three exemptions, and the second is the one that would otherwise trap a
+reader: a slug the QUERIED CATEGORY authored is never governed by this (a
+closed option set answering with its zeros is a shipped decision — a panel
+that only ever shows values already present cannot narrow anything); a slug
+the reader has already filtered on is never withheld, because taking that
+group away leaves the filter applied with no control to undo it; and `0`
+withholds nothing.
+
+### The answer stops claiming there is nothing
+
+`facet_meta` gains three fields, so a panel can tell the three cases apart
+instead of rendering "no filters" over all of them:
+
+- **`plan`** — `category` (the queried category's authored schema) or
+  `evidence`.
+- **`withheld`** — `{slug, coverage, candidates}` per group left out. «No
+  filters for this search» is false whenever this list is not empty.
+- **`categories`** — `{category, count}` for the categories the candidate set
+  is made of, busiest first, `category` being the same slash-joined id path
+  the `category` filter takes. This is the material a panel needs to offer the
+  CATEGORY itself as the first filter on a text search — on the stand,
+  `?q=iPhone` is 14 results in exactly one category, so the category is a
+  fact worth stating rather than a choice worth offering, and the panel can
+  now tell which of the two it is looking at.
+
+An engine without `category_counts`, or one whose aggregate fails, reports
+`facet_plan_evidence` in `degraded[]` — never an empty panel that cannot say
+why.
+
+### Measured, before and after, on the stand's real corpus
+
+Plan computed by this code against the stand's own `categories.features`
+payloads and its own category distribution; counts and `took_ms` from the
+stand's live Postgres engine asked for exactly that plan. Nothing deployed.
+
+| surface | groups before | groups after | top axes after (coverage) | withheld | `took_ms` |
+|---|---|---|---|---|---|
+| `/c/mobilnye-telefony` (leaf) | 12 | **12** (untouched, no aggregate) | — | — | 38 → 38 |
+| `/c/telefony` (branch) | 0 | **10** | vendor 44/46 (96%), model 44/46, memory 44/46, … box_sealed 13/46 (28%) | 2 at 0% | 60 → 95 |
+| `/c/elektronika` (root) | 0 | **10** | condition 44/52 (85%), vendor 44/52, color_ref_select 44/52, … box_sealed 13/52 (25%) | 2 at 0% | 50 → 93 |
+| `?q=iPhone` (text) | 0 | **10** | vendor 13/14 (93%), model 13/14, memory 13/14, … box_sealed 3/14 (21%) | 2 at 0% | 77 → 53 |
+
+Every kept group on every surface covers at least 21% of its page, and on
+`/c/elektronika` all 45 slugs contributed by the six 1-listing sibling
+categories sit past the budget rather than in the panel. The added cost is one
+grouped scan plus the counting of groups that previously were not counted at
+all; the leaf, which was already correct, is not touched by either.
+
+### Added
+
+- `stapel_search.facets.evidence_plan`, `EVIDENCE_BANDS`, and the shared
+  `_collect` fold behind both planners.
+- OPTIONAL backend verb `category_counts` (naive, Postgres) + the
+  `category_counts` conformance scenario.
+- `FACET_EVIDENCE_CATEGORIES` (24) and `FACET_MIN_COVERAGE` (0.05).
+- `FacetPlan.evidence`; `facet_meta.plan` / `.withheld` / `.categories`;
+  `degraded: ["facet_plan_evidence"]`.
+
+### Unchanged
+
+A leaf category's authored plan, its order, its zero-filled closed option
+sets, and its cost. `FACET_EVIDENCE_CATEGORIES = 0` restores 0.13.0 byte for
+byte.
+
 ## [0.13.0] — 2026-09-03
 
 Minor, and it changes numbers a client can see: for an anonymous reader every

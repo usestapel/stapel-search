@@ -107,6 +107,39 @@ class FacetMetaSerializer(serializers.Serializer):
             "they are not in the category's own plan."
         ),
     )
+    plan = serializers.CharField(
+        help_text=(
+            "Where the plan came from. `category` — the queried category's "
+            "own authored schema. `evidence` — the categories the CANDIDATE "
+            "SET actually contains, used when that schema did not fill "
+            "MAX_FACET_FIELDS, which is every branch category and every text "
+            "query (`categories.features` resolves own + ANCESTOR-inherited "
+            "features, so a branch owns no axes; its leaves do)."
+        )
+    )
+    withheld = serializers.ListField(
+        child=serializers.DictField(),
+        help_text=(
+            "`{slug, coverage, candidates}` for groups that were counted and "
+            "then withheld because they describe too little of the result "
+            "set (FACET_MIN_COVERAGE). Present so a panel can say «3 filters "
+            "apply to too few of these» instead of «no filters» — the second "
+            "is false whenever this list is not empty. Only slugs the "
+            "evidence plan borrowed from another category are ever here, and "
+            "never one the reader has already filtered on."
+        ),
+    )
+    categories = serializers.ListField(
+        child=serializers.DictField(),
+        help_text=(
+            "`{category, count}` — the categories this answer's candidate "
+            "set is made of, busiest first, `category` being the same "
+            "slash-joined id path the `category` filter takes. The evidence "
+            "the plan was drawn from, and what a panel needs to offer the "
+            "CATEGORY itself as the first filter on a text search. Empty "
+            "when the plan is the queried category's own."
+        ),
+    )
 
 
 class FacetLabelsSerializer(serializers.Serializer):

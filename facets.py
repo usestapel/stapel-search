@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 
 _CACHE_PREFIX = "stapel_search:cat:"
 
+#: Shares of the candidate set that separate two slugs in
+#: :func:`evidence_plan`: "most of this page carries it", "a tenth of it
+#: does", "less". Not a setting and not a finer scale — see the docstring
+#: there for the measurement that says the prediction cannot resolve more.
+EVIDENCE_BANDS = (0.5, 0.1)
+
 #: Set when a category-path lookup had to fall back to a single segment.
 #: Read by ``search.W006`` and by the response's ``degraded[]``.
 _path_degraded = {"reason": ""}
@@ -372,42 +378,55 @@ def _is_public(feature: dict, config: dict) -> bool:
     return True
 
 
-def facet_plan(
-    category_id: Any = None, *, requested: tuple[str, ...] | None = None
-) -> FacetPlan:
-    """What to count for this query.
+class _Fold:
+    """The accumulators one or more categories' features fold into.
 
-    ``requested`` is the caller's ``facets=`` list; ``None`` means "the
-    category's plan". Slugs past ``MAX_FACET_FIELDS`` land in ``skipped``
-    rather than vanishing — N active facet filters already cost N+1
-    candidate sets, and the cap is what stops a wide category page from
-    turning into a dozen sequential scans.
+    Extracted from ``facet_plan``'s loop when ``evidence_plan`` needed the
+    identical admission rules over SEVERAL categories. The rules are the
+    load-bearing part — non-public before anything else, ``skip`` kinds and
+    ``facet: false`` excluded and un-re-admittable — and having them stated
+    twice is how one of the two copies eventually stops excluding a VIN.
     """
-    from .conf import search_settings
-    from .index_schema import CORE_RANGE_FIELDS
+
+    def __init__(self) -> None:
+        self.kinds: dict[str, str] = {}
+        self.closed: dict[str, tuple[str, ...]] = {}
+        #: Slugs some declaring category leaves OPEN (``allowCustom``, or a
+        #: vocabulary pointer, or no options at all). A closed option set is
+        #: zero-filled, so one open declaration has to veto the fill for
+        #: every declaration: otherwise a branch page offers options that
+        #: exist in one of its leaves and in none of the others.
+        self.open: set[str] = set()
+        self.labels: dict[str, dict[str, str]] = {}
+        self.translatable: dict[str, bool] = {}
+        #: Slugs whose declaring categories disagree about a caption's
+        #: nature or a vocabulary's address. The reader cannot tell `b.apple`
+        #: from `Б/у` by looking, and neither can this: on a disagreement the
+        #: overlay is dropped and the raw code prints, which is honest.
+        self.conflicted: set[str] = set()
+        self.vocabulary_refs: dict[str, tuple[str, str]] = {}
+        self.rank: dict[str, tuple[int, int]] = {}
+        self.position: dict[str, int] = {}
+        #: Documents in the candidate set whose category declares this slug.
+        #: Zero for the single-category plan, which does not rank by it.
+        self.weight: dict[str, int] = {}
+        self.excluded: set[str] = set()
+        self.hidden: set[str] = set()
+
+    def admitted(self) -> list[str]:
+        """Slugs that survived every exclusion, in first-authored order."""
+        return sorted(
+            (slug for slug in self.kinds if slug not in self.excluded),
+            key=lambda slug: self.position[slug],
+        )
+
+    def closed_options(self) -> dict[str, tuple[str, ...]]:
+        return {slug: values for slug, values in self.closed.items() if slug not in self.open}
+
+
+def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
+    """Fold one category's resolved features into *fold*, weighted by *weight*."""
     from .registry import get_facet_mapping
-
-    max_fields = int(search_settings.MAX_FACET_FIELDS)
-    features, revision = _feature_defs(category_id) if category_id else ([], None)
-
-    kinds: dict[str, str] = {}
-    closed: dict[str, tuple[str, ...]] = {}
-    labels: dict[str, dict[str, str]] = {}
-    translatable: dict[str, bool] = {}
-    vocabulary_refs: dict[str, tuple[str, str]] = {}
-    ranked: list[tuple[tuple[int, int], int, str]] = []
-    ordered: list[str] = []
-    #: Slugs the category declares with a `skip` kind (`header`, `group`), or
-    #: opts out of faceting, or marks non-public. Kept so an explicit `facets=`
-    #: list cannot re-admit them below — a slug the writer never indexes would
-    #: otherwise plan as a term facet and answer every query with an empty
-    #: panel, and a NON-PUBLIC slug re-admitted that way would re-enumerate a
-    #: VIN with counts, which is the leak this exclusion exists for.
-    excluded: set[str] = set()
-    #: The subset of `excluded` that is excluded because it is not public.
-    #: Reported on the plan: the read path drops these slugs' `f.`/`r.`
-    #: filters, and only the plan knows which they are.
-    hidden: set[str] = set()
 
     for position, feature in enumerate(features):
         slug = feature.get("slug")
@@ -418,16 +437,34 @@ def facet_plan(
         # Before the type, before the opt-out: a non-public feature is not an
         # axis at all, whatever it is made of. Ordering it first is what keeps
         # the rule from depending on a mapping the registry happens to know.
+        #
+        # Across categories this is FAIL-CLOSED by construction: `excluded` is
+        # never un-set, so one category marking a slug `owner` withholds it
+        # from a branch page whose other leaves call it public. A VIN that is
+        # a VIN anywhere is a VIN here.
         if not _is_public(feature, config):
-            excluded.add(slug)
-            hidden.add(slug)
+            fold.excluded.add(slug)
+            fold.hidden.add(slug)
             continue
         mapping = get_facet_mapping(type_slug)
         if mapping.kind == "skip" or not _is_facetable(feature, config):
-            excluded.add(slug)
+            fold.excluded.add(slug)
             continue
-        kinds[slug] = mapping.kind
-        ranked.append((_facet_rank(feature, config, mapping), position, slug))
+        fold.kinds[slug] = mapping.kind
+        # First declarer wins the tie-breaks, and `evidence_plan` folds
+        # categories BUSIEST FIRST, so the flags and the authored position
+        # come from the category most of the weight came from.
+        #
+        # Taking the min of either was measured wrong on the reference stand:
+        # under `/c/elektronika`, six categories holding one listing each sat
+        # beside one holding 46, and a slug authored second in a one-listing
+        # laptop schema jumped ahead of `color_ref_select` — authored fourth
+        # in the schema 88.5% of the page is made of — off nothing but a
+        # smaller index. A minority category may CONTRIBUTE an axis; it may
+        # not reorder the majority's.
+        fold.rank.setdefault(slug, _facet_rank(feature, config, mapping))
+        fold.position.setdefault(slug, position)
+        fold.weight[slug] = fold.weight.get(slug, 0) + weight
         if config.get("optionsRef"):
             # A vocabulary-backed field (ref_select, and any host type that
             # points at a vocabulary the same way) has no closed option set to
@@ -442,13 +479,17 @@ def facet_plan(
             # disagreeing about whether a facet is readable. The address is
             # recorded here and the codes are resolved after the count, where
             # the set is small and known. See `vocabulary_labels`.
+            fold.open.add(slug)
             vocabulary = _ref_field(config["optionsRef"], "vocabulary")
             level = _ref_field(config["optionsRef"], "level")
             if vocabulary and level:
-                vocabulary_refs[slug] = (vocabulary, level)
+                address = (vocabulary, level)
+                if fold.vocabulary_refs.setdefault(slug, address) != address:
+                    fold.conflicted.add(slug)
             continue
         options = config.get("options")
         if not options:
+            fold.open.add(slug)
             continue
         # The caption ships WITH the count. Until 0.4.0 it did not, on the
         # reasoning that the frontend has the schema already (spec §1.3) —
@@ -469,18 +510,37 @@ def facet_plan(
             if isinstance(option, dict) and option.get("value") is not None
         }
         if captions:
-            labels[slug] = captions
-            translatable[slug] = bool(config.get("translatable_options", True))
-        if not config.get("allowCustom"):
+            fold.labels.setdefault(slug, {}).update(captions)
+            flag = bool(config.get("translatable_options", True))
+            if fold.translatable.setdefault(slug, flag) != flag:
+                fold.conflicted.add(slug)
+        if config.get("allowCustom"):
+            fold.open.add(slug)
+        else:
             values = tuple(captions)
             if values:
-                closed[slug] = values
+                fold.closed[slug] = tuple(dict.fromkeys(fold.closed.get(slug, ()) + values))
+            else:
+                fold.open.add(slug)
 
-    ranked.sort(key=lambda row: (row[0], row[1]))
-    ordered = [slug for _, _, slug in ranked]
+
+def _shape(
+    fold: _Fold,
+    ordered: list[str],
+    *,
+    requested: tuple[str, ...] | None,
+    revision: Any = None,
+    evidence: tuple[str, ...] = (),
+) -> FacetPlan:
+    """Cut *ordered* to the budget and dress it as a :class:`FacetPlan`."""
+    from .conf import search_settings
+    from .index_schema import CORE_RANGE_FIELDS
+
+    max_fields = int(search_settings.MAX_FACET_FIELDS)
+    kinds = fold.kinds
 
     if requested is not None:
-        wanted = [slug for slug in requested if slug and slug not in excluded]
+        wanted = [slug for slug in requested if slug and slug not in fold.excluded]
         ordered = [slug for slug in wanted if slug in kinds] + [
             slug for slug in wanted if slug not in kinds
         ]
@@ -488,27 +548,141 @@ def facet_plan(
             kinds.setdefault(slug, "term")
 
     selected = tuple(ordered[:max_fields])
-    skipped = tuple(ordered[max_fields:])
+    closed = fold.closed_options()
+    labels = {
+        slug: values
+        for slug, values in fold.labels.items()
+        if slug not in fold.conflicted
+    }
+    refs = {
+        slug: address
+        for slug, address in fold.vocabulary_refs.items()
+        if slug not in fold.conflicted
+    }
     return FacetPlan(
         slugs=selected,
         kinds={slug: kinds.get(slug, "term") for slug in selected},
         closed_options={slug: closed[slug] for slug in selected if slug in closed},
-        skipped=skipped,
-        hidden=tuple(sorted(hidden)),
+        skipped=tuple(ordered[max_fields:]),
+        hidden=tuple(sorted(fold.hidden)),
         revision=revision,
         option_labels={slug: labels[slug] for slug in selected if slug in labels},
         translatable_labels={
-            slug: translatable[slug] for slug in selected if slug in translatable
+            slug: fold.translatable[slug]
+            for slug in selected
+            if slug in fold.translatable and slug not in fold.conflicted
         },
-        vocabulary_refs={
-            slug: vocabulary_refs[slug] for slug in selected if slug in vocabulary_refs
-        },
+        vocabulary_refs={slug: refs[slug] for slug in selected if slug in refs},
         # Not conditioned on the category: a core range addresses a column
         # every document in every corpus has. Announcing it here is what
         # lets a panel offer «Цена от … до …» without the frontend keeping
         # its own list of which slugs are core.
         core_ranges=tuple(CORE_RANGE_FIELDS),
+        evidence=tuple(slug for slug in selected if slug in evidence),
     )
+
+
+def facet_plan(
+    category_id: Any = None, *, requested: tuple[str, ...] | None = None
+) -> FacetPlan:
+    """What to count for this query, from the queried category's own schema.
+
+    ``requested`` is the caller's ``facets=`` list; ``None`` means "the
+    category's plan". Slugs past ``MAX_FACET_FIELDS`` land in ``skipped``
+    rather than vanishing — N active facet filters already cost N+1
+    candidate sets, and the cap is what stops a wide category page from
+    turning into a dozen sequential scans.
+
+    ``categories.features`` resolves a category's own features plus the ones
+    it inherits from its ANCESTORS, which is why this answers nothing at all
+    for a branch (a branch declares no axes; its LEAVES do) and nothing for
+    ``category_id=None`` (a text query names no category). That is D175, and
+    :func:`evidence_plan` is where it is answered — here, deliberately, the
+    behaviour is unchanged.
+    """
+    fold = _Fold()
+    features, revision = _feature_defs(category_id) if category_id else ([], None)
+    _collect(features, fold)
+    ranked = sorted(
+        fold.admitted(), key=lambda slug: (fold.rank[slug], fold.position[slug])
+    )
+    return _shape(fold, ranked, requested=requested, revision=revision)
+
+
+def evidence_plan(
+    category_counts: list[tuple[Any, int]], *, requested: tuple[str, ...] | None = None
+) -> FacetPlan:
+    """What to count, drawn from the categories the CANDIDATE SET contains.
+
+    *category_counts* is ``[(category id, documents), …]`` — one aggregate
+    over the query's own candidate set, busiest first (the optional backend
+    verb ``category_counts``). Each of those categories' resolved features
+    are folded in, and a slug's weight is the number of documents whose
+    category declares it.
+
+    **The ranking is coverage, and it is the fleet's existing one.** The
+    frontend has ordered facet groups by ``facetCoverage`` — the sum of a
+    group's bucket counts — since ``@stapel/search-react`` 0.18.0, on both
+    the chip row and the rail, because schema order on the deployed phones
+    leaf put battery health and four parcel dimensions above the brand.
+    That function needs counts, which exist only after counting; this one
+    needs to choose WHAT to count. So it ranks by the same quantity
+    predicted from the aggregate — documents whose category declares the
+    slug — and ``_facet_rank`` stays as the tie-break, unchanged, for slugs
+    with equal support. Two surfaces sorting by evidence and a planner
+    choosing by authoring flags is how a 12-slug budget gets spent on axes
+    that describe nothing.
+
+    What it deliberately does NOT do is union the catalogue subtree. On the
+    reference stand ``elektronika``'s subtree is 210 categories declaring
+    439 feature definitions; seven of them hold a listing, and one holds
+    88.5% of them. The subtree is a description of the catalogue; the
+    aggregate is a description of the corpus, and only one of the two is
+    what the reader is looking at.
+    """
+    from .conf import search_settings
+
+    limit = int(search_settings.FACET_EVIDENCE_CATEGORIES)
+    pairs = [(cid, int(count)) for cid, count in list(category_counts)[:limit]]
+    total = sum(count for _cid, count in pairs)
+    fold = _Fold()
+    for category_id, documents in pairs:
+        features, _revision = _feature_defs(category_id)
+        _collect(features, fold, weight=documents)
+
+    def band(slug: str) -> int:
+        """How much of the candidate set this slug's support covers, coarsely.
+
+        Coarse on purpose, and the coarseness is the measured part. The
+        weight is a PREDICTION — documents whose category DECLARES the slug
+        — and declaring an axis is not the same fact as carrying a value for
+        it. On the reference stand's ``/c/elektronika``, ``case_condition``
+        is declared by the 46-listing phones leaf AND by a 1-listing laptop
+        leaf, so it predicted 47 against ``color_ref_select``'s 46 and took
+        its budget slot; the counts, once taken, were 31 and 44. One
+        document of prediction is not a reason to reorder a panel, and no
+        finer scale survives that — deciles do not, because 46 and 47 out of
+        52 straddle a decile boundary.
+
+        What the prediction CAN say is which of three things a slug is: an
+        axis most of this page carries, one a tenth of it carries, or a
+        sliver. Inside a band ``_facet_rank`` decides — unchanged, the same
+        band-then-author's-flags ranking 0.8.0 wrote for a single category,
+        which is what puts a vocabulary-backed choice above an optional
+        select and both above a measurement. The sliver band is where a
+        1-listing sibling leaf's axes land, and ``FACET_MIN_COVERAGE``
+        withholds whatever of it still reaches the panel.
+        """
+        if total <= 0:
+            return 0
+        share = fold.weight[slug] / total
+        return sum(1 for edge in EVIDENCE_BANDS if share < edge)
+
+    ranked = sorted(
+        fold.admitted(),
+        key=lambda slug: (band(slug), fold.rank[slug], fold.position[slug]),
+    )
+    return _shape(fold, ranked, requested=requested, evidence=tuple(ranked))
 
 
 def fill_zero_options(counts: dict[str, dict[str, int]], plan: FacetPlan) -> dict:
@@ -522,6 +696,7 @@ def fill_zero_options(counts: dict[str, dict[str, int]], plan: FacetPlan) -> dic
 
 
 __all__ = [
+    "evidence_plan",
     "category_path",
     "facet_plan",
     "fill_zero_options",

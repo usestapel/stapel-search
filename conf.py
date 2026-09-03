@@ -61,6 +61,28 @@ DEFAULTS = {
     # proxy rig. Re-validate on the target 12c/64g rig before freezing.
     "FACET_CANDIDATE_CAP": 15000,
     "FACET_CACHE_TTL": 30,
+    # --- a plan the RESULT SET justifies (D175) ---------------------------
+    # How many categories the plan may draw feature definitions from when
+    # the queried category's own schema did not fill MAX_FACET_FIELDS — a
+    # branch owns nothing, and a text query names no category at all, so
+    # for both of them "the category's plan" is an empty panel over a
+    # corpus that plainly has axes. 0 turns the mechanism off and the
+    # answer is byte-identical to 0.11.x.
+    #
+    # The categories come from ONE aggregate over the query's own candidate
+    # set, not from the catalogue subtree: on the reference stand the
+    # subtree of `elektronika` is 210 categories declaring 439 feature
+    # definitions, and SEVEN of them hold a listing.
+    "FACET_EVIDENCE_CATEGORIES": 24,
+    # A slug admitted by that aggregate must describe at least this
+    # fraction of the candidate set, or it is withheld and SAID to be
+    # withheld. 5% is measured, not chosen: `/c/elektronika` on the stand
+    # holds 46 of 52 listings in one category and one listing in each of
+    # six others — 1.9% apiece, six axes that narrow to a single row.
+    # A slug the reader has already filtered on is never withheld, and a
+    # slug the queried category authored itself is not governed by this at
+    # all (a closed option set answers with its zeros on purpose).
+    "FACET_MIN_COVERAGE": 0.05,
     # --- text ------------------------------------------------------------
     "FTS_CONFIGS": {"ru": "russian", "en": "english", "de": "german"},
     "FTS_FALLBACK_CONFIG": "simple",

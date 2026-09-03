@@ -308,6 +308,25 @@ class NaiveSearchBackend:
             counts[slug] = bucket
         return FacetResult(counts=counts, approximate=False, candidates=candidates)
 
+    def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:
+        """OPTIONAL verb: which categories *q*'s candidate set is made of.
+
+        The evidence the facet plan is drawn from when the queried category
+        owns no axes of its own — a branch, or no category at all (D175).
+        Grouped over ``_rows``, which is this backend's own candidate set,
+        so the count on a category is the count ``&category=…`` will show.
+        Being pure Python over the module's own table, this is the reference
+        semantics the conformance scenario holds the real engines to.
+        """
+        counts: dict[tuple[str, ...], int] = {}
+        for _key, _value, _hit, row in self._rows(q):
+            path = tuple(str(segment) for segment in (row.category_path or []))
+            if not path:
+                continue
+            counts[path] = counts.get(path, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return ranked[:limit]
+
     def suggest(
         self, doc_type: str, prefix: str, *, limit: int, scope: SearchQuery | None = None
     ) -> list[str]:

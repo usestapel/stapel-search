@@ -47,6 +47,26 @@ VERBS = (
     "suggest",
 )
 
+#: A second OPTIONAL verb, same rule: ``category_counts(q, *, limit) ->
+#: list[(category path tuple, count)]`` — which categories the CANDIDATE SET
+#: of *q* is made of, busiest first. One grouped aggregate over the same
+#: predicate ``facets()`` counts through, so the numbers describe the page
+#: the reader is on: the category filter, the facet filters and the geo box
+#: all narrow it.
+#:
+#: It exists because the facet PLAN cannot be drawn from the queried
+#: category alone. ``categories.features`` resolves own + ANCESTOR-inherited
+#: features, so a branch category owns no axes (its leaves do) and a text
+#: query names no category at all — which is why a live stand offered 12
+#: facet groups on ``/c/mobilnye-telefony`` and zero on ``/c/telefony``,
+#: ``/c/elektronika`` and ``?q=iPhone`` over the same 46 phones (D175). See
+#: ``stapel_search.facets.evidence_plan``.
+#:
+#: Optional for the same reason as ``suggest_categories``: an engine that
+#: cannot group has not failed ``search.E002``. The service layer probes
+#: with ``getattr``, answers what 0.11.x answered, and reports
+#: ``facet_plan_evidence`` in ``degraded[]``.
+#:
 #: One OPTIONAL verb exists beside the nine and is deliberately NOT in
 #: ``VERBS``: ``suggest_categories(doc_type, query, *, language, limit) ->
 #: list[(category path tuple, count)]`` — which categories hold documents

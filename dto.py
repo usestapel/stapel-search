@@ -490,6 +490,14 @@ class FacetPlan:
     #: (``index_schema.CORE_RANGE_FIELDS``). Not part of ``slugs``: there is
     #: nothing to count, only an axis to offer.
     core_ranges: tuple[str, ...] = ()
+    #: The subset of ``slugs`` admitted by the CANDIDATE SET's categories
+    #: rather than by the queried category's own schema (``evidence_plan``).
+    #: Empty for an authored plan. Only these are governed by
+    #: ``FACET_MIN_COVERAGE``: a slug the queried category authored answers
+    #: with its zeros on purpose (a closed option set that only ever shows
+    #: values already present is a panel that cannot narrow anything), while
+    #: a slug borrowed from a sibling leaf has earned nothing yet.
+    evidence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

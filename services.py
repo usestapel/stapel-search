@@ -1230,8 +1230,10 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     not say who it is gets the grid.
     """
     from .backends import get_backend
+    from .conf import search_settings
     from .errors import SearchBackendUnavailable
     from .facets import (
+        evidence_plan,
         facet_plan,
         fill_zero_options,
         path_degradation,
@@ -1259,6 +1261,44 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     plan = facet_plan(
         q.category_path[-1] if q.category_path else None, requested=requested
     )
+    plan_source = "category"
+    evidence_categories: list[tuple[tuple[str, ...], int]] = []
+    plan_degraded: tuple[str, ...] = ()
+    if requested is None and int(search_settings.FACET_EVIDENCE_CATEGORIES) > 0:
+        # The trigger is "the queried category's own schema did not fill the
+        # budget", not "the category is a branch" — the second needs a tree
+        # walk this module has no business doing, and the first is the thing
+        # that actually matters. A wide leaf therefore pays NOTHING: its 19
+        # authored slugs are already over MAX_FACET_FIELDS and the aggregate
+        # is never run. A branch, a root and a text query all have an empty
+        # plan and land here.
+        #
+        # A thin leaf pays one aggregate and gets its own plan back, because
+        # the only category its candidate set contains is itself.
+        if len(plan.slugs) < int(search_settings.MAX_FACET_FIELDS):
+            aggregate = getattr(backend, "category_counts", None)
+            if aggregate is None:
+                # Never silent. An empty panel that cannot say why is
+                # indistinguishable from a corpus with no axes, which is the
+                # lie D175 was: «Для этого поиска фильтров нет» over 46
+                # phones that all carry a manufacturer.
+                plan_degraded = ("facet_plan_evidence",)
+            else:
+                try:
+                    evidence_categories = list(
+                        aggregate(q, limit=int(search_settings.FACET_EVIDENCE_CATEGORIES))
+                    )
+                except Exception as exc:  # noqa: BLE001 — a plan is never fatal
+                    logger.warning("category_counts failed on %s: %s", backend.name, exc)
+                    plan_degraded = ("facet_plan_evidence",)
+                if evidence_categories:
+                    widened = evidence_plan(
+                        [(path[-1], count) for path, count in evidence_categories],
+                        requested=requested,
+                    )
+                    if widened.slugs:
+                        plan = widened
+                        plan_source = "evidence"
     # Extraction runs AFTER the plan (it needs an option space to resolve
     # against) and BEFORE the hidden-filter sweep, so a word that resolves
     # to a non-public slug is dropped by the same guard an explicit
@@ -1349,6 +1389,67 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 )
             )
 
+    # A facet the evidence admitted has to earn its slot in the panel.
+    #
+    # The trap the coverage floor closes is the one that produced «Вес/Длина/
+    # Высота (Для Доставки)» above «Производитель»: a plan drawn from several
+    # categories offers axes that describe a handful of rows, and a group of
+    # three options over one document out of fifty-two is noise wearing the
+    # costume of a filter. Coverage is the sum of a group's bucket counts —
+    # the SAME quantity `facetCoverage` in @stapel/search-react sorts the
+    # chip row and the rail by — so the server withholds by exactly the
+    # measure the two client surfaces already rank by.
+    #
+    # Three things are deliberately exempt:
+    #  - a slug the QUERIED CATEGORY authored (`plan.evidence` holds only the
+    #    borrowed ones). A closed option set answering with its zeros is a
+    #    shipped decision, not an accident;
+    #  - a slug the reader has already filtered on — withholding that group
+    #    leaves the filter applied with no control to undo it;
+    #  - everything, when FACET_MIN_COVERAGE is 0.
+    withheld: list[dict] = []
+    if facet_result and plan.evidence:
+        floor = float(search_settings.FACET_MIN_COVERAGE)
+        denominator = facet_result.candidates
+        if floor > 0 and denominator > 0:
+            for slug in plan.evidence:
+                if slug in q.facets:
+                    continue
+                coverage = sum((facet_result.counts.get(slug) or {}).values())
+                if coverage < floor * denominator:
+                    withheld.append(
+                        {"slug": slug, "coverage": coverage, "candidates": denominator}
+                    )
+    withheld_slugs = {row["slug"] for row in withheld}
+    if withheld_slugs:
+        facet_result = replace(
+            facet_result,
+            counts={
+                slug: values
+                for slug, values in facet_result.counts.items()
+                if slug not in withheld_slugs
+            },
+        )
+        plan = replace(
+            plan,
+            slugs=tuple(slug for slug in plan.slugs if slug not in withheld_slugs),
+            closed_options={
+                slug: values
+                for slug, values in plan.closed_options.items()
+                if slug not in withheld_slugs
+            },
+            option_labels={
+                slug: values
+                for slug, values in plan.option_labels.items()
+                if slug not in withheld_slugs
+            },
+            vocabulary_refs={
+                slug: address
+                for slug, address in plan.vocabulary_refs.items()
+                if slug not in withheld_slugs
+            },
+        )
+
     counts = fill_zero_options(facet_result.counts, plan) if facet_result else {}
     count, count_is_lower_bound = _honest_count(result, offset=offset, shown=len(items))
     exact_total = bool(result.exact_total and count is not None and not count_is_lower_bound)
@@ -1381,6 +1482,24 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             # that renders a confident wrong narrowing.
             "dropped_filters": list(dropped_filters),
             "core_ranges": list(plan.core_ranges),
+            # Where the plan came from. `category` is the authored schema of
+            # the queried category; `evidence` means it was drawn from the
+            # categories the candidate set actually contains, because that
+            # schema did not fill the budget (a branch owns no axes, a text
+            # query names no category).
+            "plan": plan_source,
+            # Counted, then dropped for describing too little of the result
+            # set — with the number, so a panel can say "3 filters apply to
+            # too few of these" instead of "no filters".
+            "withheld": withheld,
+            # The categories the candidate set is made of, busiest first —
+            # the evidence the plan was drawn from, and the material a panel
+            # needs to offer the CATEGORY as the first filter on a text
+            # search. Empty when the plan is the queried category's own.
+            "categories": [
+                {"category": "/".join(path), "count": count}
+                for path, count in evidence_categories
+            ],
         },
         "next_anchor": next_anchor,
         "prev_anchor": prev_anchor,
@@ -1407,6 +1526,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 + tuple(result.degraded)
                 + tuple(facet_result.degraded if facet_result else ())
                 + tuple(extraction.degraded if extraction is not None else ())
+                + plan_degraded
             )
         ),
         "backend": getattr(backend, "name", "unknown"),

@@ -1034,6 +1034,24 @@ class PostgresSearchBackend:
             degraded=("exact_facet_counts",) if approximate else (),
         )
 
+    def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:
+        """OPTIONAL verb: which categories *q*'s candidate set is made of.
+
+        One ``GROUP BY category_path_arr`` over :meth:`_where` — the same
+        single place that decides what "a candidate" means, and the same
+        ``trigram=False`` arm :meth:`facets` counts through, so the plan is
+        drawn from exactly the set that will be counted.
+
+        Reuses :meth:`_category_groups`, which 0.10.4 already wrote for
+        ``suggest_categories``. The difference is the input: that verb
+        answers a bare TEXT query for the type-ahead and applies its own
+        typo-widening ladder, while this one takes the whole
+        :class:`SearchQuery` — category filter, facet filters, ranges, geo
+        box — because it is describing a page rather than nominating one.
+        """
+        self._require_postgres()
+        return self._category_groups(q, trigram=False, limit=limit)
+
     @staticmethod
     def _count_candidates(where_sql: str, where_params: list, cap: int) -> int:
         sql = (
