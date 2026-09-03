@@ -180,6 +180,24 @@ def _tokens(q: str) -> list[_Token]:
     ]
 
 
+def _is_bare_number(token: _Token) -> bool:
+    """A token that is only digits — never a filter by itself.
+
+    Measured on a 20k-listing eval corpus: «айфон 17» sent the bare «17» into
+    the option space and it matched, at confidence 1.0, on
+    ``screen_diagonal``, ``rim_diameter``, ``residual_tread`` and three more
+    — six columns that have a value called 17 and nothing to do with a phone.
+    Recall on that query went from 1.00 to 0.00, which is the whole failure
+    mode in one number: a wrong applied filter is indistinguishable from an
+    empty catalogue.
+
+    A numeral is meaningful only next to the word it qualifies, so it stays
+    available to the vocabulary rung — «айфон 17» is still resolved as a
+    PHRASE — and is refused only as a filter standing on its own.
+    """
+    return token.folded.isdigit()
+
+
 def _option_space(plan: Any) -> dict[str, dict[str, str]]:
     """``{slug: {value: caption}}`` for the plan's CLOSED sets.
 
@@ -218,7 +236,7 @@ def _exact_rung(
 
     confidence = float(search_settings.UNDERSTANDING_EXACT_CONFIDENCE)
     for index, token in enumerate(tokens):
-        if index in claimed_tokens:
+        if index in claimed_tokens or _is_bare_number(token):
             continue
         for slug, values in options.items():
             if slug in claimed_slugs:
@@ -254,7 +272,7 @@ def _translit_rung(
 
     confidence = float(search_settings.UNDERSTANDING_TRANSLIT_CONFIDENCE)
     for index, token in enumerate(tokens):
-        if index in claimed_tokens:
+        if index in claimed_tokens or _is_bare_number(token):
             continue
         counterpart = transliterate(token.raw)
         if not counterpart:
@@ -302,7 +320,7 @@ def _alias_rung(
         return
 
     for index, token in enumerate(tokens):
-        if index in claimed_tokens:
+        if index in claimed_tokens or _is_bare_number(token):
             continue
         expansions = {fold(form) for form in dictionary.expansions_for(token.folded)}
         # `expansions_for` echoes the term itself; the exact rung already had
@@ -482,7 +500,9 @@ def _vector_rung(
     would delete the signal population the eval measures.
     """
     unclaimed = [
-        index for index in range(len(tokens)) if index not in claimed_tokens
+        index
+        for index in range(len(tokens))
+        if index not in claimed_tokens and not _is_bare_number(tokens[index])
     ][:_VECTOR_PROBE_LIMIT]
     if not unclaimed or not options:
         return

@@ -40,6 +40,14 @@ is 0.658. Since `brand` and `model` are `ref_select` on this catalogue (all
 through the curated equivalents, which is the only route from a phonetic
 brand to its term.
 
+A **bare numeral never becomes a filter on its own**. On a 20k-listing eval
+corpus «айфон 17» sent the lone «17» into the option space, where it matched
+at confidence 1.0 on `screen_diagonal`, `rim_diameter`, `residual_tread` and
+three more — six columns that have a value called 17 and nothing to do with a
+phone — and recall on that query fell from 1.00 to 0.00. A numeral means
+something only beside the word it qualifies, so it stays available to the
+vocabulary rung as part of a phrase and is refused only standing alone.
+
 A hit whose similarity the provider did not STATE is refused outright rather
 than given an invented number, and a hit below `UNDERSTANDING_VECTOR_FLOOR`
 (0.86) is not dropped either — it survives as a SIGNAL that ranks through the

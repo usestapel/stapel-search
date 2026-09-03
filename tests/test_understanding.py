@@ -435,3 +435,47 @@ def test_a_latin_query_is_not_asked_twice():
 
     extract("zzzz", language="ru", plan=PLAN, vector=no_vector, match=match)
     assert asked == ["zzzz"]
+
+
+# ─── a bare numeral is not a filter ──────────────────────────────────────
+
+
+@on
+def test_a_bare_numeral_never_becomes_a_filter_on_its_own():
+    """«айфон 17» must not filter on a column that happens to have a 17.
+
+    Measured on a 20k eval corpus: the bare «17» matched at confidence 1.0
+    on `screen_diagonal`, `rim_diameter`, `residual_tread` and three more,
+    and recall on the query fell from 1.00 to 0.00. A wrong applied filter
+    is indistinguishable from an empty catalogue.
+    """
+    plan = FacetPlan(
+        slugs=("screen_diagonal", "rim_diameter"),
+        kinds={"screen_diagonal": "term", "rim_diameter": "term"},
+        closed_options={"screen_diagonal": ("17",), "rim_diameter": ("17",)},
+        option_labels={"screen_diagonal": {"17": "17"}, "rim_diameter": {"17": "17"}},
+    )
+    answer = extract("айфон 17", language="ru", plan=plan,
+                     vector=no_vector, match=no_match)
+    assert answer.filters == ()
+    # And it is still TEXT, so the engine can still match it.
+    assert "17" in answer.residual
+
+
+@on
+def test_the_numeral_still_reaches_a_vocabulary_phrase():
+    """The guard refuses a numeral STANDING ALONE, not «айфон 17» as a term."""
+    seen = []
+
+    def match(name, payload):
+        seen.append(payload["text"])
+        if payload["text"].casefold() == "айфон 17":
+            return {"value": "iphone-17", "label": "iPhone 17", "score": 0.98,
+                    "method": "exact"}
+        return {}
+
+    answer = extract("айфон 17", language="ru", plan=PLAN,
+                     vector=no_vector, match=match)
+    hit = {f.slug: f for f in answer.filters}["model"]
+    assert (hit.value, hit.applied) == ("iphone-17", True)
+    assert "айфон 17" in seen
