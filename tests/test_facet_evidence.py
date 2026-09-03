@@ -281,10 +281,22 @@ def test_one_document_of_prediction_does_not_reorder_a_panel(monkeypatch):
 def test_a_text_query_plans_from_the_categories_in_its_result_set(
     catalogue, branch_corpus
 ):
-    """The buyer who arrived through the search box — most of them."""
+    """The buyer who arrived through the search box — most of them.
+
+    ``lang`` is declared, as every other Russian-text query in this suite
+    declares it, because this test is about the PLAN and must not be hostage
+    to dictionary resolution. Without it the answer comes back
+    ``language: "en"`` — the corpus is indexed ``ru``, and the default is
+    ``en`` (which is what ``search.W007`` exists to warn a deployment
+    about). It passed anyway, and only because «Телефон» is its own stem
+    under both analyzers: «телефоны» in the same place answered zero facet
+    groups. A test that green on that coincidence is a test of the Russian
+    stemmer's nominative singular, not of this module.
+    """
     from stapel_search.services import search
 
-    answer = search({"type": DOC_TYPE, "q": "Телефон"})
+    answer = search({"type": DOC_TYPE, "q": "Телефон", "lang": "ru"})
+    assert answer["language"] == "ru"
 
     assert answer["count"] == 8
     assert answer["facet_meta"]["plan"] == "evidence"
@@ -292,6 +304,107 @@ def test_a_text_query_plans_from_the_categories_in_its_result_set(
     assert answer["facet_meta"]["categories"] == [
         {"category": "branch/phones", "count": 8}
     ]
+
+
+# --------------------------------------------------------------------------
+# the panel must describe the page the reader is actually on
+# --------------------------------------------------------------------------
+
+
+def _needs_typo_arm(monkeypatch=None):
+    """Skip unless the engine can widen a query — the naive walk cannot."""
+    from stapel_search.backends import get_backend
+
+    backend = get_backend()
+    widens = getattr(backend, "has_trigram", None)
+    if widens is None or not widens():
+        pytest.skip("engine has no typo arm to widen through")
+    return backend
+
+
+def test_the_plan_is_drawn_from_the_arm_that_FOUND_the_results(
+    catalogue, branch_corpus
+):
+    """Measured on real Postgres 16, and it is D175 through a second door.
+
+    ``query()`` runs the strict arm and widens through trigram when the
+    strict arm lands under ``TYPO_FALLBACK_THRESHOLD`` — and says so about
+    its own totals: "Counted over the SAME arm the hits came from. Counting
+    the exact arm behind a fuzzy page is how `count: 0` ends up printed over
+    four visible cards." ``category_counts`` did not follow that rule. On a
+    header-less «телефоны» over a ru corpus the strict aggregate answered
+    `[]` while the page showed 8 results, so the plan was empty and the
+    panel said there were no filters — over eight phones that all carry a
+    manufacturer, which is the exact sentence this release exists to delete.
+    """
+    _needs_typo_arm()
+    from stapel_search.services import search
+
+    # No `lang`, deliberately: this is the header-less request the typo arm
+    # is what rescues, and the panel has to describe the page it rescued.
+    answer = search({"type": DOC_TYPE, "q": "телефоны"})
+
+    assert answer["count"] == 8
+    assert answer["facet_meta"]["plan"] == "evidence"
+    assert answer["facets"]["vendor"] == {"apple": 4, "samsung": 4}
+    assert answer["facet_meta"]["categories"] == [
+        {"category": "branch/phones", "count": 8}
+    ]
+
+
+def test_a_widened_page_counts_its_options_over_itself(catalogue, branch_corpus):
+    """The same rule, one layer down, and a bug older than this release.
+
+    ``facets()`` hardcoded the strict arm too. On a leaf — where the plan is
+    authored and never needed an aggregate — a widened query counted every
+    option over a candidate set nobody was looking at, so the panel offered
+    «Vendor» and «Memory» with EVERY BUCKET EMPTY above eight results. Two
+    controls that cannot narrow anything is not a smaller failure than no
+    controls; it is the same failure with more to click.
+    """
+    _needs_typo_arm()
+    from stapel_search.services import search
+
+    # MAX_FACET_FIELDS=1 so the leaf's own two slugs OVERFILL the budget and
+    # no aggregate runs: this test is about `facets()` counting over the
+    # right arm, and nothing about `evidence_plan` may stand in for it.
+    with tuned(**{"MAX_FACET_FIELDS": 1}):
+        answer = search({"type": DOC_TYPE, "q": "телефоны", "category": "branch/phones"})
+
+    assert answer["count"] == 8
+    assert answer["facet_meta"]["plan"] == "category"
+    assert answer["facet_meta"]["counted"] == ["vendor"]
+    assert answer["facets"]["vendor"] == {"apple": 4, "samsung": 4}
+
+
+def test_a_query_whose_strict_arm_answers_is_not_widened(catalogue, branch_corpus):
+    """The fallback is a net, not a new default: a page the strict arm found
+    is counted by the strict arm, exactly as it was."""
+    _needs_typo_arm()
+    from stapel_search.backends import get_backend
+    from stapel_search.dto import SearchQuery
+    from stapel_search.text import normalize_query
+
+    backend = get_backend()
+    calls: list[bool] = []
+    original = type(backend)._category_groups
+
+    def spy(self, q, *, trigram, limit):
+        calls.append(trigram)
+        return original(self, q, trigram=trigram, limit=limit)
+
+    type(backend)._category_groups = spy
+    try:
+        backend.category_counts(
+            SearchQuery(
+                doc_type=DOC_TYPE, language="ru", text=normalize_query("телефоны", "ru")
+            ),
+            limit=10,
+        )
+    finally:
+        type(backend)._category_groups = original
+
+    assert calls == [False], "the strict arm answered; nothing should have widened"
 
 
 # --------------------------------------------------------------------------

@@ -4,6 +4,76 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.1] — 2026-09-03
+
+Patch, and it changes numbers a client can see on one kind of page: a
+**typo-widened** one. Found by running 0.14.0's own suite against real
+PostgreSQL 16 rather than against the naive walk, where neither of these two
+defects can exist.
+
+### The facet side counted a different page than the one on screen
+
+`query()` runs the strict arm and, when it lands under
+`TYPO_FALLBACK_THRESHOLD`, re-runs through trigram — and it has always said
+what that obliges, in a comment above its own totals:
+
+> Counted over the SAME arm the hits came from. Counting the exact arm behind
+> a fuzzy page is how `count: 0` ends up printed over four visible cards.
+
+`facets()` hardcoded `trigram=False` and never applied it, and 0.14.0's new
+`category_counts` inherited the same mistake. Measured on Postgres 16 against
+a `ru` corpus with a header-less «телефоны» — the `search.W007` shape, and
+exactly what a storefront that forgets `lang` sends:
+
+| | strict arm | what the page showed |
+|---|---|---|
+| `query()` total | 0 | **8** |
+| `category_counts` aggregate | `[]` | 8 in one category |
+
+So on a **leaf**, where the plan is authored, every option was counted over a
+candidate set nobody was looking at and the panel offered «Vendor» and
+«Memory» with *every bucket empty* above eight results. On a **branch** or a
+text search, whose plan 0.14.0 draws *from* that aggregate, the plan came back
+empty and the panel said there were no filters at all — D175 itself, through a
+second door, in the release that exists to close it.
+
+The suite's own corpus carries the same shape and had encoded the bug as an
+expectation: `?q=iphone&category=c1` answers `count: 2` over «Apple iPhone 13»
+and «A phone from a vendor the catalogue lost», while the panel counted
+`{apple: 1}` — one listing claimed above two shown, with no control that could
+reach the second. That test now asserts the invariant it should always have
+asserted (the codes resolved are the codes counted, and the codes counted
+account for the page), which is true on both engines instead of on one.
+
+- **`_widened_arm(q)`** — one decision procedure, used by `facets()` and by
+  `category_counts()`. A net, not a new default: when the strict arm already
+  answers at or above the threshold it returns `False` and not one query
+  changes, and the probe is a capped count (`LIMIT threshold + 1`), not a
+  second scan. It MIRRORS `query()`'s decision rather than sharing it, because
+  the two are separate verbs in the backend protocol and `facets(q, plan)`
+  never sees the `QueryResult`; where they can disagree is a page deep in a
+  cursor whose strict arm holds more than the threshold while the PAGE holds
+  fewer, and there the counts stay strict, which is what they were.
+
+The naive backend has no typo arm and is unchanged.
+
+### The test that hid it
+
+`test_a_text_query_plans_from_the_categories_in_its_result_set` searched
+«Телефон» with no `lang`. The corpus is indexed `ru`, the test settings
+default to `en`, and it passed anyway — because «Телефон» is its own stem
+under both analyzers. «телефоны» in the same place answered **zero** facet
+groups. It now declares `lang` like every other Russian-text query in this
+suite and asserts the language it got, so it tests this module rather than the
+Russian stemmer's nominative singular.
+
+### Verified
+
+546 passed / 64 skipped against real PostgreSQL 16 (throwaway container, this
+module's exact dependency pins), 487 / 123 against the naive walk. Three new
+tests pin the widened-arm rule, including one that fails if a query whose
+strict arm answers is widened anyway.
+
 ## [0.14.0] — 2026-09-03
 
 Minor. A branch category page and a text search each offered **zero** filters

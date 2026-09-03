@@ -339,15 +339,40 @@ def test_only_the_counted_codes_are_resolved_and_in_one_call(
     conformance, labelled_category, vendor_resolver
 ):
     """The reason this runs after the count, not in the plan: a level can hold
-    tens of thousands of terms and a query produces at most a page of them."""
+    tens of thousands of terms and a query produces at most a page of them.
+
+    The expected SET changed in 0.14.0, and it changed because it was wrong.
+    ``?q=iphone&category=c1`` is a typo-widened page: the strict arm finds
+    one document, that is under ``TYPO_FALLBACK_THRESHOLD``, so ``query()``
+    re-runs through trigram and the answer is ``count: 2`` over items
+    ``81`` («Apple iPhone 13») and ``84`` («A phone from a vendor the
+    catalogue lost»). ``facets()`` meanwhile counted the STRICT arm and
+    answered ``{apple: 1}`` — a panel claiming one listing above a page
+    showing two, with no control that could reach the second. That is the
+    same defect as ``count: 0`` printed over four visible cards, one layer
+    down, and ``query()`` had already named the rule that closes it:
+    *counted over the same arm the hits came from*.
+
+    So the expectation is written as the INVARIANT rather than as a literal
+    set, which is what it should always have been: the codes resolved are
+    the codes counted, and the codes counted account for the page. Both
+    hold on either engine and neither depends on whether this particular
+    engine widened — Postgres reaches ``84`` through trigram and resolves
+    two codes, the naive walk has no typo arm, does not widen, and resolves
+    one. A hardcoded set could only ever have been right about one of them.
+    """
     from stapel_search.services import search
 
     _index_vendor_docs()
-    search({"type": DOC_TYPE, "q": "iphone", "category": "c1", "facets": "vendor"})
+    answer = search({"type": DOC_TYPE, "q": "iphone", "category": "c1", "facets": "vendor"})
+    counted = answer["facets"]["vendor"]
+    # The panel and the page agree — the assertion the old expectation could
+    # not have made, because under it they did not.
+    assert answer["count"] == sum(counted.values())
     assert len(vendor_resolver.calls) == 1, "one batched call per slug, not one per code"
     vocabulary, level, codes = vendor_resolver.calls[0]
     assert (vocabulary, level) == ("phones", "Vendor")
-    assert set(codes) == {"apple"}, "only the code this query counted"
+    assert set(codes) == set(counted), "only the codes this query counted"
 
 
 def test_a_code_the_vocabulary_cannot_resolve_is_absent_rather_than_echoed(

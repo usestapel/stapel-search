@@ -1015,10 +1015,14 @@ class PostgresSearchBackend:
         counts: dict[str, dict[str, int]] = {}
         approximate = False
         max_candidates = 0
+        # The same arm the page came from — see `_widened_arm`. Decided once
+        # for the query, not per drilled slug: drilling removes a filter, it
+        # does not change which predicate found the page.
+        trigram = self._widened_arm(q)
 
         for slug in plan.slugs:
             drilled = q.without_facet(slug)
-            where_sql, where_params = self._where(drilled, trigram=False, skip_facet=slug)
+            where_sql, where_params = self._where(drilled, trigram=trigram, skip_facet=slug)
             candidates = self._count_candidates(where_sql, where_params, cap)
             max_candidates = max(max_candidates, candidates)
             if candidates > cap:
@@ -1050,7 +1054,49 @@ class PostgresSearchBackend:
         box — because it is describing a page rather than nominating one.
         """
         self._require_postgres()
-        return self._category_groups(q, trigram=False, limit=limit)
+        return self._category_groups(q, trigram=self._widened_arm(q), limit=limit)
+
+    def _widened_arm(self, q: SearchQuery) -> bool:
+        """Whether the FACET side must widen, because the PAGE did.
+
+        :meth:`query` runs the strict arm and widens through trigram when it
+        lands under ``TYPO_FALLBACK_THRESHOLD``, and it already states the
+        rule for its own numbers: *"Counted over the SAME arm the hits came
+        from. Counting the exact arm behind a fuzzy page is how ``count: 0``
+        ends up printed over four visible cards."* The facet side never
+        applied it, and both halves were wrong in the same direction.
+
+        Measured on Postgres 16 against a ``ru`` corpus with a header-less
+        «телефоны» — the ``search.W007`` shape, and the commonest request a
+        storefront that forgets ``lang`` makes. ``query()`` answered 8
+        through the typo arm while the strict aggregate answered NOTHING, so:
+
+        - a LEAF, whose plan is authored, counted every option over a
+          candidate set nobody was looking at and offered «Vendor» and
+          «Memory» with every bucket empty above eight results;
+        - a BRANCH or a text search, whose plan is DRAWN from that aggregate
+          (0.14.0), got an empty plan and said there were no filters at all
+          — D175 exactly, through a second door.
+
+        A net, not a new default. When the strict arm already answers at or
+        above the threshold this returns ``False`` and not one query
+        changes; the probe is a capped count (``LIMIT threshold + 1``), not
+        a second scan.
+
+        It MIRRORS :meth:`query`'s decision rather than sharing it, because
+        the two are separate verbs in the backend protocol and
+        ``facets(q, plan)`` never sees the :class:`QueryResult`. Where the
+        two can disagree is a page deep in a cursor whose strict arm holds
+        more than the threshold while the PAGE holds fewer: there the counts
+        stay strict, which is what they have always been.
+        """
+        from ..conf import search_settings
+
+        if q.text is None or q.text.is_empty or not self.has_trigram():
+            return False
+        threshold = int(search_settings.TYPO_FALLBACK_THRESHOLD)
+        where_sql, where_params = self._where(q, trigram=False)
+        return self._count_candidates(where_sql, where_params, threshold) < threshold
 
     @staticmethod
     def _count_candidates(where_sql: str, where_params: list, cap: int) -> int:
