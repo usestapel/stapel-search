@@ -286,6 +286,15 @@ class SearchQuery:
     facets: dict[str, list[str]] = field(default_factory=dict)
     ranges: tuple[RangeFilter, ...] = ()
     geo: GeoFilter | None = None
+    #: The near band's centre and edge. Carried SEPARATELY from ``geo`` on
+    #: purpose: ``geo`` excludes rows, ``near`` only labels and orders them.
+    #: Folding the two together is exactly how a band becomes a hidden
+    #: radius filter again.
+    near: GeoFilter | None = None
+    #: ``(slug, value)`` pairs the query produced, INCLUDING the soft ones
+    #: that were not applied as filters. The backend counts how many of
+    #: these each row satisfies and reports it as ``Hit.match_count``.
+    signals: tuple[tuple[str, str], ...] = ()
     sort: str = "relevance"
     limit: int = 24
     cursor: Cursor | None = None
@@ -307,6 +316,66 @@ class SearchQuery:
 
 
 @dataclass(frozen=True)
+class ExtractedFilter:
+    """One filter the QUERY's own words produced, ready to be replayed.
+
+    ``param`` is the whole contract with the frontend: it is the exact query
+    parameter this filter is, so a client re-sends it verbatim to keep the
+    filter and simply omits it to remove the chip. Nothing about extraction
+    is stateful — the server never remembers what it extracted last time.
+
+    ``span`` indexes the RAW query, so a UI can underline the words that
+    became a chip. ``applied`` separates the two populations the eval cares
+    about: a filter that actually narrowed the answer, and a signal that
+    only contributed to ``Hit.match_count``.
+    """
+
+    slug: str
+    value: str
+    label: str = ""
+    value_label: str = ""
+    #: ``exact`` | ``translit`` | ``alias`` | ``vector``
+    method: str = ""
+    confidence: float = 0.0
+    span: tuple[int, int] = (0, 0)
+    param: str = ""
+    applied: bool = True
+
+
+@dataclass(frozen=True)
+class Extraction:
+    """What a free-text query turned out to be ABOUT, beside its words.
+
+    ``residual`` is the query with every extracted span removed — the text
+    the engine still has to match. An empty residual is normal and correct
+    («красные штаны» is entirely filters once the category is resolved).
+    """
+
+    filters: tuple[ExtractedFilter, ...] = ()
+    category_path: tuple[str, ...] = ()
+    category_confidence: float = 0.0
+    residual: str = ""
+    degraded: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BandSummary:
+    """One labelled band of an answer — never a filter over it.
+
+    A band says where a row sits relative to the reader, and the reader can
+    always keep scrolling into the next one. ``count`` obeys the same
+    honesty rule as :class:`QueryResult`: ``None`` when unknown.
+    """
+
+    #: ``near`` | ``far``
+    key: str
+    count: int | None = None
+    count_is_lower_bound: bool = False
+    #: Set on ``near`` only: the edge, in km, the band was cut at.
+    radius_km: float | None = None
+
+
+@dataclass(frozen=True)
 class Hit:
     """One backend answer: a key, a score, and a distance when geo was asked."""
 
@@ -316,6 +385,13 @@ class Hit:
     #: Value of the active sort key, so the service can build the next cursor
     #: without a second read.
     sort_value: Any = None
+    #: ``near`` | ``far`` | ``""`` when banding is off. The LEADING order key
+    #: when set, which is what lets one cursor page straight out of the near
+    #: band into the far one.
+    band: str = ""
+    #: How many of the query's extracted signals this row satisfies. The
+    #: owner's "strongest first", made countable.
+    match_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -351,6 +427,9 @@ class QueryResult:
     has_next: bool = False
     has_prev: bool = False
     degraded: tuple[str, ...] = ()
+    #: Per-band counts, in render order. Empty when banding is off. The rows
+    #: themselves carry ``Hit.band``; this is the summary a heading needs.
+    bands: tuple[BandSummary, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -447,7 +526,10 @@ class BackendHealth:
 __all__ = [
     "BackendCapabilities",
     "BackendHealth",
+    "BandSummary",
     "Cursor",
+    "ExtractedFilter",
+    "Extraction",
     "FacetPlan",
     "FacetResult",
     "GeoFilter",

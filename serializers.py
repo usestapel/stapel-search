@@ -26,8 +26,35 @@ class SearchItemSerializer(serializers.Serializer):
     distance_km = serializers.FloatField(
         allow_null=True, help_text="Great-circle distance from the searched centre."
     )
+    band = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text=(
+            "`near` | `far` | `\"\"`. Which labelled band this row sits in, "
+            "present only when `bands` is on. A LABEL, never a filter: the far "
+            "band carries every remaining row, including rows with no "
+            "coordinates at all, so a query never returns fewer results "
+            "because of distance. `\"\"` means bands were asked for but no "
+            "centre was given, which is not an error."
+        ),
+    )
+    match_count = serializers.IntegerField(
+        required=False,
+        help_text=(
+            "How many of the filters the QUERY's own words produced this row "
+            "satisfies — including the soft ones that were not applied as "
+            "filters. Orders rows within a band, strongest first. Present only "
+            "when the query produced signals."
+        ),
+    )
     card = serializers.DictField(
-        help_text="Stored row fields, so a result page costs one query."
+        help_text=(
+            "Stored row fields, so a result page costs one query. With `bands` "
+            "on it also carries `lat`/`lon` ROUNDED to CARD_COORD_PRECISION "
+            "plus `geo_precision_km`: draw an AREA, not a pin. The card never "
+            "carries full-precision coordinates; the exact `distance_km` on "
+            "the item is computed server-side from the true ones."
+        )
     )
 
 
@@ -77,10 +104,88 @@ class FacetLabelsSerializer(serializers.Serializer):
     values = serializers.DictField(child=serializers.CharField())
 
 
+class BandSummarySerializer(serializers.Serializer):
+    """One labelled band of the answer — a heading, never a filter over it."""
+
+    key = serializers.ChoiceField(choices=["near", "far"])
+    count = serializers.IntegerField(
+        allow_null=True,
+        help_text="How many rows are in this band. `null` when the engine "
+        "cannot say. The two counts add up to the unbanded `count`, which is "
+        "the machine-checkable form of 'nothing is hidden by distance'.",
+    )
+    count_is_lower_bound = serializers.BooleanField(
+        help_text="True when `count` is a floor (a capped count). Render 'N+'."
+    )
+    radius_km = serializers.FloatField(
+        allow_null=True,
+        help_text="Set on `near` only: the edge, in km, the band was cut at.",
+    )
+
+
+class ExtractedFilterSerializer(serializers.Serializer):
+    """One filter the query's own words produced, ready to be replayed."""
+
+    slug = serializers.CharField()
+    value = serializers.CharField()
+    label = serializers.CharField(allow_blank=True)
+    value_label = serializers.CharField(allow_blank=True)
+    method = serializers.ChoiceField(choices=["exact", "translit", "alias", "vector"])
+    confidence = serializers.FloatField()
+    span = serializers.ListField(
+        child=serializers.IntegerField(),
+        help_text="`[start, end)` into the RAW query, so a UI can underline "
+        "the words that became this chip.",
+    )
+    param = serializers.CharField(
+        help_text="The literal query parameter this filter IS — e.g. "
+        "`f.color=krasnyy`. Re-send it verbatim to KEEP the chip, omit it to "
+        "remove it, and send `qu=off` alongside so the server does not "
+        "extract it again. Nothing about extraction is remembered "
+        "server-side, which is why the parameter has to be complete.",
+    )
+    applied = serializers.BooleanField(
+        help_text="True when this filter actually narrowed the answer. A "
+        "false one still contributed to each row's `match_count`.",
+    )
+
+
+class QueryUnderstandingSerializer(serializers.Serializer):
+    """What a free-text query turned out to be ABOUT, beside its words."""
+
+    filters = ExtractedFilterSerializer(many=True)
+    category_path = serializers.ListField(child=serializers.CharField())
+    category_confidence = serializers.FloatField()
+    residual = serializers.CharField(
+        allow_blank=True,
+        help_text="The query with every extracted span removed — the text the "
+        "engine still had to match. Empty is normal and correct: «красный» is "
+        "entirely a filter, and the answer is then the filters' set.",
+    )
+    degraded = serializers.ListField(child=serializers.CharField())
+
+
 class SearchResponseSerializer(serializers.Serializer):
     """The query envelope: AnchorPagination's keys, plus what search owes."""
 
     items = SearchItemSerializer(many=True)
+    bands = BandSummarySerializer(
+        many=True,
+        required=False,
+        help_text=(
+            "Per-band counts in render order — «Объявления поблизости» then "
+            "«Все объявления». Present only when `bands` was asked for; empty "
+            "when it was asked for without a centre. The rows themselves carry "
+            "`band`; this is the summary a heading needs."
+        ),
+    )
+    query_understanding = QueryUnderstandingSerializer(
+        required=False,
+        help_text=(
+            "What the query's words became. Absent entirely while "
+            "QUERY_UNDERSTANDING is off or `qu=off` was sent."
+        ),
+    )
     facets = serializers.DictField(
         child=serializers.DictField(child=serializers.IntegerField()),
         help_text="{slug: {value: count}}, counted with the slug's own filter removed.",
@@ -285,8 +390,11 @@ class ReindexResponseSerializer(serializers.Serializer):
 
 
 __all__ = [
+    "BandSummarySerializer",
+    "ExtractedFilterSerializer",
     "FacetMetaSerializer",
     "HealthResponseSerializer",
+    "QueryUnderstandingSerializer",
     "RankingResponseSerializer",
     "ReindexRequestSerializer",
     "ReindexResponseSerializer",

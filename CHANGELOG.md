@@ -4,6 +4,97 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] — 2026-09-03
+
+Minor, and both halves are flag-gated OFF: with `QUERY_UNDERSTANDING` and
+`GEO_BANDS` unset the answer is byte-identical to 0.11.2, which the suite
+asserts rather than claims.
+
+### Query understanding — a query's words become filters
+
+`understanding.py` turns «красные штаны» into `f.color=krasnyy` plus one word
+of text, against the option space of the RESOLVED category (a global scan over
+815k terms is not a query-path operation). Four rungs, one slug claimed at
+most once: **exact** (a folded token equals an option caption or code — this
+catalogue writes `{"label": "Красный", "value": "krasnyy"}`, so the code IS
+the transliterated slug and the singular lands here), **translit**,
+**alias**, then **vector** for morphology, which `text.py` deliberately does
+not do.
+
+What is extracted becomes a PRE-APPLIED, visible, REMOVABLE filter, reported
+under a new `query_understanding` key. Each filter carries `param` — the
+literal parameter to replay — plus `span` into the raw query, so a UI can
+underline the words that became a chip and drop the chip by omitting the
+parameter. New `qu=auto|off` lets a caller that is managing filters itself
+stop the server re-adding the one the reader just removed. An explicit
+`f.<slug>` from the caller always beats an extracted value, and an extracted
+filter that was overruled reports `applied: false` — a chip that narrowed
+nothing must not render as one that did.
+
+The **alias rung is not an optimisation**, and the measurement is why it
+exists. On this fleet's own corpus (LaBSE, 73,664 vocabulary labels)
+«сяоми»~«Xiaomi» is 0.738 while «сяоми»~«Сом» — a fish — is 0.856: the vector
+rung ranks the wrong answer first, and no floor separates them. «бош»~«Bosch»
+is 0.658. Since `brand` and `model` are `ref_select` on this catalogue (all
+704 of them), the vocabulary rung now asks each phrase as typed AND once more
+through the curated equivalents, which is the only route from a phonetic
+brand to its term.
+
+A hit whose similarity the provider did not STATE is refused outright rather
+than given an invented number, and a hit below `UNDERSTANDING_VECTOR_FLOOR`
+(0.86) is not dropped either — it survives as a SIGNAL that ranks through the
+new `Hit.match_count` without excluding a row. A suggestion a human reads and
+ignores may be wrong; a filter that silently narrows the answer may not.
+
+### Geo bands — distance becomes a label, never a filter
+
+An answer is ordered `near` first, then `far` carrying every remaining row, so
+a query can never come back empty because of geo. `radius_km` and `bbox`
+remain the only inputs that exclude anything.
+
+One `items` list with a `band` per row, one cursor, plus `bands[]` for the
+headings — not two lists, because two lists need two cursors and a client that
+decides for itself where the boundary is will disagree with the server about a
+row that changed band between requests. The band travels inside the cursor's
+`sort_value` as a tagged composite; the wire shape is unchanged.
+
+The bands are executed as two separate indexed queries and concatenated, NOT
+as one query sorted by a band expression. Measured on a 1M-row corpus with
+production's indexes: band-as-sort-key costs 656–699 ms for a 24-row page,
+because the expression must be evaluated over every row before anything can be
+sorted; the same page as per-band queries costs 0.3–2.7 ms. A page that
+straddles the boundary is filled from both.
+
+The near predicate is a geohash cell cover (`NEAR_BAND_CELL_PRECISION`, 4 —
+a 25km disc covers 16–20 cells, each an indexed prefix range) narrowed by an
+exact haversine, so a card labelled "nearby" never shows 30 km. The far band
+is the NULL-SAFE complement: a row whose geohash sits inside the cover while
+its coordinates are NULL would otherwise match neither band and vanish, and
+`compute_geohash_draft` maintains the two on separate paths, so the state is
+reachable. The invariant `count(near) + count(far) == count(unbanded)` is
+asserted with that row deliberately constructed.
+
+Cards gain `lat`/`lon` rounded to `CARD_COORD_PRECISION` (2, ~1.1 km) and
+`geo_precision_km`, so a client draws an AREA rather than a seller's pin; the
+exact `distance_km` still rides on the hit, computed server-side from the true
+coordinates, so the reader loses no accuracy.
+
+### Fixed
+
+`_shared.geo_distance_km` returned `OUT_OF_RANGE` for a coordinate-less row
+whenever a centre was given even with no `radius_km`, so the naive backend
+dropped such rows while Postgres kept them. A bare centre bounds nothing; it
+now returns `None`. Banding walked straight into this — `lat`/`lon` given only
+as a band centre would have dropped exactly the rows the design promises never
+to drop. The conformance suite never saw it because its only coordinate-less
+document is a draft.
+
+### Added
+
+`text.token_spans()` — `tokenize()` with each token's offsets in the original
+string, one regex and one definition of a word, so a caller pointing back at
+what the reader typed cannot drift from what the normalizer saw.
+
 ## [0.11.2] — 2026-09-03
 
 Patch. Cap only: `stapel-attributes` admits 0.9.

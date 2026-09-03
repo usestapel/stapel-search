@@ -40,6 +40,7 @@ from django.db import connection
 from ..dto import (
     BackendCapabilities,
     BackendHealth,
+    BandSummary,
     FacetPlan,
     FacetResult,
     Hit,
@@ -356,7 +357,12 @@ class PostgresSearchBackend:
 
     def _distance_expression(self, q: SearchQuery) -> tuple[str, list]:
         """Great-circle distance in km, or ``NULL`` when no centre was given."""
-        if q.geo is None or not q.geo.has_center:
+        return self._distance_to(q.geo)
+
+    @staticmethod
+    def _distance_to(geo) -> tuple[str, list]:
+        """The same haversine against any centre — the filter's, or the band's."""
+        if geo is None or not geo.has_center:
             return "NULL::double precision", []
         expr = (
             f"(2 * {_EARTH_KM} * asin(sqrt("
@@ -364,7 +370,118 @@ class PostgresSearchBackend:
             " + cos(radians(%s)) * cos(radians(d.lat::double precision))"
             " * power(sin(radians(d.lon::double precision - %s) / 2), 2))))"
         )
-        return expr, [q.geo.lat, q.geo.lat, q.geo.lon]
+        return expr, [geo.lat, geo.lat, geo.lon]
+
+    def _near_predicate(self, q: SearchQuery) -> tuple[str, list]:
+        """``TRUE`` for a row inside the near band — a WHERE clause, not a
+        projection, and that distinction is the whole performance story.
+
+        Sorting the whole table by a band EXPRESSION costs a full evaluation
+        before anything can be ordered (measured at ~650ms on a 1M-row
+        corpus, against ~1ms for the same page as two banded queries): no
+        index can produce band-ordered rows, but each band on its own is an
+        ordinary, indexable predicate over the active sort's index. So the
+        band never appears in ``ORDER BY``; it selects WHICH query runs.
+
+        Two halves, and both are needed. The covering cell set is the
+        INDEXED half: each cell is one ``d.geohash LIKE 'cell%'``, which
+        ``search_document_geohash_..._like`` (varchar_pattern_ops) serves as
+        a range scan, and their union provably contains the whole radius
+        box. The haversine is the EXACT half, so a card labelled «поблизости»
+        is never 30km away — a cell is ~39x19.5km and its corner is not
+        inside a 25km disc.
+
+        A row with no geohash is `unknown`, not `elsewhere` (the same trap
+        ``_where``'s prefilter documents: ``geohash`` is ``default=""`` and a
+        source may fill lat/lon without it), so the coarse half admits
+        ``d.geohash = ''`` and lets the haversine decide.
+        """
+        near = q.near
+        if near is None or not near.has_center:
+            return "", []
+        from ..conf import search_settings
+
+        radius = shared.near_radius_km(near)
+        params: list = []
+        cells = shared.geohash_cells(
+            near.lat,
+            near.lon,
+            radius,
+            precision=int(search_settings.NEAR_BAND_CELL_PRECISION),
+            max_cells=int(search_settings.NEAR_BAND_MAX_CELLS),
+        )
+        if cells:
+            likes = " OR ".join(["d.geohash LIKE %s"] * len(cells))
+            coarse = f"(d.geohash = '' OR {likes})"
+            params.extend(cell + "%" for cell in cells)
+        else:
+            # Above NEAR_BAND_MAX_CELLS the OR-of-prefixes stops paying for
+            # itself; the bounding box is the coarser gate for the same disc.
+            min_lat, min_lon, max_lat, max_lon = shared.radius_bbox(
+                near.lat, near.lon, radius
+            )
+            lon_clause = (
+                "(d.lon >= %s OR d.lon <= %s)"
+                if min_lon > max_lon
+                else "d.lon BETWEEN %s AND %s"
+            )
+            coarse = f"(d.lat BETWEEN %s AND %s AND {lon_clause})"
+            params.extend([min_lat, max_lat, min_lon, max_lon])
+        distance_sql, distance_params = self._distance_to(near)
+        params.extend(distance_params)
+        params.append(radius)
+        return f"({coarse} AND ({distance_sql}) <= %s)", params
+
+    def _band_clause(self, q: SearchQuery, band: str) -> tuple[str, list]:
+        """The WHERE fragment selecting one band. The far half is a negation
+        that must survive NULL.
+
+        ``NOT (<near>)`` is NOT the far band. One row shape makes the near
+        predicate indeterminate rather than false: a geohash INSIDE the cell
+        cover with ``lat``/``lon`` NULL. The coarse half is then ``TRUE``,
+        the haversine is ``NULL``, ``TRUE AND NULL`` is ``NULL``, and ``NOT
+        NULL`` is ``NULL`` — so the row matches neither band and vanishes
+        from the answer with nothing saying so. (A row with no location at
+        all is safe on its own: ``geohash`` is ``NOT NULL DEFAULT ''`` and
+        ``'' LIKE 'ucfv%'`` is FALSE, so the negation is TRUE.)
+
+        The shape is not hypothetical. Geohash and coordinates are
+        maintained on separate paths — ``Listing.compute_geohash_draft``
+        deliberately clears the geohash when the geo service is unreachable,
+        "unknown beats wrong" — so a stale geohash outliving cleared
+        coordinates produces exactly this row.
+
+        ``COALESCE(<near>, false)`` collapses the unknown into "not nearby"
+        before negating, which is the label :func:`_shared.band_of` gives the
+        same row. The invariant it buys is machine-checkable and is asserted
+        as such: ``count(near) + count(far) == count(unbanded)``, for any
+        centre.
+        """
+        near_sql, params = self._near_predicate(q)
+        if not near_sql:
+            return "", []
+        if band == "near":
+            return f"COALESCE({near_sql}, false)", params
+        return f"NOT COALESCE({near_sql}, false)", params
+
+    @staticmethod
+    def _match_count_expression(q: SearchQuery) -> tuple[str, list]:
+        """How many of ``q.signals`` this row satisfies, over ``facet_terms_arr``.
+
+        The COUNTING structure answers it, exactly as it answers a facet
+        count: one set intersection over the materialized term array, never
+        a per-row walk of ``facets`` jsonb in Python. Both sides are sets, so
+        a repeated signal counts once — the query is about one thing, not
+        two.
+        """
+        if not q.signals:
+            return "0", []
+        terms = sorted({f"{slug}={value}" for slug, value in q.signals})
+        expression = (
+            "cardinality(ARRAY(SELECT unnest(d.facet_terms_arr) "
+            "INTERSECT SELECT unnest(%s::text[])))"
+        )
+        return expression, [terms]
 
     def _score_expression(self, q: SearchQuery) -> tuple[str, list]:
         """``sum(weight_i * f_i)`` in SQL, over the scorers active for the sort.
@@ -531,34 +648,59 @@ class PostgresSearchBackend:
 
     _DESCENDING_SORTS = frozenset({"relevance", "newest", "price_desc"})
 
-    def _order_by(self, q: SearchQuery) -> tuple[str, str, list]:
-        """``(order_sql, keyset_sql, keyset_params)``, over the SELECT aliases.
+    def _order_by(self, q: SearchQuery, *, anchored: bool) -> tuple[str, str, list]:
+        """``(order_sql, keyset_sql, keyset_params)`` INSIDE one band.
 
         NULLs sort last in BOTH directions — "no price" is neither the
         cheapest nor the dearest. The tie-break is always ``doc_key``
         ascending: without a total order the cursor is not stable and a user
         paging a feed sees the same row twice.
+
+        The band is deliberately absent from this ``ORDER BY``. Bands are
+        executed as two ordered queries concatenated (see
+        :meth:`_near_predicate`), so each band's page is an ordinary keyset
+        read the sort's own index can serve. ``anchored`` is False when a
+        page has already crossed into this band and must start at its
+        beginning rather than at the cursor, which belongs to the band
+        behind it.
         """
         alias = self._SORT_ALIAS.get(q.sort, "published_at")
         descending = q.sort in self._DESCENDING_SORTS
         direction = "DESC" if descending else "ASC"
-        order_sql = f"t.{alias} {direction} NULLS LAST, t.doc_key ASC"
+        _, matches_lead = shared.leading_keys(q)
 
-        if q.cursor is None:
+        leading = ["t.match_count DESC"] if matches_lead else []
+        order_sql = ", ".join(
+            leading + [f"t.{alias} {direction} NULLS LAST", "t.doc_key ASC"]
+        )
+
+        if q.cursor is None or not anchored:
             return order_sql, "", []
 
-        value = q.cursor.sort_value
+        _, matches, value = shared.split_sort_value(q.cursor.sort_value)
         if value is None:
             # Past the NULL frontier already: only NULLs remain, ordered by key.
-            return order_sql, f"(t.{alias} IS NULL AND t.doc_key > %s)", [q.cursor.doc_key]
+            tail_sql = f"(t.{alias} IS NULL AND t.doc_key > %s)"
+            tail_params = [q.cursor.doc_key]
+        else:
+            comparator = "<" if descending else ">"
+            cast = self._cursor_value(q.sort, value)
+            tail_sql = (
+                f"((t.{alias} {comparator} %s) OR (t.{alias} = %s AND t.doc_key > %s) "
+                f"OR t.{alias} IS NULL)"
+            )
+            tail_params = [cast, cast, q.cursor.doc_key]
 
-        comparator = "<" if descending else ">"
-        cast = self._cursor_value(q.sort, value)
+        if not matches_lead or matches is None:
+            return order_sql, tail_sql, tail_params
+
+        # Lexicographic "strictly after the anchor" over (match_count DESC,
+        # sort, doc_key), written out rather than as a ROW() comparison: the
+        # sort column is NULLS LAST and a row comparison cannot say that.
         keyset_sql = (
-            f"((t.{alias} {comparator} %s) OR (t.{alias} = %s AND t.doc_key > %s) "
-            f"OR t.{alias} IS NULL)"
+            "((t.match_count < %s) OR (t.match_count = %s AND " + tail_sql + "))"
         )
-        return order_sql, keyset_sql, [cast, cast, q.cursor.doc_key]
+        return order_sql, keyset_sql, [matches, matches] + tail_params
 
     @staticmethod
     def _cursor_value(sort: str, value):
@@ -573,28 +715,82 @@ class PostgresSearchBackend:
     # -- read side ----------------------------------------------------------
 
     def _run(self, q: SearchQuery, *, trigram: bool) -> tuple[list[Hit], bool]:
+        """One page. With banding on, two ordered reads concatenated.
+
+        The near band and the far band are separate, individually indexable
+        queries; a page is the near band's rows followed by the far band's,
+        and a page that runs the near band dry simply fills its remainder
+        from the far one. The reader sees one ``items`` list and one cursor,
+        so the boundary is invisible from outside — which is the point: a
+        band is a heading, and a heading does not end a page.
+        """
+        band_leads, _ = shared.leading_keys(q)
+        if not band_leads:
+            rows = self._read_band(q, band="", trigram=trigram, limit=q.limit + 1)
+            return self._hits(q, rows[: q.limit], band=""), len(rows) > q.limit
+
+        resume, _, _ = shared.split_sort_value(q.cursor.sort_value) if q.cursor else (0, None, None)
+        hits: list[Hit] = []
+        if (resume or 0) == 0:
+            near = self._read_band(
+                q, band="near", trigram=trigram, limit=q.limit + 1, anchored=True
+            )
+            hits.extend(self._hits(q, near, band="near"))
+            if len(hits) > q.limit:
+                return hits[: q.limit], True
+            # The near band is exhausted: the rest of this page comes from
+            # the far band, read from ITS beginning — the cursor that got us
+            # here anchors the band behind us and means nothing here.
+            far = self._read_band(
+                q, band="far", trigram=trigram, limit=q.limit + 1 - len(hits), anchored=False
+            )
+        else:
+            far = self._read_band(
+                q, band="far", trigram=trigram, limit=q.limit + 1, anchored=True
+            )
+        hits.extend(self._hits(q, far, band="far"))
+        return hits[: q.limit], len(hits) > q.limit
+
+    def _read_band(
+        self,
+        q: SearchQuery,
+        *,
+        band: str,
+        trigram: bool,
+        limit: int,
+        anchored: bool = True,
+    ) -> list[tuple]:
+        """Raw rows of one band, ordered, keyset-anchored, capped at *limit*."""
+        if limit <= 0:
+            return []
         where_sql, where_params = self._where(q, trigram=trigram)
         score_sql, score_params = self._score_expression(q)
         distance_sql, distance_params = self._distance_expression(q)
-        order_sql, keyset_sql, keyset_params = self._order_by(q)
+        match_sql, match_params = self._match_count_expression(q)
+        band_sql, band_params = self._band_clause(q, band) if band else ("", [])
+        order_sql, keyset_sql, keyset_params = self._order_by(q, anchored=anchored)
 
         # Parameter order follows the textual order of the statement, and the
         # inner SELECT comes first. Each parameterized expression is written
         # exactly once, which is the point of the subquery.
-        params = list(score_params) + list(distance_params) + list(where_params)
+        params = list(score_params) + list(distance_params) + list(match_params)
+        params += list(where_params) + list(band_params)
         params += list(keyset_params)
-        params.append(q.limit + 1)
+        params.append(limit)
 
+        inner_where = where_sql + (f" AND ({band_sql})" if band_sql else "")
         outer_where = f"WHERE {keyset_sql}" if keyset_sql else ""
         sql = f"""
-            SELECT t.doc_key, t.score, t.distance_km, t.published_at, t.price_base
+            SELECT t.doc_key, t.score, t.distance_km, t.published_at, t.price_base,
+                   t.match_count
               FROM (
                 SELECT d.doc_key,
                        ({score_sql}) AS score,
                        ({distance_sql}) AS distance_km,
-                       d.published_at, d.price_base
+                       d.published_at, d.price_base,
+                       ({match_sql}) AS match_count
                   FROM {_TABLE} d
-                 WHERE {where_sql}
+                 WHERE {inner_where}
               ) t
              {outer_where}
              ORDER BY {order_sql}
@@ -602,12 +798,12 @@ class PostgresSearchBackend:
         """
         with connection.cursor() as cursor:
             cursor.execute(sql, params)
-            rows = cursor.fetchall()
+            return cursor.fetchall()
 
-        has_next = len(rows) > q.limit
-        rows = rows[: q.limit]
+    def _hits(self, q: SearchQuery, rows, *, band: str) -> list[Hit]:
+        composite = any(shared.leading_keys(q))
         hits = []
-        for doc_key, score, distance, published_at, price_base in rows:
+        for doc_key, score, distance, published_at, price_base, matches in rows:
             if q.sort == "relevance":
                 sort_value = round(float(score or 0.0), 6)
             elif q.sort == "newest":
@@ -618,15 +814,20 @@ class PostgresSearchBackend:
                 sort_value = None if distance is None else round(float(distance), 6)
             else:  # pragma: no cover
                 sort_value = None
+            matches = int(matches or 0)
+            if composite:
+                sort_value = shared.banded_sort_value(band, matches, sort_value)
             hits.append(
                 Hit(
                     key=doc_key,
                     score=round(float(score or 0.0), 6),
                     distance_km=None if distance is None else round(float(distance), 2),
                     sort_value=sort_value,
+                    band=band,
+                    match_count=matches,
                 )
             )
-        return hits, has_next
+        return hits
 
     def query(self, q: SearchQuery) -> QueryResult:
         self._require_postgres()
@@ -665,6 +866,49 @@ class PostgresSearchBackend:
             has_next=has_next,
             has_prev=q.cursor is not None,
             degraded=tuple(dict.fromkeys(degraded)),
+            bands=self._band_counts(q, trigram=trigram),
+        )
+
+    def _band_counts(self, q: SearchQuery, *, trigram: bool) -> tuple[BandSummary, ...]:
+        """Per-band counts: two capped ``count(*)``s over the band predicates.
+
+        The same predicates the two banded reads use, so the number over a
+        heading is the number of rows scrolling under it — and capped
+        exactly as :meth:`_candidate_count` is capped, because counting the
+        whole corpus to label two headings is the cost this backend exists
+        to avoid. At the cap the count is a floor and says so: a capped
+        count presented as a count is a wrong number with a confident face,
+        and per band that is worse than in the total.
+        """
+        band_leads, _ = shared.leading_keys(q)
+        if not band_leads:
+            return ()
+        from ..conf import search_settings
+
+        cap = int(search_settings.FACET_CANDIDATE_CAP)
+        where_sql, where_params = self._where(q, trigram=trigram)
+        counts = {}
+        for band in ("near", "far"):
+            band_sql, band_params = self._band_clause(q, band)
+            sql = (
+                f"SELECT count(*) FROM (SELECT 1 FROM {_TABLE} d "
+                f"WHERE {where_sql} AND ({band_sql}) LIMIT %s) s"
+            )
+            with connection.cursor() as cursor:
+                cursor.execute(sql, list(where_params) + list(band_params) + [cap + 1])
+                counts[band] = int(cursor.fetchone()[0])
+        return (
+            BandSummary(
+                key="near",
+                count=min(counts["near"], cap),
+                count_is_lower_bound=counts["near"] > cap,
+                radius_km=shared.near_radius_km(q.near),
+            ),
+            BandSummary(
+                key="far",
+                count=min(counts["far"], cap),
+                count_is_lower_bound=counts["far"] > cap,
+            ),
         )
 
     def _candidate_count(self, q: SearchQuery, *, trigram: bool) -> tuple[int, bool]:

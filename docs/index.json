@@ -245,7 +245,9 @@
       "read_paths": [
         "filter:radius",
         "filter:bbox",
-        "sort:distance"
+        "sort:distance",
+        "result.band",
+        "result.card"
       ],
       "test": "tests/test_index_contract.py::test_radius_includes_near_excludes_far",
       "proves": "a 5km-away document is inside r=10 and outside r=1"
@@ -257,7 +259,9 @@
       "read_paths": [
         "filter:radius",
         "filter:bbox",
-        "sort:distance"
+        "sort:distance",
+        "result.band",
+        "result.card"
       ],
       "test": "tests/test_index_contract.py::test_bbox_crosses_the_antimeridian",
       "proves": "min_lon > max_lon selects the box across +/-180"

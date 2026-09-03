@@ -73,6 +73,20 @@ def tokenize(value: str) -> list[str]:
     return [fold(match.group(0)) for match in _TOKEN_RE.finditer(value or "")]
 
 
+def token_spans(value: str) -> list[tuple[str, int, int]]:
+    """:func:`tokenize`, each token with its offsets in the ORIGINAL string.
+
+    Same cut as ``tokenize`` — one regex, one definition of a word — so a
+    caller that has to point back at what the reader typed (to underline the
+    words a filter came from) cannot drift from the words the normalizer
+    actually saw.
+    """
+    return [
+        (fold(match.group(0)), match.start(), match.end())
+        for match in _TOKEN_RE.finditer(value or "")
+    ]
+
+
 # --------------------------------------------------------------------------
 # transliteration
 # --------------------------------------------------------------------------

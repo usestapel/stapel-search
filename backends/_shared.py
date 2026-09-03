@@ -216,20 +216,153 @@ def bbox_matches(lat, lon, geo: GeoFilter | None) -> bool:
 def geo_distance_km(lat, lon, geohash: str, geo: GeoFilter | None):
     """Distance to the centre, :data:`OUT_OF_RANGE`, or ``None``.
 
-    ``None`` means no centre was given — a document with no coordinates is
-    *excluded* from a radius query rather than sorted last, because "within
-    25km" is a claim, and a row that cannot support it must not be in the
-    answer.
+    ``None`` means there is no distance to report — no centre was given, or
+    the row carries no coordinates. A document with no coordinates is
+    *excluded* only when a ``radius_km`` actually bounds the query, because
+    "within 25km" is a claim and a row that cannot support it must not be in
+    the answer. A bare centre bounds nothing: it asks how far, not whether,
+    so a row that cannot answer "how far" stays in the answer with no
+    distance — which is also what the Postgres backend has always done,
+    since ``_where`` adds no predicate for a radius-less centre. The two
+    engines disagreeing here was invisible to the conformance suite only
+    because its one coordinate-less row is a draft.
     """
     if geo is None or not geo.has_center:
         return None
     flat, flon = _as_float(lat), _as_float(lon)
     if flat is None or flon is None:
-        return OUT_OF_RANGE
+        return OUT_OF_RANGE if geo.radius_km is not None else None
     distance = haversine_km(geo.lat, geo.lon, flat, flon)
     if geo.radius_km is not None and distance > geo.radius_km:
         return OUT_OF_RANGE
     return distance
+
+
+def _cell_grid(precision: int) -> tuple[int, int, float, float]:
+    """``(lat_bits, lon_bits, lat_step, lon_step)`` of one cell at *precision*.
+
+    A geohash interleaves bits starting with longitude, five per character,
+    so a cell is a plain lat/lon rectangle whose size follows from the bit
+    split alone. Deriving the grid rather than probing it is what lets the
+    cover be enumerated exactly instead of sampled and hoped over.
+    """
+    bits = 5 * precision
+    lon_bits = (bits + 1) // 2
+    lat_bits = bits // 2
+    return lat_bits, lon_bits, 180.0 / (2**lat_bits), 360.0 / (2**lon_bits)
+
+
+def geohash_cells(
+    lat: float, lon: float, radius_km: float, *, precision: int, max_cells: int
+) -> tuple[str, ...]:
+    """The cells at *precision* covering the radius box, or ``()`` if too many.
+
+    The near band's indexed prefilter: each cell is one ``LIKE 'cell%'``
+    range scan, and their union provably contains the whole box, so no
+    border row can fall out of the near band by accident. ``()`` is not "no
+    cells" — it is "this cover is not worth its OR", and the caller falls
+    back to the bounding box, which answers the same question more coarsely.
+
+    The cell strings come from ``stapel_geo.geohash.encode`` (the module's
+    one geohash implementation, verdict §18.10) applied to each cell's
+    centre; base32 is never assembled here.
+    """
+    if precision <= 0 or max_cells <= 0 or radius_km <= 0:
+        return ()
+    from stapel_geo import geohash as geohash_utils
+
+    lat_bits, lon_bits, lat_step, lon_step = _cell_grid(precision)
+    lat_count, lon_count = 2**lat_bits, 2**lon_bits
+    min_lat, min_lon, max_lat, max_lon = radius_bbox(lat, lon, radius_km)
+
+    def _index(value: float, origin: float, step: float, count: int) -> int:
+        return max(0, min(count - 1, int((value - origin) // step)))
+
+    lat_lo = _index(min_lat, -90.0, lat_step, lat_count)
+    lat_hi = _index(max_lat, -90.0, lat_step, lat_count)
+    lon_lo = _index(min_lon, -180.0, lon_step, lon_count)
+    lon_hi = _index(max_lon, -180.0, lon_step, lon_count)
+
+    # A box crossing +/-180 wraps the longitude index range rather than
+    # inverting it; the latitude range never wraps, poles being clamped.
+    if min_lon > max_lon:
+        lon_indexes = list(range(lon_lo, lon_count)) + list(range(0, lon_hi + 1))
+    else:
+        lon_indexes = list(range(lon_lo, lon_hi + 1))
+    lat_indexes = list(range(lat_lo, lat_hi + 1))
+    if len(lat_indexes) * len(lon_indexes) > max_cells:
+        return ()
+
+    cells = {
+        geohash_utils.encode(
+            -90.0 + (i + 0.5) * lat_step,
+            -180.0 + (j + 0.5) * lon_step,
+            precision=precision,
+        )
+        for i in lat_indexes
+        for j in lon_indexes
+    }
+    return tuple(sorted(cells))
+
+
+def near_radius_km(near: GeoFilter | None) -> float:
+    """The band edge in km — the filter's own value, else the configured one."""
+    from ..conf import search_settings
+
+    if near is not None and near.radius_km:
+        return float(near.radius_km)
+    return float(search_settings.NEAR_BAND_RADIUS_KM)
+
+
+def band_of(lat, lon, near: GeoFilter | None) -> str:
+    """``"near"`` | ``"far"`` | ``""`` — the LABEL every backend must agree on.
+
+    Deliberately the opposite of :func:`geo_distance_km`'s rule for a row
+    with no coordinates. That function serves a FILTER, where "within 25km"
+    is a claim a coordinate-less row cannot support, so it is excluded. This
+    one serves a LABEL over an answer nothing is withheld from: a row that
+    cannot prove it is nearby is simply not nearby, and belongs in the far
+    band rather than nowhere.
+
+    ``""`` means banding is inactive (no centre was given), which is a
+    normal answer and not an error.
+    """
+    if near is None or not near.has_center:
+        return ""
+    flat, flon = _as_float(lat), _as_float(lon)
+    if flat is None or flon is None:
+        return "far"
+    return "near" if haversine_km(near.lat, near.lon, flat, flon) <= near_radius_km(near) else "far"
+
+
+def coarse_coordinates(lat, lon, precision: int) -> tuple[float | None, float | None, float]:
+    """A card's coordinates as an AREA, plus how wide that area is.
+
+    ``(lat, lon, precision_km)`` with the pair rounded to *precision*
+    decimals, so a public card draws a neighbourhood and never the seller's
+    pin. The exact distance still rides on the hit, computed server-side
+    from the true coordinates, so coarsening the card costs the reader no
+    accuracy — only the ability to locate the thing being sold.
+    """
+    size_km = round(_KM_PER_DEG * (10.0**-precision), 3)
+    flat, flon = _as_float(lat), _as_float(lon)
+    if flat is None or flon is None:
+        return None, None, size_km
+    return round(flat, precision), round(flon, precision), size_km
+
+
+def match_count(facet_terms, signals: tuple[tuple[str, str], ...]) -> int:
+    """How many of the query's ``(slug, value)`` signals this row satisfies.
+
+    Counted against ``facet_terms`` — the same structure a facet filter
+    matches and a facet count unnests — so "the row satisfies the signal"
+    means exactly what "the row passes the filter" means. Both sides are
+    deduplicated: a signal repeated twice is one thing the query is about.
+    """
+    if not signals:
+        return 0
+    terms = {str(term) for term in (facet_terms or [])}
+    return len({f"{slug}={value}" for slug, value in signals} & terms)
 
 
 def geohash_prefix(geo: GeoFilter | None) -> str:
@@ -355,17 +488,78 @@ def _comparable(sort: str, value):
     return float(value)
 
 
+#: Band -> its rank in the answer. ``""`` (banding inactive) ranks with the
+#: near band so an inactive band is a no-op rather than a reordering.
+BAND_RANKS = {"near": 0, "": 0, "far": 1}
+
+#: Tag of a composite ``sort_value``. A plain sort value is a float, a
+#: string or ``None``, so a tagged list cannot be mistaken for one.
+_COMPOSITE = "b"
+
+
+def leading_keys(q: SearchQuery) -> tuple[bool, bool]:
+    """``(band leads, match_count leads)`` for this query's ORDER BY.
+
+    Both are OFF by default, and with both off the order — and therefore
+    every byte of the answer — is what it was before bands existed.
+    """
+    return (q.near is not None and q.near.has_center, bool(q.signals))
+
+
+def banded_sort_value(band: str, matches: int, value):
+    """The cursor payload when a band or signal strength leads the order.
+
+    The composite travels INSIDE ``sort_value`` rather than beside it,
+    because the cursor is one opaque ``(sort_value, doc_key)`` pair a
+    frontend round-trips verbatim; the published contract is one
+    ``next_anchor`` and one ``items`` list, and it stays that way.
+
+    The band half is not a sort key an engine orders by — Postgres executes
+    the two bands as two indexable queries and concatenates them — it is
+    the answer to "which band does this cursor resume in, and at what
+    anchor". Carrying it here is what lets a single cursor walk out of the
+    near band into the far one: the boundary is not a page boundary and
+    must not become one.
+    """
+    return [_COMPOSITE, BAND_RANKS.get(band, 1), int(matches), value]
+
+
+def split_sort_value(value) -> tuple[int | None, int | None, object]:
+    """``(band_rank, match_count, base value)``; the first two are ``None``
+    for a plain, unbanded cursor."""
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and value[0] == _COMPOSITE
+    ):
+        return int(value[1]), int(value[2]), value[3]
+    return None, None, value
+
+
 def order_key(sort: str, value, doc_key: str) -> tuple:
     """Total ascending order key: ``(nulls-last flag, value, doc_key)``.
 
     NULLs sort last in BOTH directions — "no price" is not "the cheapest"
     and it is not "the dearest" either; it is unknown, and unknown belongs
     at the end whichever way the user pointed the arrow.
+
+    A composite *value* (see :func:`banded_sort_value`) prepends the band
+    rank ascending and the signal match count descending, in that order.
+    This is the ORDER of the answer, stated once so both engines produce
+    it; how an engine reaches that order is its own business (Postgres runs
+    the two bands as two indexed queries and concatenates them, this
+    backend sorts one materialized list).
     """
-    scalar = _comparable(sort, value)
-    if scalar is None:
-        return (1, 0.0, doc_key)
-    return (0, -scalar if sort in _DESCENDING else scalar, doc_key)
+    rank, matches, base = split_sort_value(value)
+    scalar = _comparable(sort, base)
+    tail = (
+        (1, 0.0, doc_key)
+        if scalar is None
+        else (0, -scalar if sort in _DESCENDING else scalar, doc_key)
+    )
+    if rank is None:
+        return tail
+    return (rank, -matches) + tail
 
 
 def paginate(rows: list[tuple], q: SearchQuery) -> tuple[list[tuple], bool, bool]:
@@ -385,18 +579,27 @@ def paginate(rows: list[tuple], q: SearchQuery) -> tuple[list[tuple], bool, bool
 
 
 __all__ = [
+    "BAND_RANKS",
     "OUT_OF_RANGE",
+    "band_of",
+    "banded_sort_value",
     "bbox_matches",
     "bbox_of",
     "category_matches",
+    "coarse_coordinates",
     "combined_score",
     "facet_terms_for",
     "facets_match",
     "geo_distance_km",
+    "geohash_cells",
     "geohash_prefix",
+    "leading_keys",
     "haversine_km",
+    "match_count",
     "narrow_by_ranges",
+    "near_radius_km",
     "split_ranges",
+    "split_sort_value",
     "order_key",
     "paginate",
     "parse_range",

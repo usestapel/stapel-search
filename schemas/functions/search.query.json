@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "search.query",
-  "description": "Run a search from a server-side caller. The payload is the same parameter set GET /search/api/v1/query accepts (type, q, lang, category, f.<slug>, r.<slug>, lat/lon/radius_km or bbox, sort, facets, limit, anchor, direction) and the answer is the same envelope: {items, facets, facet_meta, next_anchor, prev_anchor, has_next, has_prev, count, count_is_lower_bound, exact_total, degraded, backend, sort, took_ms}. `count` is nullable and is NEVER 0 beside a non-empty items[]: `count_is_lower_bound` marks a floor (render 'N+'), `null` means the engine cannot say (render no count). Every item carries `promoted` (DSA Art. 26) under every sort, including when it is false.",
+  "description": "Run a search from a server-side caller. The payload is the same parameter set GET /search/api/v1/query accepts (type, q, lang, category, f.<slug>, r.<slug>, lat/lon/radius_km or bbox, bands, near_radius_km, qu, sort, facets, limit, anchor, direction) and the answer is the same envelope: {items, facets, facet_meta, next_anchor, prev_anchor, has_next, has_prev, count, count_is_lower_bound, exact_total, degraded, backend, sort, took_ms}, plus `bands` when banding is on and `query_understanding` when extraction ran. `count` is nullable and is NEVER 0 beside a non-empty items[]: `count_is_lower_bound` marks a floor (render 'N+'), `null` means the engine cannot say (render no count). Every item carries `promoted` (DSA Art. 26) under every sort, including when it is false.",
   "type": "object",
   "required": ["type"],
   "properties": {
@@ -18,7 +18,10 @@
     "lat": { "type": ["number", "string"] },
     "lon": { "type": ["number", "string"] },
     "radius_km": { "type": ["number", "string"] },
-    "bbox": { "type": "string", "description": "minLat,minLon,maxLat,maxLon; minLon > maxLon crosses the antimeridian." }
+    "bbox": { "type": "string", "description": "minLat,minLon,maxLat,maxLon; minLon > maxLon crosses the antimeridian." },
+    "bands": { "type": "string", "enum": ["on", "off"], "description": "Label the answer in two bands rather than one flat list: `near` (inside near_radius_km of lat/lon) first, then `far` carrying every remaining row. A LABEL, never a filter — nothing is withheld by distance, so a query cannot come back empty because of geo. Each item gains `band`; the answer gains `bands[]` with per-band counts. Without lat/lon banding is simply inactive, which is not an error." },
+    "near_radius_km": { "type": ["number", "string"], "description": "The near band's edge in km (default NEAR_BAND_RADIUS_KM, 25). A band edge only: unlike radius_km it never excludes a row." },
+    "qu": { "type": "string", "enum": ["auto", "off"], "description": "Query understanding. `auto` (default when QUERY_UNDERSTANDING is on) turns the query's own words into pre-applied, visible, removable filters, reported under `query_understanding` with a replayable `param` per filter. Send `off` once the caller manages the filters itself, or the server re-adds the filter the user just removed." }
   },
   "additionalProperties": true
 }

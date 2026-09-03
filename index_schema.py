@@ -272,11 +272,23 @@ INDEX_FIELDS: tuple[IndexField, ...] = (
         test=_T + "test_popularity_signal_moves_the_score",
         proves="a popularity signal raises the score; without one it is 0",
     ),
+    # lat/lon are read by two populations of read path, and the split is the
+    # point. `filter:*` and `sort:distance` EXCLUDE and ORDER — an engine
+    # answers them. `result.band` and `result.card` only LABEL: the geo band
+    # a row sits in, and the deliberately coarsened coordinates a public card
+    # carries. A label is built by the response builder, which is why they sit
+    # under the service prefix and not under `geo:`.
     IndexField(
         field="lat",
         kind="geo",
         source="listings.search_documents.lat",
-        read_paths=("filter:radius", "filter:bbox", "sort:distance"),
+        read_paths=(
+            "filter:radius",
+            "filter:bbox",
+            "sort:distance",
+            "result.band",
+            "result.card",
+        ),
         test=_T + "test_radius_includes_near_excludes_far",
         proves="a 5km-away document is inside r=10 and outside r=1",
     ),
@@ -284,7 +296,13 @@ INDEX_FIELDS: tuple[IndexField, ...] = (
         field="lon",
         kind="geo",
         source="listings.search_documents.lon",
-        read_paths=("filter:radius", "filter:bbox", "sort:distance"),
+        read_paths=(
+            "filter:radius",
+            "filter:bbox",
+            "sort:distance",
+            "result.band",
+            "result.card",
+        ),
         test=_T + "test_bbox_crosses_the_antimeridian",
         proves="min_lon > max_lon selects the box across +/-180",
     ),
@@ -292,6 +310,9 @@ INDEX_FIELDS: tuple[IndexField, ...] = (
         field="geohash",
         kind="geo",
         source="listings.search_documents.geohash",
+        # One capability, two centres: the radius filter's box and the near
+        # band's covering cell set are the same coarse indexed narrowing over
+        # the same column, so the band adds no read path here.
         read_paths=("geo:prefilter",),
         test=_T + "test_geohash_prefilter_keeps_border_cells",
         proves="the candidate block does not drop a neighbouring-cell document",

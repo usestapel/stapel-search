@@ -118,6 +118,38 @@ request, no cache read.
 | `VECTOR_QUERY_NORMALIZER` | `"stapel_search.vector.seam.fold_normalizer"` | The seam to the deterministic normalization layer: dotted path of a `Callable[[str, str], str]` — `(raw query, language) -> canonical string`, used as both embedding input and cache key. Point it at the shared translit/alias canon when that layer exports one. |
 | `VECTOR_CORPORA` | `{}` | MERGE registry `{kind: dotted path}` of zero-arg providers yielding `{"key", "text", "payload"}`. Empty by design (the `SOURCES` rule): the composite that knows categories and vocabularies declares the entries. Build/refresh with `manage.py search_vector_index` (`--estimate` prices the corpus first). |
 
+## Query understanding (flag-gated; default off)
+
+A free-text query is matched not only as words but against the option space
+of the resolved category, so «красные штаны» arrives as `f.color=krasnyy`
+plus one word of text. What is extracted becomes a PRE-APPLIED, visible,
+removable filter — never a hidden narrowing. Off means off: no extraction,
+no `query_understanding` key, byte-identical answers.
+
+| key | default | what it decides |
+|---|---|---|
+| `QUERY_UNDERSTANDING` | `False` | The master switch. Off, a query is text and nothing more, exactly as in 0.11.x. |
+| `UNDERSTANDING_EXACT_CONFIDENCE` | `1.0` | Confidence stamped on a folded-caption or option-code hit. Not a threshold — these are exact by construction; the number exists so a UI can render one chip differently from another and the eval can slice by rung. |
+| `UNDERSTANDING_TRANSLIT_CONFIDENCE` | `0.95` | The same, for a token that transliterates onto an option code. |
+| `UNDERSTANDING_VECTOR_FLOOR` | `0.86` | The line between a FILTER and a SIGNAL. Deliberately far above `VECTOR_SIMILARITY_FLOOR`: a suggestion a human reads and ignores may be wrong, a filter that silently narrows an answer may not — a wrong applied filter is indistinguishable from an empty catalogue. Below the floor a hit still survives as `applied=False` and ranks through `match_count` without excluding anything. |
+| `UNDERSTANDING_MAX_FILTERS` | `4` | Applied filters one query may produce. The cap spends its slots on the strongest candidates and DEMOTES the rest to signals rather than dropping them. |
+| `UNDERSTANDING_MATCH_FUNCTION` | `"vocabularies.match"` | Comm name of the term resolver. A `ref_select` addresses a (vocabulary, level) nobody may enumerate — 697 pairs over 815k terms on the live stand — so the term is resolved through stapel-vocabularies' own exact/prefix/vector ladder rather than a second one here. |
+
+## Geo bands (flag-gated; default off)
+
+Distance stops being a filter and becomes a LABEL. An answer is ordered
+«near» first, then «far» — and the far band carries every remaining row, so
+a query can never return zero because of geo. `radius_km` and `bbox` remain
+the only inputs that actually exclude a row.
+
+| key | default | what it decides |
+|---|---|---|
+| `GEO_BANDS` | `False` | The master switch. Off, no `band` on a hit and no `bands` on the answer. |
+| `NEAR_BAND_RADIUS_KM` | `25.0` | The near band's edge. A band edge, never a radius filter — folding the two together is exactly how a band becomes a hidden filter again. |
+| `NEAR_BAND_CELL_PRECISION` | `4` | Geohash precision the band's covering cell set is built at. Measured: a 25km disc covers 16–20 cells of ~39×19.5km, each an indexed prefix range on the existing `varchar_pattern_ops` index. Raising it multiplies the cells; lowering it hands the haversine far more rows than it needs. |
+| `NEAR_BAND_MAX_CELLS` | `64` | Above this the OR-of-prefixes stops paying for itself and the band falls back to the bounding box. |
+| `CARD_COORD_PRECISION` | `2` | Decimal places a PUBLIC card's coordinates are rounded to (~1.1km) — the approximate area the product already draws on a map, never the seller's pin. The exact distance rides on the hit as `distance_km`, computed server-side from the true coordinates, so a coarse card costs the reader no accuracy. |
+
 The store is Postgres + the `pgvector` extension; the metadata table exists
 everywhere (migration `0003`), the `vector` column only where the extension
 does. Without it the layer degrades to `degraded: ["vector_suggestions"]`

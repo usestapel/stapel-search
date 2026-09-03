@@ -158,6 +158,51 @@ DEFAULTS = {
     # {"key", "text", "payload"}}. Empty by design (the SOURCES rule):
     # the composite that knows categories and vocabularies declares these.
     "VECTOR_CORPORA": {},
+    # --- Query understanding: a query's words become filters --------------
+    # Off by default. With it off the answer is byte-identical to 0.11.x:
+    # a query is text and nothing more. The switch flips on the labelled
+    # eval, not on a hunch.
+    "QUERY_UNDERSTANDING": False,
+    # Confidence STAMPED on a deterministic option match. These are not
+    # thresholds — a folded-label or transliterated-code hit is exact by
+    # construction; the numbers exist so a frontend can render one chip
+    # differently from another, and so the eval can slice by method.
+    "UNDERSTANDING_EXACT_CONFIDENCE": 1.0,
+    "UNDERSTANDING_TRANSLIT_CONFIDENCE": 0.95,
+    # Cosine floor for a VECTOR-matched option. Deliberately far above
+    # VECTOR_SIMILARITY_FLOOR (0.6): a suggestion a human reads and ignores
+    # may be wrong, a filter that silently narrows the answer may not. A
+    # wrong applied filter is indistinguishable from an empty catalogue.
+    "UNDERSTANDING_VECTOR_FLOOR": 0.86,
+    # At most this many filters come out of one query; the rest of the
+    # words stay text. A query is not a form.
+    "UNDERSTANDING_MAX_FILTERS": 4,
+    # The comm Function resolving one term inside one (vocabulary, level) —
+    # stapel-vocabularies' own exact/prefix/vector ladder, reused rather
+    # than reimplemented here.
+    "UNDERSTANDING_MATCH_FUNCTION": "vocabularies.match",
+    # --- Geo bands: a label, never a filter -------------------------------
+    # Off by default. On, an answer is ordered near-first but NOTHING is
+    # withheld: the far band carries every remaining row, so a query can
+    # never return zero because of distance.
+    "GEO_BANDS": False,
+    # The near band's edge. A BAND EDGE, not a radius filter: `radius_km`
+    # remains the only thing that actually excludes a row.
+    "NEAR_BAND_RADIUS_KM": 25.0,
+    # Geohash precision the near band's covering cell set is built at. 4 is
+    # measured: a 25km disc covers 16-20 cells of ~39x19.5km, each an
+    # indexed prefix range. Raising it multiplies the cell count; lowering
+    # it hands the haversine far more rows than it needs.
+    "NEAR_BAND_CELL_PRECISION": 4,
+    # Above this many covering cells the OR-of-prefixes stops paying for
+    # itself and the band falls back to the bounding box.
+    "NEAR_BAND_MAX_CELLS": 64,
+    # Decimal places a PUBLIC card's coordinates are rounded to. 2 is ~1.1km
+    # — the approximate area the product already draws on a map, never the
+    # seller's pin. The exact distance rides on the hit as `distance_km`,
+    # computed server-side from the true coordinates, so a coarse card
+    # costs the reader no accuracy.
+    "CARD_COORD_PRECISION": 2,
     # --- HTTP ------------------------------------------------------------
     "QUERY_THROTTLE": "120/min",
     "SUGGEST_THROTTLE": "300/min",

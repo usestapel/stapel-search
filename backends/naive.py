@@ -23,6 +23,7 @@ from __future__ import annotations
 from ..dto import (
     BackendCapabilities,
     BackendHealth,
+    BandSummary,
     FacetPlan,
     FacetResult,
     Hit,
@@ -157,6 +158,15 @@ class NaiveSearchBackend:
         return shared.geo_distance_km(row.lat, row.lon, row.geohash, q.geo)
 
     @staticmethod
+    def _band(row, q: SearchQuery) -> str:
+        """The band LABEL. Never a predicate: no caller may `continue` on it."""
+        return shared.band_of(row.lat, row.lon, q.near)
+
+    @staticmethod
+    def _match_count(row, q: SearchQuery) -> int:
+        return shared.match_count(row.facet_terms, q.signals)
+
+    @staticmethod
     def _text_score(row, q: SearchQuery) -> float | None:
         """Weighted substring matching: A=title, B=extra, C=body.
 
@@ -217,6 +227,10 @@ class NaiveSearchBackend:
                 continue
             score = self._score(row, q, text_score, distance)
             value = self._sort_value(row, q.sort, score, distance)
+            band = self._band(row, q)
+            matches = self._match_count(row, q)
+            if any(shared.leading_keys(q)):
+                value = shared.banded_sort_value(band, matches, value)
             out.append(
                 (
                     shared.order_key(q.sort, value, row.doc_key),
@@ -226,6 +240,8 @@ class NaiveSearchBackend:
                         score=round(score, 6),
                         distance_km=None if distance in (None, shared.OUT_OF_RANGE) else distance,
                         sort_value=value,
+                        band=band,
+                        match_count=matches,
                     ),
                     row,
                 )
@@ -244,6 +260,23 @@ class NaiveSearchBackend:
             has_next=has_next,
             has_prev=has_prev,
             degraded=(),
+            bands=self._bands(q, rows),
+        )
+
+    @staticmethod
+    def _bands(q: SearchQuery, rows: list[tuple]) -> tuple[BandSummary, ...]:
+        """Exact per-band counts over the SAME rows the answer came from.
+
+        Both bands are always reported, an empty one included: a heading a
+        reader can scroll to must exist before the rows under it do, and a
+        band that disappears when it empties reads as a filter.
+        """
+        if q.near is None or not q.near.has_center:
+            return ()
+        near = sum(1 for item in rows if item[2].band == "near")
+        return (
+            BandSummary(key="near", count=near, radius_km=shared.near_radius_km(q.near)),
+            BandSummary(key="far", count=len(rows) - near),
         )
 
     def facets(self, q: SearchQuery, plan: FacetPlan) -> FacetResult:

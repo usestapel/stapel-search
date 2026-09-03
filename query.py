@@ -135,6 +135,82 @@ def parse_geo(params: Mapping[str, Any]) -> GeoFilter | None:
     return GeoFilter(lat=lat, lon=lon, radius_km=radius)
 
 
+def parse_bands(params: Mapping[str, Any]) -> bool:
+    """``bands=on|off``, defaulting to ``GEO_BANDS``. A closed switch.
+
+    Refused rather than ignored when it is neither: a parameter the server
+    dropped without saying so is the most expensive kind of wrong answer
+    (module docstring), and here the wrong answer is an ordinary-looking
+    page that silently is not the one the caller asked for.
+    """
+    from .conf import search_settings
+
+    raw = str(params.get("bands") or "").strip().lower()
+    if not raw:
+        return bool(search_settings.GEO_BANDS)
+    if raw in ("on", "off"):
+        return raw == "on"
+    raise SearchValidationError(ERR_400_BAD_GEO, reason="bands must be 'on' or 'off'")
+
+
+def parse_understanding(params: Mapping[str, Any]) -> bool:
+    """``qu=auto|off`` — whether this request's words may become filters.
+
+    ``auto`` (the default while ``QUERY_UNDERSTANDING`` is on) extracts;
+    ``off`` does not. The switch exists because extraction is STATELESS and
+    the server remembers nothing: without it, a person who removes an
+    extracted chip re-sends ``q`` unchanged and the server cheerfully
+    extracts the chip again. The storefront's flow is therefore "extract
+    once, then replay the ``param`` strings with ``qu=off``".
+
+    Anything that is neither is read as ``off`` — the wider answer, and a
+    visible one: no ``query_understanding`` key comes back, so a client that
+    misspelled the switch can see that extraction did not run rather than
+    wondering why its chips moved.
+    """
+    from .conf import search_settings
+
+    if not search_settings.QUERY_UNDERSTANDING:
+        return False
+    raw = str(params.get("qu") or "auto").strip().lower()
+    return raw == "auto"
+
+
+def parse_near(params: Mapping[str, Any]) -> GeoFilter | None:
+    """The near band's centre and edge — a LABEL, never a predicate.
+
+    Carried separately from :func:`parse_geo`'s result because the two mean
+    opposite things: ``radius_km`` excludes a row, ``near_radius_km`` only
+    decides which heading it sits under. Folding them into one filter is
+    exactly how a band becomes a hidden radius again, which is the defect
+    this design exists to prevent.
+
+    The centre is the existing ``lat``/``lon`` pair, read directly rather
+    than off the parsed geo filter so that a ``bbox`` query can still be
+    banded around a point. No centre means banding is simply inactive —
+    every row gets an empty band — and that is a normal answer, not an
+    error: a query must never fail, or empty, because of geo.
+    """
+    from .conf import search_settings
+
+    if not parse_bands(params):
+        return None
+    lat = _float(params, "lat")
+    lon = _float(params, "lon")
+    if lat is None or lon is None:
+        return None
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        raise SearchValidationError(ERR_400_BAD_GEO, reason="coordinates out of range")
+    radius = _float(params, "near_radius_km")
+    if radius is None:
+        radius = float(search_settings.NEAR_BAND_RADIUS_KM)
+    if radius <= 0:
+        raise SearchValidationError(
+            ERR_400_BAD_GEO, reason="near_radius_km must be positive"
+        )
+    return GeoFilter(lat=lat, lon=lon, radius_km=radius)
+
+
 def resolve_language(params: Mapping[str, Any], *, accept_language: str = "") -> str:
     """Which dictionary and analyzer answer this request.
 
@@ -210,6 +286,7 @@ def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> Sear
         raise SearchValidationError(ERR_400_TOO_MANY_RANGES, limit=max_ranges)
 
     geo = parse_geo(params)
+    near = parse_near(params)
 
     sorts = tuple(search_settings.SORTS or ())
     sort = str(params.get("sort") or "").strip()
@@ -246,6 +323,7 @@ def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> Sear
         facets=facets,
         ranges=tuple(ranges),
         geo=geo,
+        near=near,
         sort=sort,
         limit=limit,
         cursor=cursor,
@@ -285,8 +363,11 @@ __all__ = [
     "RANGE_PREFIX",
     "decode_cursor",
     "encode_cursor",
+    "parse_bands",
     "parse_facet_selection",
     "parse_geo",
+    "parse_near",
     "parse_query",
+    "parse_understanding",
     "resolve_language",
 ]

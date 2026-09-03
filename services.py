@@ -936,6 +936,154 @@ def _drop_hidden_filters(q, plan) -> tuple[Any, tuple[str, ...]]:
     )
 
 
+def _apply_extraction(q, extraction):
+    """Fold an :class:`Extraction` into the query it came from.
+
+    Three rules, and each closes a way for extraction to make an answer
+    silently wrong:
+
+    * an APPLIED filter narrows, a soft one does not — but both become
+      ``signals``, so a word the server declined to filter on can still
+      rank the rows that satisfy it;
+    * an explicit ``f.<slug>`` from the caller always wins. The person
+      chose ``siniy`` in the panel; a word in the box that reads as
+      ``krasnyy`` must not overrule the click;
+    * the residual replaces the text ONLY when it still says something.
+      «красные штаны» leaves «штаны» and the engine matches it. «красный»
+      leaves nothing, and searching for the empty string would silently
+      widen the answer to the whole catalogue — so the text is dropped only
+      when the residual is empty AND some slug the extraction CLAIMED is
+      actually being filtered (by this extraction or by the caller's own
+      ``f.<slug>``). The query then becomes the filters it turned out to
+      be, and ``count`` counts the chips' set, which is what the chips
+      describe. If nothing narrowed, dropping the text would widen the
+      answer to everything, so the original text stays and the answer is
+      the narrow one.
+
+    Returns ``(query, extraction)``: the extraction comes back rewritten so
+    ``applied`` states what actually happened. A filter the caller's own
+    ``f.<slug>`` overruled did not apply, and reporting it as applied would
+    put a chip on the page that is not narrowing anything.
+    """
+    from dataclasses import replace
+
+    from .text import normalize_query
+
+    facets = dict(q.facets)
+    overruled = set(q.facets)
+    filters = tuple(
+        replace(f, applied=f.applied and f.slug not in overruled)
+        for f in extraction.filters
+    )
+    applied = [f for f in filters if f.applied]
+    for extracted in applied:
+        facets[extracted.slug] = [extracted.value]
+    residual = (extraction.residual or "").strip()
+    narrowed = any(f.slug in facets for f in filters)
+    if residual:
+        text = normalize_query(residual, q.language)
+    elif narrowed:
+        text = None
+    else:
+        text = q.text
+    return (
+        replace(
+            q,
+            facets=facets,
+            text=text,
+            signals=tuple((f.slug, f.value) for f in filters),
+        ),
+        replace(extraction, filters=filters),
+    )
+
+
+def _understanding_payload(extraction) -> dict:
+    """The ``query_understanding`` block: what the words turned into.
+
+    ``param`` is the whole contract with the frontend — the literal query
+    parameter this filter IS, so a client keeps a chip by re-sending it and
+    removes one by omitting it. Nothing here is remembered server-side,
+    which is why the parameter has to be complete.
+    """
+    return {
+        "filters": [
+            {
+                "slug": f.slug,
+                "value": f.value,
+                "label": f.label,
+                "value_label": f.value_label,
+                "method": f.method,
+                "confidence": f.confidence,
+                "span": list(f.span),
+                "param": f.param,
+                "applied": f.applied,
+            }
+            for f in extraction.filters
+        ],
+        "category_path": list(extraction.category_path),
+        "category_confidence": extraction.category_confidence,
+        "residual": extraction.residual,
+        "degraded": list(extraction.degraded),
+    }
+
+
+def _card_area(row) -> dict:
+    """The card's coordinates as an AREA — never the seller's pin.
+
+    A search card is a public object served to anyone who can type a URL, so
+    it carries the neighbourhood (``CARD_COORD_PRECISION`` decimals, ~1.1km
+    at the default 2) plus ``geo_precision_km``, which is what tells a
+    client to draw a circle instead of a marker. The EXACT distance still
+    rides on the item as ``distance_km``, computed server-side from the true
+    coordinates, so nothing about the answer got less accurate — only the
+    ability to locate the thing from the answer.
+    """
+    from .backends import _shared as shared
+    from .conf import search_settings
+
+    if row is None:
+        return {}
+    lat, lon, precision_km = shared.coarse_coordinates(
+        row.lat, row.lon, int(search_settings.CARD_COORD_PRECISION)
+    )
+    if lat is None or lon is None:
+        return {}
+    return {"lat": lat, "lon": lon, "geo_precision_km": precision_km}
+
+
+def _honest_bands(result, items) -> list[dict]:
+    """Per-band counts the page in front of the reader cannot disprove.
+
+    :func:`_honest_count`'s rule, applied one level down. A heading reading
+    «Объявления поблизости» over three visible cards may not claim zero of
+    them, whatever the engine computed — so what this page shows is a floor
+    for its own band, and a count below it becomes that floor and says it is
+    one.
+    """
+    shown: dict[str, int] = {}
+    for item in items:
+        band = item.get("band") or ""
+        if band:
+            shown[band] = shown.get(band, 0) + 1
+    out = []
+    for band in result.bands:
+        count, lower_bound = band.count, band.count_is_lower_bound
+        floor = shown.get(band.key, 0)
+        if count is None:
+            count, lower_bound = (floor, True) if floor else (None, False)
+        elif count < floor:
+            count, lower_bound = floor, True
+        out.append(
+            {
+                "key": band.key,
+                "count": count,
+                "count_is_lower_bound": bool(lower_bound),
+                "radius_km": band.radius_km,
+            }
+        )
+    return out
+
+
 def search(params, *, accept_language: str = "") -> dict:
     """Run one query and shape the answer. The module's whole read path."""
     from .backends import get_backend
@@ -948,7 +1096,13 @@ def search(params, *, accept_language: str = "") -> dict:
         vocabulary_labels,
     )
     from .models import SearchDocument
-    from .query import encode_cursor, parse_facet_selection, parse_query
+    from .query import (
+        encode_cursor,
+        parse_bands,
+        parse_facet_selection,
+        parse_query,
+        parse_understanding,
+    )
 
     started = timezone.now()
     reset_path_degradation()
@@ -962,6 +1116,24 @@ def search(params, *, accept_language: str = "") -> dict:
     plan = facet_plan(
         q.category_path[-1] if q.category_path else None, requested=requested
     )
+    # Extraction runs AFTER the plan (it needs an option space to resolve
+    # against) and BEFORE the hidden-filter sweep, so a word that resolves
+    # to a non-public slug is dropped by the same guard an explicit
+    # `f.vin=` is — an extracted oracle is still an oracle.
+    extraction = None
+    if parse_understanding(params):
+        from .understanding import extract
+
+        raw_text = str(params.get("q") or "").strip()
+        if raw_text:
+            extraction = extract(
+                raw_text,
+                language=q.language,
+                plan=plan,
+                category_path=q.category_path,
+            )
+            q, extraction = _apply_extraction(q, extraction)
+
     q, dropped_filters = _drop_hidden_filters(q, plan)
 
     try:
@@ -981,20 +1153,30 @@ def search(params, *, accept_language: str = "") -> dict:
         for row in SearchDocument.objects.filter(doc_type=q.doc_type, doc_key__in=keys)
     }
 
+    # Two different questions. `bands_requested` decides the SHAPE of the
+    # answer (a caller who asked for bands is told what it got, even when
+    # that is "no centre, so no banding"); `q.near` decides whether there is
+    # anything to label. With bands off neither is true and the answer is
+    # what it was before bands existed, key for key.
+    bands_requested = parse_bands(params)
     items = []
     for hit in result.hits:
         row = rows.get(hit.key)
-        items.append(
-            {
-                "key": hit.key,
-                "score": hit.score,
-                # DSA Art. 26: present on EVERY item, under every sort,
-                # including when it is false. The serializer cannot omit it.
-                "promoted": bool(row.promoted) if row is not None else False,
-                "distance_km": hit.distance_km,
-                "card": dict(row.card or {}) if row is not None else {},
-            }
-        )
+        item = {
+            "key": hit.key,
+            "score": hit.score,
+            # DSA Art. 26: present on EVERY item, under every sort,
+            # including when it is false. The serializer cannot omit it.
+            "promoted": bool(row.promoted) if row is not None else False,
+            "distance_km": hit.distance_km,
+            "card": dict(row.card or {}) if row is not None else {},
+        }
+        if bands_requested:
+            item["band"] = hit.band
+            item["card"].update(_card_area(row))
+        if q.signals:
+            item["match_count"] = hit.match_count
+        items.append(item)
 
     next_anchor = None
     prev_anchor = None
@@ -1032,7 +1214,7 @@ def search(params, *, accept_language: str = "") -> dict:
     }
     for slug, values in vocabulary_labels(plan, counts).items():
         facet_labels[slug] = {"translatable": False, "values": values}
-    return {
+    answer = {
         "items": items,
         "facets": counts,
         "facet_labels": facet_labels,
@@ -1072,6 +1254,7 @@ def search(params, *, accept_language: str = "") -> dict:
                 )
                 + tuple(result.degraded)
                 + tuple(facet_result.degraded if facet_result else ())
+                + tuple(extraction.degraded if extraction is not None else ())
             )
         ),
         "backend": getattr(backend, "name", "unknown"),
@@ -1085,6 +1268,18 @@ def search(params, *, accept_language: str = "") -> dict:
         "sort": q.sort,
         "took_ms": int((timezone.now() - started).total_seconds() * 1000),
     }
+    if extraction is not None:
+        # Absent entirely when the flag is off: an answer that never
+        # extracted must look exactly like the answers that came before
+        # extraction existed.
+        answer["query_understanding"] = _understanding_payload(extraction)
+    if bands_requested:
+        # Present only while bands were asked for, so an answer with
+        # GEO_BANDS off is byte-for-byte the one this module gave before
+        # bands existed. Empty means "asked for, but there was no centre to
+        # band around" — which is an answer, not a failure.
+        answer["bands"] = _honest_bands(result, items)
+    return answer
 
 
 def suggest(params, *, accept_language: str = "") -> dict:

@@ -48,6 +48,14 @@
           },
           {
             "in": "query",
+            "name": "bands",
+            "schema": {
+              "type": "string"
+            },
+            "description": "on | off. On, the answer is ordered in two labelled bands — inside `near_radius_km` of lat/lon first, then everything else. Nothing is ever withheld by distance. Default: GEO_BANDS."
+          },
+          {
+            "in": "query",
             "name": "bbox",
             "schema": {
               "type": "string"
@@ -121,6 +129,15 @@
           },
           {
             "in": "query",
+            "name": "near_radius_km",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "The near band's EDGE, around the lat/lon centre. Never a filter — a row outside it is labelled `far`, not dropped. Use `radius_km` when you mean to exclude. Default: NEAR_BAND_RADIUS_KM."
+          },
+          {
+            "in": "query",
             "name": "owner",
             "schema": {
               "type": "string"
@@ -134,6 +151,14 @@
               "type": "string"
             },
             "description": "Free text. Dictionary-normalized here; morphology belongs to the engine."
+          },
+          {
+            "in": "query",
+            "name": "qu",
+            "schema": {
+              "type": "string"
+            },
+            "description": "auto | off. Whether the query's own words may become filters. `auto` (the default while QUERY_UNDERSTANDING is on) extracts and reports what it extracted under `query_understanding`; each filter carries the literal `param` to replay. Send `qu=off` with those replayed params afterwards — extraction is stateless, so without it a removed chip comes straight back."
           },
           {
             "in": "query",
@@ -342,6 +367,36 @@
   },
   "components": {
     "schemas": {
+      "BandSummary": {
+        "type": "object",
+        "description": "One labelled band of the answer — a heading, never a filter over it.",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/KeyEnum"
+          },
+          "count": {
+            "type": "integer",
+            "nullable": true,
+            "description": "How many rows are in this band. `null` when the engine cannot say. The two counts add up to the unbanded `count`, which is the machine-checkable form of 'nothing is hidden by distance'."
+          },
+          "count_is_lower_bound": {
+            "type": "boolean",
+            "description": "True when `count` is a floor (a capped count). Render 'N+'."
+          },
+          "radius_km": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "description": "Set on `near` only: the edge, in km, the band was cut at."
+          }
+        },
+        "required": [
+          "count",
+          "count_is_lower_bound",
+          "key",
+          "radius_km"
+        ]
+      },
       "CategorySuggestion": {
         "type": "object",
         "description": "One destination in the dropdown, ready to render and ready to follow.",
@@ -421,6 +476,57 @@
         ],
         "type": "string",
         "description": "* `category` - category\n* `query_in_category` - query_in_category"
+      },
+      "ExtractedFilter": {
+        "type": "object",
+        "description": "One filter the query's own words produced, ready to be replayed.",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value_label": {
+            "type": "string"
+          },
+          "method": {
+            "$ref": "#/components/schemas/MethodEnum"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "span": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "`[start, end)` into the RAW query, so a UI can underline the words that became this chip."
+          },
+          "param": {
+            "type": "string",
+            "description": "The literal query parameter this filter IS — e.g. `f.color=krasnyy`. Re-send it verbatim to KEEP the chip, omit it to remove it, and send `qu=off` alongside so the server does not extract it again. Nothing about extraction is remembered server-side, which is why the parameter has to be complete."
+          },
+          "applied": {
+            "type": "boolean",
+            "description": "True when this filter actually narrowed the answer. A false one still contributed to each row's `match_count`."
+          }
+        },
+        "required": [
+          "applied",
+          "confidence",
+          "label",
+          "method",
+          "param",
+          "slug",
+          "span",
+          "value",
+          "value_label"
+        ]
       },
       "FacetLabels": {
         "type": "object",
@@ -531,6 +637,14 @@
           "types"
         ]
       },
+      "KeyEnum": {
+        "enum": [
+          "near",
+          "far"
+        ],
+        "type": "string",
+        "description": "* `near` - near\n* `far` - far"
+      },
       "MatchEnum": {
         "enum": [
           "exact",
@@ -542,6 +656,55 @@
         ],
         "type": "string",
         "description": "* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings\n* `vector` - vector"
+      },
+      "MethodEnum": {
+        "enum": [
+          "exact",
+          "translit",
+          "alias",
+          "vector"
+        ],
+        "type": "string",
+        "description": "* `exact` - exact\n* `translit` - translit\n* `alias` - alias\n* `vector` - vector"
+      },
+      "QueryUnderstanding": {
+        "type": "object",
+        "description": "What a free-text query turned out to be ABOUT, beside its words.",
+        "properties": {
+          "filters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExtractedFilter"
+            }
+          },
+          "category_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category_confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "residual": {
+            "type": "string",
+            "description": "The query with every extracted span removed — the text the engine still had to match. Empty is normal and correct: «красный» is entirely a filter, and the answer is then the filters' set."
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "category_confidence",
+          "category_path",
+          "degraded",
+          "filters",
+          "residual"
+        ]
       },
       "RankingResponse": {
         "type": "object",
@@ -686,10 +849,18 @@
             "nullable": true,
             "description": "Great-circle distance from the searched centre."
           },
+          "band": {
+            "type": "string",
+            "description": "`near` | `far` | `\"\"`. Which labelled band this row sits in, present only when `bands` is on. A LABEL, never a filter: the far band carries every remaining row, including rows with no coordinates at all, so a query never returns fewer results because of distance. `\"\"` means bands were asked for but no centre was given, which is not an error."
+          },
+          "match_count": {
+            "type": "integer",
+            "description": "How many of the filters the QUERY's own words produced this row satisfies — including the soft ones that were not applied as filters. Orders rows within a band, strongest first. Present only when the query produced signals."
+          },
           "card": {
             "type": "object",
             "additionalProperties": {},
-            "description": "Stored row fields, so a result page costs one query."
+            "description": "Stored row fields, so a result page costs one query. With `bands` on it also carries `lat`/`lon` ROUNDED to CARD_COORD_PRECISION plus `geo_precision_km`: draw an AREA, not a pin. The card never carries full-precision coordinates; the exact `distance_km` on the item is computed server-side from the true ones."
           }
         },
         "required": [
@@ -709,6 +880,21 @@
             "items": {
               "$ref": "#/components/schemas/SearchItem"
             }
+          },
+          "bands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BandSummary"
+            },
+            "description": "Per-band counts in render order — «Объявления поблизости» then «Все объявления». Present only when `bands` was asked for; empty when it was asked for without a centre. The rows themselves carry `band`; this is the summary a heading needs."
+          },
+          "query_understanding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QueryUnderstanding"
+              }
+            ],
+            "description": "What the query's words became. Absent entirely while QUERY_UNDERSTANDING is off or `qu=off` was sent."
           },
           "facets": {
             "type": "object",
