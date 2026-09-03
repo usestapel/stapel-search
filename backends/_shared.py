@@ -10,8 +10,9 @@ stays in the backend; the meaning lives here.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 
 from ..dto import GeoFilter, RangeFilter, SearchQuery
 
@@ -182,14 +183,24 @@ def radius_bbox(lat: float, lon: float, radius_km: float) -> tuple[float, float,
     return min_lat, min_lon, max_lat, max_lon
 
 
-def bbox_of(geo: GeoFilter) -> tuple[float, float, float, float] | None:
-    """The rectangle this filter narrows to, radius filters included."""
+def bbox_of(geo: GeoFilter, *, slack_km: float = 0.0) -> tuple[float, float, float, float] | None:
+    """The rectangle this filter narrows to, radius filters included.
+
+    *slack_km* widens the RADIUS-derived box only. It is what a coarse
+    prefilter needs when the exact half measures a snapped position (see
+    :func:`grid_slack_km`): the disc is drawn around the caller's centre in
+    true coordinates, but membership is decided against a point up to half a
+    cell diagonal away, and a prefilter that cannot see that row drops it.
+    A rectangle filter needs no slack — :func:`grid_aligned_bbox` has already
+    made it a union of whole cells, which contains every point that snaps
+    into it.
+    """
     if geo is None:
         return None
     if geo.is_bbox:
         return (geo.min_lat, geo.min_lon, geo.max_lat, geo.max_lon)
     if geo.has_center and geo.radius_km:
-        return radius_bbox(geo.lat, geo.lon, geo.radius_km)
+        return radius_bbox(geo.lat, geo.lon, float(geo.radius_km) + slack_km)
     return None
 
 
@@ -342,20 +353,252 @@ def band_of(lat, lon, near: GeoFilter | None) -> str:
     return "all"
 
 
+# --------------------------------------------------------------------------
+# the public grid
+# --------------------------------------------------------------------------
+#
+# A public card publishes the seller's coordinates rounded to
+# CARD_COORD_PRECISION decimals — one ~1.1km cell instead of a front door.
+# Everything below exists so that no OTHER answer this module gives is finer
+# than that cell, because a coarse card beside a fine distance is not a
+# coarse answer: it is the same pin, one arithmetic step away.
+#
+# The rule is one sentence: **for an anonymous reader, a row's position is
+# read through the grid**. Not "the distance is rounded" — rounding the
+# ANSWER closes nothing, because the caller's centre and rectangle are
+# continuous. Whatever the emitted number, moving the centre until the answer
+# flips traces a circle of known radius around the TRUE point, and three of
+# those are the point. Only putting one end of every measurement on a fixed
+# grid removes the continuous probe, and the row's own position is the end
+# that must be on it.
+
+
+def public_precision() -> int:
+    """Decimal places the public grid rounds to — the card's own setting."""
+    from ..conf import search_settings
+
+    return int(search_settings.CARD_COORD_PRECISION)
+
+
+def cell_km(precision: int) -> float:
+    """The side of one grid cell, in km. 1.113 at the default precision 2."""
+    return round(_KM_PER_DEG * (10.0**-precision), 3)
+
+
+def distance_quantum_km(precision: int) -> float:
+    """The step every published ``distance_km`` is floored to.
+
+    Derived, never chosen. The grid declares one square cell of side
+    :func:`cell_km` indistinguishable, so the largest distance between two
+    points it treats as the same place is that cell's DIAGONAL,
+    ``side * sqrt(2)`` — 1.574km at precision 2. A quantum any finer would
+    separate two points the card does not, and a difference that survives
+    repetition is a position.
+
+    Rounded so the published numbers are readable, but never to zero: a
+    precision fine enough for that (10**-6 degrees is eleven centimetres) is
+    not a public area at all, and the answer there is the exact value, not a
+    division by it.
+    """
+    exact = _KM_PER_DEG * (10.0**-precision) * math.sqrt(2)
+    return round(exact, 3) or exact
+
+
+def grid_slack_km(precision: int) -> float:
+    """How far snapping can move a point: half the cell diagonal, 0.787km.
+
+    The number a COARSE prefilter has to be widened by. A prefilter that
+    narrows on the stored column while the exact half measures the snapped
+    point would drop rows the exact half would keep, and an optimisation that
+    removes correct answers is a defect (``_where`` says the same thing about
+    the geohash prefix).
+    """
+    return distance_quantum_km(precision) / 2.0
+
+
+def is_precise(audience: str | None) -> bool:
+    """Whether this reader gets the stored point instead of the grid.
+
+    The audience axis is ``stapel_attributes.visibility``'s — the one that
+    already decides who may read a VIN — and not a second notion of who may
+    see what. ``anonymous`` is the fail-closed default, so a caller that
+    never said who it is gets the grid.
+    """
+    from stapel_attributes import visibility
+
+    return visibility.normalize_audience(audience) != visibility.ANONYMOUS
+
+
+def snap_to_grid(value, precision: int) -> float | None:
+    """The grid point *value* sits on: ``floor(v * 10**p + 0.5) / 10**p``.
+
+    Stated as one arithmetic rule because Postgres computes it in SQL and
+    this module computes it in Python, and two engines disagreeing about
+    which cell a listing is in is exactly the seam defect the conformance
+    suite exists for. Ties go toward +infinity in both, which ``round()``
+    (banker's, in Python) and ``round(numeric)`` (half away from zero, in
+    Postgres) would not have agreed about.
+    """
+    number = _as_decimal(value)
+    if number is None:
+        return None
+    scale = Decimal(1).scaleb(precision)
+    stepped = (number * scale + Decimal("0.5")).to_integral_value(rounding=ROUND_FLOOR)
+    return float(stepped / scale)
+
+
+def _as_decimal(value) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def public_point(lat, lon, q: SearchQuery) -> tuple:
+    """The coordinates *q*'s reader is allowed to have measured against."""
+    if is_precise(getattr(q, "audience", None)):
+        return lat, lon
+    precision = public_precision()
+    return snap_to_grid(lat, precision), snap_to_grid(lon, precision)
+
+
+def query_slack_km(q: SearchQuery) -> float:
+    """Widening a coarse prefilter needs, for this query. ``0`` when precise."""
+    if is_precise(getattr(q, "audience", None)):
+        return 0.0
+    return grid_slack_km(public_precision())
+
+
+def measured_distance_km(lat, lon, q: SearchQuery):
+    """:func:`geo_distance_km` against the position this reader may measure.
+
+    The MEASUREMENT: it decides the radius cut, the band and the geo decay.
+    What is published is :func:`published_distance_km` of this.
+    """
+    flat, flon = public_point(lat, lon, q)
+    return geo_distance_km(flat, flon, "", q.geo)
+
+
+def published_distance_km(distance, q: SearchQuery):
+    """The measurement as the answer may state it — floored to the quantum.
+
+    Floored rather than rounded so the number is never an overstatement of
+    proximity, and floored rather than left alone because a deployment whose
+    cards carry no coordinates at all (this fleet's) would otherwise let the
+    distance alone rebuild the area the card declines to draw.
+
+    It also travels into the keyset cursor, so the ORDER under
+    ``sort=distance`` is the order of these numbers and rows inside one
+    quantum are separated by ``doc_key`` — a cursor whose anchor is coarser
+    than the ordering it resumes would page unstably.
+    """
+    if distance is None or distance is OUT_OF_RANGE:
+        return None
+    value = float(distance)
+    if is_precise(getattr(q, "audience", None)):
+        return round(value, 6)
+    quantum = distance_quantum_km(public_precision())
+    if quantum <= 0:  # a precision no grid can express; nothing to floor to
+        return round(value, 6)
+    return round(math.floor(value / quantum) * quantum, 6)
+
+
+def band_for(lat, lon, q: SearchQuery) -> str:
+    """:func:`band_of` against the position this reader may measure."""
+    flat, flon = public_point(lat, lon, q)
+    return band_of(flat, flon, q.near)
+
+
+def bbox_matches_for(lat, lon, q: SearchQuery) -> bool:
+    """:func:`bbox_matches` against the position this reader may measure."""
+    flat, flon = public_point(lat, lon, q)
+    return bbox_matches(flat, flon, q.geo)
+
+
+def grid_aligned_bbox(geo: GeoFilter, precision: int) -> GeoFilter:
+    """The caller's rectangle grown OUTWARD to whole grid cells.
+
+    A minimum box SIZE would not close the bisection: a smallest-allowed box
+    is still slid continuously, and the edge at which a row enters it is the
+    row's coordinate to as many decimals as the attacker cares to ask for.
+    What closes it is that the box may only ever be asked about whole cells —
+    then "is the row in this box" is a question about the PUBLISHED point,
+    the answer stops changing below one cell, and the halving stalls. The
+    minimum box falls out of that for free: the smallest expressible box is
+    one cell.
+
+    Growing outward rather than snapping to the nearest edge keeps a viewport
+    honest — a row a client can see on its map does not vanish because the
+    box shrank under it.
+    """
+    if geo is None or not geo.is_bbox:
+        return geo
+    step = Decimal(1).scaleb(-precision)
+    half = Decimal("0.5")
+
+    def _floor(number: Decimal) -> Decimal:
+        return number.to_integral_value(rounding=ROUND_FLOOR)
+
+    def lower(value) -> Decimal:
+        """The largest cell boundary at or below *value*."""
+        return (_floor(_as_decimal(value) / step - half) + half) * step
+
+    def upper(value) -> Decimal:
+        """The smallest cell boundary at or above *value*."""
+        return (-_floor(half - _as_decimal(value) / step) + half) * step
+
+    min_lat, max_lat = lower(geo.min_lat), upper(geo.max_lat)
+    min_lon, max_lon = lower(geo.min_lon), upper(geo.max_lon)
+    # A box whose two edges landed on the same boundary is empty, not one
+    # cell; the smallest box this grid can express is a whole cell.
+    if max_lat - min_lat < step:
+        max_lat = min_lat + step
+    if not geo.crosses_antimeridian and max_lon - min_lon < step:
+        max_lon = min_lon + step
+    return replace(
+        geo,
+        min_lat=max(-90.0, float(min_lat)),
+        max_lat=min(90.0, float(max_lat)),
+        min_lon=max(-180.0, float(min_lon)),
+        max_lon=min(180.0, float(max_lon)),
+    )
+
+
+def padded_bbox(geo: GeoFilter, slack_km: float) -> tuple[float, float, float, float]:
+    """A rectangle grown by *slack_km* on every side, clamped to the planet.
+
+    What an engine that filters on the STORED point needs when membership is
+    decided against a snapped one (``backends/meili.py``): the engine half is
+    a prefilter and must never drop a row the exact half would keep.
+    """
+    min_lat, min_lon = float(geo.min_lat), float(geo.min_lon)
+    max_lat, max_lon = float(geo.max_lat), float(geo.max_lon)
+    if slack_km <= 0:
+        return min_lat, min_lon, max_lat, max_lon
+    d_lat = slack_km / _KM_PER_DEG
+    widest = max(abs(min_lat), abs(max_lat))
+    cos_lat = math.cos(math.radians(max(-89.9, min(89.9, widest))))
+    d_lon = 180.0 if cos_lat < 1e-6 else min(180.0, slack_km / (_KM_PER_DEG * cos_lat))
+    return (
+        max(-90.0, min_lat - d_lat),
+        max(-180.0, min_lon - d_lon),
+        min(90.0, max_lat + d_lat),
+        min(180.0, max_lon + d_lon),
+    )
+
+
 def coarse_coordinates(lat, lon, precision: int) -> tuple[float | None, float | None, float]:
     """A card's coordinates as an AREA, plus how wide that area is.
 
-    ``(lat, lon, precision_km)`` with the pair rounded to *precision*
-    decimals, so a public card draws a neighbourhood and never the seller's
-    pin. The exact distance still rides on the hit, computed server-side
-    from the true coordinates, so coarsening the card costs the reader no
-    accuracy — only the ability to locate the thing being sold.
+    ``(lat, lon, precision_km)`` with the pair on the public grid, so a card
+    draws a neighbourhood and never the seller's pin. It is the SAME grid
+    every geo answer is measured on (:func:`snap_to_grid`), which is what
+    makes the card and the distance agree about which cell a listing is in
+    instead of describing two differently-aligned areas around one point.
     """
-    size_km = round(_KM_PER_DEG * (10.0**-precision), 3)
-    flat, flon = _as_float(lat), _as_float(lon)
-    if flat is None or flon is None:
-        return None, None, size_km
-    return round(flat, precision), round(flon, precision), size_km
+    return snap_to_grid(lat, precision), snap_to_grid(lon, precision), cell_km(precision)
 
 
 def match_count(facet_terms, signals: tuple[tuple[str, str], ...]) -> int:
@@ -372,7 +615,7 @@ def match_count(facet_terms, signals: tuple[tuple[str, str], ...]) -> int:
     return len({f"{slug}={value}" for slug, value in signals} & terms)
 
 
-def geohash_prefix(geo: GeoFilter | None) -> str:
+def geohash_prefix(geo: GeoFilter | None, *, slack_km: float = 0.0) -> str:
     """Coarse indexed prefilter: the geohash cell containing the whole box.
 
     A geohash cell IS a latitude/longitude rectangle, so if all four corners
@@ -382,7 +625,7 @@ def geohash_prefix(geo: GeoFilter | None) -> str:
     cell boundary the common prefix is empty and the prefilter simply
     contributes nothing; the lat/lon range still answers correctly.
     """
-    box = bbox_of(geo)
+    box = bbox_of(geo, slack_km=slack_km)
     if box is None:
         return ""
     min_lat, min_lon, max_lat, max_lon = box
@@ -588,23 +831,37 @@ def paginate(rows: list[tuple], q: SearchQuery) -> tuple[list[tuple], bool, bool
 __all__ = [
     "BAND_RANKS",
     "OUT_OF_RANGE",
+    "band_for",
     "band_of",
     "banded_sort_value",
     "bbox_matches",
+    "bbox_matches_for",
     "bbox_of",
     "category_matches",
+    "cell_km",
     "coarse_coordinates",
     "combined_score",
+    "distance_quantum_km",
     "facet_terms_for",
     "facets_match",
     "geo_distance_km",
     "geohash_cells",
     "geohash_prefix",
+    "grid_aligned_bbox",
+    "grid_slack_km",
+    "is_precise",
     "leading_keys",
     "haversine_km",
     "match_count",
+    "measured_distance_km",
     "narrow_by_ranges",
     "near_radius_km",
+    "padded_bbox",
+    "public_point",
+    "public_precision",
+    "published_distance_km",
+    "query_slack_km",
+    "snap_to_grid",
     "split_ranges",
     "split_sort_value",
     "order_key",

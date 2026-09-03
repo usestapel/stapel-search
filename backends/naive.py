@@ -151,16 +151,25 @@ class NaiveSearchBackend:
 
     @staticmethod
     def _matches_bbox(row, q: SearchQuery) -> bool:
-        return shared.bbox_matches(row.lat, row.lon, q.geo)
+        return shared.bbox_matches_for(row.lat, row.lon, q)
 
     @staticmethod
     def _geo_distance(row, q: SearchQuery):
-        return shared.geo_distance_km(row.lat, row.lon, row.geohash, q.geo)
+        """The MEASUREMENT: the reader's own position for this row.
+
+        Anonymous readers measure against the public grid, so the radius cut,
+        the band and the reported distance are all functions of the point the
+        card publishes and of nothing finer. What is EMITTED is
+        ``shared.published_distance_km`` of this — the measurement is not the
+        answer, and this backend used to emit the raw float where the other
+        two at least rounded it.
+        """
+        return shared.measured_distance_km(row.lat, row.lon, q)
 
     @staticmethod
     def _band(row, q: SearchQuery) -> str:
         """The band LABEL. Never a predicate: no caller may `continue` on it."""
-        return shared.band_of(row.lat, row.lon, q.near)
+        return shared.band_for(row.lat, row.lon, q)
 
     @staticmethod
     def _match_count(row, q: SearchQuery) -> int:
@@ -226,7 +235,8 @@ class NaiveSearchBackend:
             if text_score is None:
                 continue
             score = self._score(row, q, text_score, distance)
-            value = self._sort_value(row, q.sort, score, distance)
+            published = shared.published_distance_km(distance, q)
+            value = self._sort_value(row, q.sort, score, published)
             band = self._band(row, q)
             matches = self._match_count(row, q)
             if any(shared.leading_keys(q)):
@@ -238,7 +248,7 @@ class NaiveSearchBackend:
                     Hit(
                         key=row.doc_key,
                         score=round(score, 6),
-                        distance_km=None if distance in (None, shared.OUT_OF_RANGE) else distance,
+                        distance_km=published,
                         sort_value=value,
                         band=band,
                         match_count=matches,

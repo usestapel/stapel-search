@@ -26,10 +26,23 @@ def _schema(name: str) -> dict:
 
 @function("search.query", schema=_schema("search.query"))
 def query_function(payload: dict) -> dict:
-    """Run a search. Same parser, same envelope as ``GET .../query``."""
+    """Run a search. Same parser, same envelope as ``GET .../query``.
+
+    The payload's ``audience`` says who the answer is FOR, and it defaults to
+    ``anonymous``: a server-side caller assembling a public strip must not
+    get finer coordinates than the page it is building would. A caller that
+    IS the owner or staff says so, and says it per call — the transport
+    cannot infer it, and a transport that guessed would be the side door
+    around the whole gate.
+    """
+    from stapel_attributes import visibility
+
     from .services import search
 
-    return search(payload or {})
+    payload = payload or {}
+    return search(
+        payload, audience=visibility.normalize_audience(payload.get("audience"))
+    )
 
 
 @function("search.reindex", schema=_schema("search.reindex"))

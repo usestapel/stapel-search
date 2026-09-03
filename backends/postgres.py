@@ -355,20 +355,61 @@ class PostgresSearchBackend:
             return "0.0", []
         return f"ts_rank_cd(d.text_vec, ({expression}))", params
 
+    @staticmethod
+    def _column(axis: str, q: SearchQuery) -> str:
+        """``d.lat``/``d.lon`` as this reader is allowed to read it.
+
+        For an anonymous reader the column is snapped onto the public grid IN
+        SQL — ``floor(v * 10**p + 0.5) / 10**p``, the identical arithmetic
+        ``_shared.snap_to_grid`` performs in Python, ties toward +infinity in
+        both, because two engines disagreeing about which cell a listing sits
+        in is precisely the seam defect the conformance suite exists for.
+
+        No index is lost by it: the only predicates that read these columns
+        through a snap are haversines, which were never indexable, and the
+        indexable lat/lon range in ``_where`` still reads the raw column
+        (widened by ``_shared.grid_slack_km``, so it stays a superset).
+        """
+        raw = f"d.{axis}::double precision"
+        if shared.is_precise(getattr(q, "audience", None)):
+            return raw
+        scale = 10 ** shared.public_precision()
+        return f"(floor(d.{axis}::double precision * {scale} + 0.5) / {scale})"
+
     def _distance_expression(self, q: SearchQuery) -> tuple[str, list]:
+        """The distance as the ANSWER states it: floored to the grid quantum.
+
+        This is the expression projected as ``distance_km``, so it is also
+        what ``ORDER BY``, the keyset predicate and therefore the cursor
+        carry — an anchor finer than the order it resumes would page
+        unstably, and an anchor finer than the card is a leak wearing base64.
+        The MEASUREMENT that decides membership and scoring is
+        :meth:`_measured_distance`.
+        """
+        expr, params = self._measured_distance(q)
+        if shared.is_precise(getattr(q, "audience", None)) or expr.startswith("NULL"):
+            return expr, params
+        quantum = shared.distance_quantum_km(shared.public_precision())
+        if quantum <= 0:  # a precision no grid can express; nothing to floor to
+            return expr, params
+        return f"(floor(({expr}) / {quantum!r}) * {quantum!r})", params
+
+    def _measured_distance(self, q: SearchQuery) -> tuple[str, list]:
         """Great-circle distance in km, or ``NULL`` when no centre was given."""
-        return self._distance_to(q.geo)
+        return self._distance_to(q.geo, q)
 
     @staticmethod
-    def _distance_to(geo) -> tuple[str, list]:
+    def _distance_to(geo, q: SearchQuery) -> tuple[str, list]:
         """The same haversine against any centre — the filter's, or the band's."""
         if geo is None or not geo.has_center:
             return "NULL::double precision", []
+        lat = PostgresSearchBackend._column("lat", q)
+        lon = PostgresSearchBackend._column("lon", q)
         expr = (
             f"(2 * {_EARTH_KM} * asin(sqrt("
-            "power(sin(radians(d.lat::double precision - %s) / 2), 2)"
-            " + cos(radians(%s)) * cos(radians(d.lat::double precision))"
-            " * power(sin(radians(d.lon::double precision - %s) / 2), 2))))"
+            f"power(sin(radians({lat} - %s) / 2), 2)"
+            f" + cos(radians(%s)) * cos(radians({lat}))"
+            f" * power(sin(radians({lon} - %s) / 2), 2))))"
         )
         return expr, [geo.lat, geo.lat, geo.lon]
 
@@ -427,7 +468,7 @@ class PostgresSearchBackend:
             )
             coarse = f"(d.lat BETWEEN %s AND %s AND {lon_clause})"
             params.extend([min_lat, max_lat, min_lon, max_lon])
-        distance_sql, distance_params = self._distance_to(near)
+        distance_sql, distance_params = self._distance_to(near, q)
         params.extend(distance_params)
         params.append(radius)
         return f"({coarse} AND ({distance_sql}) <= %s)", params
@@ -494,7 +535,7 @@ class PostgresSearchBackend:
         from ..registry import get_scorers
 
         rank_sql, rank_params = self._rank_expression(q)
-        distance_sql, distance_params = self._distance_expression(q)
+        distance_sql, distance_params = self._measured_distance(q)
 
         parts: list[str] = []
         params: list = []
@@ -581,7 +622,13 @@ class PostgresSearchBackend:
 
         geo = q.geo
         if geo is not None:
-            prefix = shared.geohash_prefix(geo)
+            # A coarse prefilter reads the STORED column while the exact half
+            # measures the reader's snapped position, so it is widened by the
+            # furthest snapping can move a point. Zero for a precise reader,
+            # and zero for a rectangle, which `grid_aligned_bbox` has already
+            # made a union of whole cells.
+            slack = shared.query_slack_km(q)
+            prefix = shared.geohash_prefix(geo, slack_km=slack)
             if prefix:
                 # Indexed coarse prefilter. A geohash cell is a lat/lon
                 # rectangle, so a common prefix of the box's four corners is
@@ -607,7 +654,7 @@ class PostgresSearchBackend:
                 # only ever narrows documents that carry the column it reads.
                 clauses.append("(d.geohash = '' OR d.geohash LIKE %s)")
                 params.append(prefix + "%")
-            box = shared.bbox_of(geo)
+            box = shared.bbox_of(geo, slack_km=slack)
             if box is not None:
                 min_lat, min_lon, max_lat, max_lon = box
                 clauses.append("d.lat IS NOT NULL AND d.lon IS NOT NULL")
@@ -619,8 +666,23 @@ class PostgresSearchBackend:
                 else:
                     clauses.append("d.lon BETWEEN %s AND %s")
                     params.extend([min_lon, max_lon])
+            if geo.is_bbox and not shared.is_precise(getattr(q, "audience", None)):
+                # The indexed range above is a SUPERSET: it compares the
+                # stored column, and a point exactly on a cell boundary is
+                # inside a box whose cells all exclude it — one row's worth of
+                # sub-cell information, which is one row's worth too much.
+                # The exact half asks the same question of the snapped point,
+                # which is the only position this reader may resolve.
+                lat_sql, lon_sql = self._column("lat", q), self._column("lon", q)
+                clauses.append(f"{lat_sql} BETWEEN %s AND %s")
+                params.extend([geo.min_lat, geo.max_lat])
+                if geo.crosses_antimeridian:
+                    clauses.append(f"({lon_sql} >= %s OR {lon_sql} <= %s)")
+                else:
+                    clauses.append(f"{lon_sql} BETWEEN %s AND %s")
+                params.extend([geo.min_lon, geo.max_lon])
             if geo.has_center and geo.radius_km is not None:
-                distance_sql, distance_params = self._distance_expression(q)
+                distance_sql, distance_params = self._measured_distance(q)
                 clauses.append(f"({distance_sql}) <= %s")
                 params.extend(distance_params)
                 params.append(float(geo.radius_km))
@@ -820,7 +882,12 @@ class PostgresSearchBackend:
                 Hit(
                     key=doc_key,
                     score=round(float(score or 0.0), 6),
-                    distance_km=None if distance is None else round(float(distance), 2),
+                    # Already on the reader's own grid: `_distance_expression`
+                    # floors it in SQL, so ORDER BY, the keyset and this value
+                    # are the same number. The old `round(..., 2)` here was
+                    # ten METRES — three orders of magnitude finer than the
+                    # position it was computed from.
+                    distance_km=None if distance is None else round(float(distance), 6),
                     sort_value=sort_value,
                     band=band,
                     match_count=matches,

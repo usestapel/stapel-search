@@ -4,6 +4,108 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] — 2026-09-03
+
+Minor, and it changes numbers a client can see: for an anonymous reader every
+geo answer is now measured against the same ~1.1km grid a public card
+publishes, and `distance_km` comes back floored to that grid's quantum.
+
+### The public geo grid — a stranger's answer may not beat the card
+
+`stapel-listings` 0.21.0 stopped publishing the seller's pin on the public
+card: the coordinates round to `PUBLIC_COORD_PRECISION` (~1.1km) and the
+public `geohash` comes back empty. This module defeated that from the other
+side. `/query` is `AllowAny`, the caller picks the centre, and each hit
+carried `distance_km` computed from the TRUE stored coordinates — rounded to
+two decimals (ten metres) on Postgres and Meilisearch, and not rounded at all
+on the naive backend. Two cheap attacks followed, and both are now performed
+against the fixed code in `tests/test_geo_privacy.py` rather than described:
+
+- **Trilateration.** Three centres, three distances, one exact point.
+- **Bisection.** `bbox` EXCLUDES rows, so halving the rectangle around a
+  listing converges on it in about forty requests. `radius_km` is the same
+  oracle in polar form, and under `geo_mode=rank` so is the `nearby` label.
+
+**Rounding the answer would have closed none of them.** The caller's centre
+and rectangle are continuous: whatever number comes back, moving the centre
+until it flips traces a circle of known radius around the true point, and
+three of those are the point. So the fix is at the position, not at the
+number — **for an anonymous reader a row's position is read through the
+public grid**, and every geo answer becomes a function of the point the card
+already publishes and of nothing finer. Two pins 1.2km apart inside one cell
+are now one answer, to any number of requests.
+
+| What | Anonymous | Owner of the `owner=` scope, staff, service |
+|---|---|---|
+| `distance_km` | measured from the grid point, floored to the cell **diagonal** (~1.574km) | exact |
+| `radius_km`, `sort=distance`, the `nearby` band, geo decay | measured from the grid point | exact |
+| `bbox` | grown OUTWARD to whole cells; the smallest expressible box is one cell | as drawn |
+| `card` | coordinate keys rewritten onto the grid, unrecognised position keys removed | as stored |
+
+The quantum is **derived, not chosen**: the grid declares one square cell of
+side `111.32 × 10⁻ᵖ` km (1.113km at `CARD_COORD_PRECISION` 2) the same place,
+so the largest distance between two points it cannot tell apart is that
+cell's diagonal, `side × √2` = 1.574km. A finer quantum would separate two
+points the card does not, and a difference that survives repetition is a
+position. It is floored rather than rounded, so proximity is never
+overstated, and it travels into the keyset cursor as well — an opaque anchor
+is not a private one.
+
+The audience is **`stapel_attributes.visibility`'s**, resolved by the same
+rule as `stapel_listings.serializers.AudienceRedactionMixin` (service
+transport and staff read as staff; a reader scoped to their own `owner=` key
+reads as owner), because the coordinates this gates are the coordinates that
+mixin coarsens. `SearchQuery.audience` defaults to `anonymous`: a backend, a
+comm caller or a management command that never says who it is gets the grid.
+`search.query` takes `audience` in its payload for the callers that are
+entitled to more.
+
+Per backend: **naive** measures and bands through the grid and stops emitting
+a raw float; **postgres** snaps the columns in SQL with the identical
+arithmetic (`floor(v·10ᵖ + 0.5)/10ᵖ`, ties toward +∞ on both sides, which
+Python's banker's rounding and Postgres' half-away-from-zero would not have
+agreed on) and floors the projected `distance_km`, so `ORDER BY`, the keyset
+and the emitted value are one number; **meili** cannot be asked to round a
+stored point, so its engine-side geo filter becomes a widened prefilter with
+the exact cut in Python, and the `_geoPoint` window sort takes a snapped
+centre — either end of the measurement on the grid destroys the continuous
+probe. Every coarse prefilter is widened by half a cell diagonal: an
+optimisation that removes correct answers is a defect.
+
+Nothing about the two-band work changes shape. `distance_km` still drives
+«Объявления поблизости» and the per-card distance — a card saying «12 км»
+never needed metres.
+
+### The card promise, enforced on every path
+
+`_card_area`'s docstring promised "the card never carries full-precision
+coordinates". The code under it ran only inside `geo_mode=rank`, which needs
+`GEO_BANDS`, which is off — so on this fleet it was dead, and safe only by
+accident (the host's card carries no coordinates). Where it did run it
+*overwrote* `lat`/`lon` instead of removing what it did not recognise, so a
+card carrying `geohash`, `latitude` or a nested `location` walked straight
+through. Now, on every path and whatever the flags: a key naming half a pair
+is rewritten onto the grid from the row's own columns, a key carrying a
+position that cannot become an area is removed (the same reason the mixin
+blanks the public geohash instead of truncating it — two differently-aligned
+areas around one point intersect down to a sliver), and `geo_precision_km`
+says how wide the area is.
+
+### Also
+
+- `docs/index.json`, `docs/schema.json` and the `search.query` schema
+  regenerated; `SearchItemSerializer.distance_km` and `.card` now describe
+  what they actually contain.
+- The conformance suite asks as **staff** by default — two engines computing
+  the same great circle must be compared on the arithmetic, not on the
+  rounding that hides four decimals of it — and gains three `public_grid_*`
+  scenarios so every engine is held to the grid as well.
+- **Follow-up, deliberately not in this release:** `coarse_coordinates` now
+  exists twice in the fleet, here and in `AudienceRedactionMixin`, and the two
+  must agree. The durable home is `stapel-core`; that is a release under the
+  whole fleet and this one is a privacy fix that ships now. Both call sites
+  are named in MODULE.md → Known gaps.
+
 ## [0.12.0] — 2026-09-03
 
 Minor, and both halves are flag-gated OFF: with `QUERY_UNDERSTANDING` and

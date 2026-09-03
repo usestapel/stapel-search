@@ -52,7 +52,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "minLat,minLon,maxLat,maxLon. minLon > maxLon means the box crosses +/-180."
+            "description": "minLat,minLon,maxLat,maxLon. minLon > maxLon means the box crosses +/-180. For an anonymous caller the rectangle is grown OUTWARD to whole ~1.1km cells of the public geo grid, so it can only ever ask about the area a public card publishes: a box EXCLUDES rows, and halving one around a listing would otherwise converge on the seller's pin in a few dozen requests."
           },
           {
             "in": "query",
@@ -836,7 +836,7 @@
             "type": "number",
             "format": "double",
             "nullable": true,
-            "description": "Great-circle distance from the searched centre."
+            "description": "Great-circle distance from the searched centre, in km. For an ANONYMOUS reader it is measured from the same ~1.1km grid point the card publishes and floored to that grid's quantum (the cell's diagonal, ~1.574km): a distance finer than the position it came from is the position, three requests away. The listing's own owner, staff and the service transport get the exact number. Coarse is enough for what it drives — a card saying «12 км» does not need metres — and it never overstates proximity, being floored rather than rounded."
           },
           "band": {
             "type": "string",
@@ -849,7 +849,7 @@
           "card": {
             "type": "object",
             "additionalProperties": {},
-            "description": "Stored row fields, so a result page costs one query. Under `geo_mode=rank` it also carries `lat`/`lon` ROUNDED to CARD_COORD_PRECISION plus `geo_precision_km`: draw an AREA, not a pin. The card never carries full-precision coordinates; the exact `distance_km` on the item is computed server-side from the true ones."
+            "description": "Stored row fields, so a result page costs one query. For an ANONYMOUS reader the card never carries full-precision coordinates, on every path and whatever the flags: a key naming half a pair (`lat`, `latitude`, `lon`, `lng`, `*_lat`…) is rewritten onto the ~1.1km public grid from the row's own columns, and a key carrying a position this module cannot turn into an area (`geohash`, `location`, `coordinates`…) is removed rather than truncated — two differently-aligned areas around one point intersect down to a sliver. `geo_precision_km` says how wide the area is: draw a CIRCLE, never a marker. Under `geo_mode=rank` the pair is ADDED even to a card that carried no position at all."
           }
         },
         "required": [

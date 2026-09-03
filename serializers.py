@@ -24,7 +24,18 @@ class SearchItemSerializer(serializers.Serializer):
         )
     )
     distance_km = serializers.FloatField(
-        allow_null=True, help_text="Great-circle distance from the searched centre."
+        allow_null=True,
+        help_text=(
+            "Great-circle distance from the searched centre, in km. For an "
+            "ANONYMOUS reader it is measured from the same ~1.1km grid point "
+            "the card publishes and floored to that grid's quantum (the "
+            "cell's diagonal, ~1.574km): a distance finer than the position "
+            "it came from is the position, three requests away. The listing's "
+            "own owner, staff and the service transport get the exact number. "
+            "Coarse is enough for what it drives — a card saying \u00ab12 "
+            "\u043a\u043c\u00bb does not need metres — and it never "
+            "overstates proximity, being floored rather than rounded."
+        ),
     )
     band = serializers.CharField(
         required=False,
@@ -49,11 +60,18 @@ class SearchItemSerializer(serializers.Serializer):
     )
     card = serializers.DictField(
         help_text=(
-            "Stored row fields, so a result page costs one query. Under "
-            "`geo_mode=rank` it also carries `lat`/`lon` ROUNDED to CARD_COORD_PRECISION "
-            "plus `geo_precision_km`: draw an AREA, not a pin. The card never "
-            "carries full-precision coordinates; the exact `distance_km` on "
-            "the item is computed server-side from the true ones."
+            "Stored row fields, so a result page costs one query. For an "
+            "ANONYMOUS reader the card never carries full-precision "
+            "coordinates, on every path and whatever the flags: a key naming "
+            "half a pair (`lat`, `latitude`, `lon`, `lng`, `*_lat`\u2026) is "
+            "rewritten onto the ~1.1km public grid from the row's own "
+            "columns, and a key carrying a position this module cannot turn "
+            "into an area (`geohash`, `location`, `coordinates`\u2026) is "
+            "removed rather than truncated \u2014 two differently-aligned "
+            "areas around one point intersect down to a sliver. "
+            "`geo_precision_km` says how wide the area is: draw a CIRCLE, "
+            "never a marker. Under `geo_mode=rank` the pair is ADDED even to "
+            "a card that carried no position at all."
         )
     )
 

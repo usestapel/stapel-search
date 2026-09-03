@@ -195,7 +195,25 @@ class Context:
     capabilities: object
 
     def query(self, **overrides) -> SearchQuery:
-        params = dict(doc_type=DOC_TYPE, language="", sort="newest", limit=20)
+        """A query for these scenarios — PRECISE unless one asks otherwise.
+
+        ``SearchQuery.audience`` defaults to ``anonymous``, which puts every
+        geo answer on the ~1.1km public grid. That default is the fail-closed
+        one and it stays, but a conformance scenario asking "do these two
+        engines compute the same great circle" must ask it of the arithmetic,
+        not of the rounding that hides four decimal places of it. So the
+        harness asks as staff, and the grid gets scenarios of its own
+        (``public_grid_*``) which every engine is held to just the same.
+        """
+        from stapel_attributes import visibility
+
+        params = dict(
+            doc_type=DOC_TYPE,
+            language="",
+            sort="newest",
+            limit=20,
+            audience=visibility.AUDIENCE_STAFF,
+        )
         params.update(overrides)
         return SearchQuery(**params)
 
@@ -564,6 +582,121 @@ def _s_bbox_antimeridian(ctx: Context) -> None:
     assert "4" not in ctx.keys(ctx.query(geo=wide))
 
 
+#: Two positions near opposite corners of ONE public cell, 1.2km apart. Any
+#: geo answer that can tell them apart is finer than the card.
+_CELL_PROBES = ((49.6060, 6.1260), (49.6146, 6.1346))
+
+
+def _s_public_grid_distance_is_quantized(ctx: Context) -> None:
+    """A stranger's distance is a multiple of the grid quantum — everywhere.
+
+    The one rule three engines have to agree on, because two of them used to
+    round it to two decimals (ten metres) and one did not round it at all.
+    """
+    from stapel_attributes import visibility
+
+    from .backends import _shared as shared
+
+    quantum = shared.distance_quantum_km(shared.public_precision())
+    near = GeoFilter(lat=CENTER[0], lon=CENTER[1], radius_km=500)
+    q = ctx.query(geo=near, audience=visibility.ANONYMOUS)
+    reported = [
+        hit.distance_km for hit in ctx.backend.query(q).hits if hit.distance_km is not None
+    ]
+    assert reported, "the corpus has rows inside 500km"
+    for distance in reported:
+        steps = distance / quantum
+        assert abs(steps - round(steps)) < 1e-6, (distance, quantum)
+
+
+def _s_public_grid_hides_the_pin(ctx: Context) -> None:
+    """Two positions inside one cell are ONE answer, to every engine.
+
+    The property the trilateration and bisection suites are written against,
+    asked of the engine directly: move the row anywhere inside its published
+    cell and no geo answer moves with it.
+    """
+    import dataclasses
+
+    from stapel_attributes import visibility
+
+    from .backends import _shared as shared
+    from .query import parse_geo
+    from .services import index_documents
+
+    precision = shared.public_precision()
+    step = 10.0**-precision
+    base = corpus()[0]
+    centre = (CENTER[0] + 3.0, CENTER[1] + 3.0)
+    near = GeoFilter(lat=centre[0], lon=centre[1], radius_km=500)
+    # A quarter-cell box around the FIRST probe: it holds one of the two
+    # positions and not the other, until the box is snapped to whole cells.
+    box = parse_geo(
+        {"bbox": "49.6050,6.1250,49.6100,6.1300"}, audience=visibility.ANONYMOUS
+    )
+    assert step > 0
+
+    def observe() -> tuple:
+        q = ctx.query(geo=near, audience=visibility.ANONYMOUS)
+        hits = {hit.key: hit.distance_km for hit in ctx.backend.query(q).hits}
+        inside = set(
+            ctx.keys(ctx.query(geo=box, audience=visibility.ANONYMOUS))
+        )
+        return hits.get("1"), "1" in inside
+
+    from decimal import Decimal
+
+    from stapel_geo import geohash as gh
+
+    seen = set()
+    for lat, lon in _CELL_PROBES:
+        assert (
+            shared.snap_to_grid(lat, precision),
+            shared.snap_to_grid(lon, precision),
+        ) == (
+            shared.snap_to_grid(CENTER[0], precision),
+            shared.snap_to_grid(CENTER[1], precision),
+        ), "the probes must stay inside one cell"
+        index_documents(
+            DOC_TYPE,
+            [
+                dataclasses.replace(
+                    base,
+                    lat=Decimal(str(lat)),
+                    lon=Decimal(str(lon)),
+                    geohash=gh.encode(lat, lon, precision=12),
+                    seq=base.seq + 100,
+                )
+            ],
+        )
+        seen.add(observe())
+    # Put the row back where the rest of the suite expects it.
+    index_documents(DOC_TYPE, [dataclasses.replace(base, seq=base.seq + 200)])
+    assert len(seen) == 1, f"the answer moved with the pin: {seen}"
+
+
+def _s_public_grid_bbox_is_whole_cells(ctx: Context) -> None:
+    """The rectangle an anonymous caller draws is snapped to whole cells.
+
+    Asked through the parser, because that is where it happens and where all
+    three engines inherit it from.
+    """
+    from stapel_attributes import visibility
+
+    from .backends import _shared as shared
+    from .query import parse_geo
+
+    precision = shared.public_precision()
+    step = 10.0**-precision
+    params = {"bbox": "49.61155,6.13185,49.61165,6.13195"}
+    tight = parse_geo(params, audience=visibility.AUDIENCE_STAFF)
+    assert tight.max_lat - tight.min_lat < step
+    grid = parse_geo(params, audience=visibility.ANONYMOUS)
+    assert grid.max_lat - grid.min_lat >= step - 1e-9
+    assert grid.max_lon - grid.min_lon >= step - 1e-9
+    assert grid.min_lat <= tight.min_lat and grid.max_lat >= tight.max_lat
+
+
 def _s_boost_moves_relevance(ctx: Context) -> None:
     from .services import apply_signal
 
@@ -849,6 +982,21 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("sort_distance", _s_sort_distance, "nearest first"),
     Scenario("bbox", _s_bbox, "a plain rectangle"),
     Scenario("bbox_antimeridian", _s_bbox_antimeridian, "min_lon > max_lon crosses +/-180"),
+    Scenario(
+        "public_grid_distance_is_quantized",
+        _s_public_grid_distance_is_quantized,
+        "a stranger's distance is a multiple of the grid quantum",
+    ),
+    Scenario(
+        "public_grid_hides_the_pin",
+        _s_public_grid_hides_the_pin,
+        "two positions in one cell are one answer",
+    ),
+    Scenario(
+        "public_grid_bbox_is_whole_cells",
+        _s_public_grid_bbox_is_whole_cells,
+        "a stranger's rectangle is snapped to whole cells",
+    ),
     Scenario("boost_moves_relevance", _s_boost_moves_relevance, "promotion works"),
     Scenario(
         "boost_does_not_move_explicit_sort",

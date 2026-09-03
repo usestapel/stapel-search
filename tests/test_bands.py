@@ -401,23 +401,39 @@ def test_match_count_is_absent_without_signals(api_client, corpus):
 
 
 # --------------------------------------------------------------------------
-# the card is coarse; the distance is not
+# the card is coarse, and so is everything measured against it
 # --------------------------------------------------------------------------
 
 
-def test_the_card_carries_an_area_and_the_hit_carries_the_exact_distance(
+def test_the_card_carries_an_area_and_the_distance_is_on_the_same_grid(
     api_client, corpus
 ):
+    """0.12.0 asserted the opposite of this — «the card is coarse; the
+    distance is not» — and that WAS the leak: an exact distance from a
+    caller-chosen centre rebuilds the pin from three requests, so a coarse
+    card beside a fine distance is not a coarse answer. Both halves now come
+    off one grid (``_shared``, "the public grid"), and the band the card
+    feeds is unaffected: «12 км» never needed metres.
+    """
+    from stapel_search.backends import _shared as shared
+
     with _settings(GEO_BANDS=True):
         body = _get(api_client, lat=CENTER[0], lon=CENTER[1], limit=50)
     row = next(item for item in body["items"] if item["key"] == "n4")
     card = row["card"]
-    assert card["lat"] == round(NEAR_4KM[0], 2)
-    assert card["lon"] == round(NEAR_4KM[1], 2)
-    assert card["geo_precision_km"] > 0
-    # The true coordinate is NOT in the card, and the distance is still exact.
+    precision = shared.public_precision()
+    assert card["lat"] == shared.snap_to_grid(NEAR_4KM[0], precision)
+    assert card["lon"] == shared.snap_to_grid(NEAR_4KM[1], precision)
+    assert card["geo_precision_km"] == shared.cell_km(precision)
     assert card["lat"] != NEAR_4KM[0]
-    assert 4.0 < row["distance_km"] < 5.0
+
+    quantum = shared.distance_quantum_km(precision)
+    steps = row["distance_km"] / quantum
+    assert abs(steps - round(steps)) < 1e-6, row["distance_km"]
+    # Still the right neighbourhood: ~4.45km away, reported as the quantum
+    # below it, which is what a card rendering «4 км» has always needed.
+    assert 3.0 <= row["distance_km"] <= 4.5
+    assert row["band"] == "nearby"
 
 
 def test_a_card_without_coordinates_gains_none(api_client, corpus):

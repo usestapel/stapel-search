@@ -303,6 +303,17 @@ class SearchQuery:
     direction: str = "next"
     #: Scorer slugs active for this query's sort.
     scorers: tuple[str, ...] = ()
+    #: WHO is asking — ``anonymous`` | ``owner`` | ``staff``, the audience axis
+    #: of ``stapel_attributes.visibility``, the same one that decides who may
+    #: read a VIN. It decides one thing here: whether a geo answer is measured
+    #: against the stored point or against the ~1.1km grid a public card
+    #: publishes (``backends._shared``, "the public grid").
+    #:
+    #: The default is the WEAKEST audience on purpose. A backend, a comm
+    #: caller or a management command that never says who it is gets the
+    #: grid, because the only safe answer to "who is this?" when nobody said
+    #: is "a stranger".
+    audience: str = "anonymous"
 
     def without_facet(self, slug: str) -> "SearchQuery":
         """This query with *slug*'s own filter removed — drill-down semantics.

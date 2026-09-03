@@ -317,14 +317,21 @@ class MeilisearchBackend:
                 filters.append(f"numeric.{spec.slug} <= {spec.upper}")
         geo = q.geo
         if geo is not None:
+            # The engine indexes `_geo` as the source gave it, and no filter
+            # string can ask it to round a stored point. So for an anonymous
+            # reader the engine-side geo filter is a WIDENED PREFILTER only —
+            # `slack` is the furthest snapping can move a point — and the
+            # exact cut happens in `_rows`, against the snapped position,
+            # which is the same two-halves shape the Postgres band predicate
+            # uses. Widening can only ADD candidates; it can never drop one.
+            slack = shared.query_slack_km(q)
             if geo.has_center and geo.radius_km is not None:
-                filters.append(
-                    f"_geoRadius({geo.lat}, {geo.lon}, {float(geo.radius_km) * 1000})"
-                )
+                radius_m = (float(geo.radius_km) + slack) * 1000
+                filters.append(f"_geoRadius({geo.lat}, {geo.lon}, {radius_m})")
             elif geo.is_bbox:
+                low_lat, low_lon, high_lat, high_lon = shared.padded_bbox(geo, slack)
                 filters.append(
-                    f"_geoBoundingBox([{geo.max_lat}, {geo.max_lon}], "
-                    f"[{geo.min_lat}, {geo.min_lon}])"
+                    f"_geoBoundingBox([{high_lat}, {high_lon}], [{low_lat}, {low_lon}])"
                 )
         return filters
 
@@ -357,7 +364,16 @@ class MeilisearchBackend:
             params["facets"] = ["facet_terms"]
             params["limit"] = 1
         if q.geo is not None and q.geo.has_center:
-            params["sort"] = [f"_geoPoint({q.geo.lat}, {q.geo.lon}):asc"]
+            # Which rows come back inside the window is itself an answer, and
+            # it is ordered by the engine against the TRUE point. The engine
+            # cannot round the row, so the other end of the measurement goes
+            # onto the grid instead: with the centre snapped, "which of these
+            # two is nearer" can only be asked from grid-spaced points, and a
+            # continuous probe of the bisector between two rows is gone. The
+            # ORDER the caller sees is recomputed below from the snapped
+            # distance either way.
+            centre = shared.public_point(q.geo.lat, q.geo.lon, q)
+            params["sort"] = [f"_geoPoint({centre[0]}, {centre[1]}):asc"]
         text = ""
         if q.text is not None and not q.text.is_empty:
             # The engine owns morphology and typo tolerance; we hand it the
@@ -391,9 +407,12 @@ class MeilisearchBackend:
                 facet_terms=list(raw.get("facet_terms") or []),
             )
             geo = raw.get("_geo") or {}
-            distance = shared.geo_distance_km(geo.get("lat"), geo.get("lng"), "", q.geo)
+            if not shared.bbox_matches_for(geo.get("lat"), geo.get("lng"), q):
+                continue
+            distance = shared.measured_distance_km(geo.get("lat"), geo.get("lng"), q)
             if distance is shared.OUT_OF_RANGE:
                 continue
+            published = shared.published_distance_km(distance, q)
             # Meilisearch already ordered by its own relevance; the position
             # is the only relevance signal it exposes without a version-
             # specific scoring flag, so it becomes the text score.
@@ -402,7 +421,7 @@ class MeilisearchBackend:
             score = shared.combined_score(
                 row=row, sort=q.sort, text_score=text_score, distance_km=distance
             )
-            value = shared.sort_value_of(row, q.sort, score, distance)
+            value = shared.sort_value_of(row, q.sort, score, published)
             rows.append(
                 (
                     shared.order_key(q.sort, value, row.doc_key),
@@ -410,7 +429,7 @@ class MeilisearchBackend:
                     Hit(
                         key=row.doc_key,
                         score=round(score, 6),
-                        distance_km=None if distance is None else round(float(distance), 2),
+                        distance_km=None if published is None else round(published, 6),
                         sort_value=value,
                     ),
                     row,

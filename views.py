@@ -51,7 +51,7 @@ _QUERY_PARAMS = [
     OpenApiParameter("lat", float, description="Centre latitude (with lon)."),
     OpenApiParameter("lon", float, description="Centre longitude (with lat)."),
     OpenApiParameter("radius_km", float, description="Distance around the centre, in km. Its MEANING is `geo_mode`'s: under `rank` it is the edge of the `nearby` band and excludes nothing; under `filter` it is a hard cut. Defaults to NEAR_BAND_RADIUS_KM under `rank`."),
-    OpenApiParameter("bbox", str, description="minLat,minLon,maxLat,maxLon. minLon > maxLon means the box crosses +/-180."),
+    OpenApiParameter("bbox", str, description="minLat,minLon,maxLat,maxLon. minLon > maxLon means the box crosses +/-180. For an anonymous caller the rectangle is grown OUTWARD to whole ~1.1km cells of the public geo grid, so it can only ever ask about the area a public card publishes: a box EXCLUDES rows, and halving one around a listing would otherwise converge on the seller's pin in a few dozen requests."),
     OpenApiParameter("geo_mode", str, description="rank | filter. What `radius_km` means. `rank` PARTITIONS: the answer comes back as `nearby` (inside the radius) then `all` (every remaining row), nothing is withheld, and `count` stays the whole matching total — a query can never come back empty because of distance. `filter` is the historical hard cut, for a caller that genuinely wants only what is within N km. `rank` is the default inside the feature; while STAPEL_SEARCH['GEO_BANDS'] is off this parameter is inert and `radius_km` filters as it always has."),
     OpenApiParameter("qu", str, description="auto | off. Whether the query's own words may become filters. `auto` (the default while QUERY_UNDERSTANDING is on) extracts and reports what it extracted under `query_understanding`; each filter carries the literal `param` to replay. Send `qu=off` with those replayed params afterwards — extraction is stateless, so without it a removed chip comes straight back."),
     OpenApiParameter("sort", str, description="relevance | newest | price_asc | price_desc | distance. An explicit sort never receives a promotional boost."),
@@ -107,12 +107,22 @@ class SearchQueryView(APIView):
     throttle_scope = "search-query"
 
     def get(self, request):
+        from .authz import resolve_audience
         from .services import search
 
+        # Resolved once, here, where the request is — and by the SAME rule
+        # stapel-listings' AudienceRedactionMixin resolves it, because the
+        # coordinates this decides about are the coordinates that mixin
+        # coarsens. A second notion of who may see what is a second place to
+        # get it wrong.
+        audience = resolve_audience(
+            request, owner_key=str(request.query_params.get("owner") or "")
+        )
         return _handle(
             lambda: search(
                 request.query_params,
                 accept_language=request.headers.get("Accept-Language", ""),
+                audience=audience,
             )
         )
 

@@ -199,9 +199,16 @@ DEFAULTS = {
     "NEAR_BAND_MAX_CELLS": 64,
     # Decimal places a PUBLIC card's coordinates are rounded to. 2 is ~1.1km
     # — the approximate area the product already draws on a map, never the
-    # seller's pin. The exact distance rides on the hit as `distance_km`,
-    # computed server-side from the true coordinates, so a coarse card
-    # costs the reader no accuracy.
+    # seller's pin. Mirrors stapel-listings' PUBLIC_COORD_PRECISION, and the
+    # two must agree: one product, one published area.
+    #
+    # It is the WHOLE public geo grid, not just the card's. Every geo answer
+    # an anonymous reader gets — the distance on a hit, the radius cut, the
+    # nearby band, the bbox — is measured against this grid, because a coarse
+    # card beside a fine distance is not a coarse answer: the caller's centre
+    # is continuous, so an oracle reading the true point can be probed to
+    # arbitrary precision by moving it. Raising this number narrows the area
+    # AND every answer with it. See `backends/_shared.py`, "the public grid".
     "CARD_COORD_PRECISION": 2,
     # --- HTTP ------------------------------------------------------------
     "QUERY_THROTTLE": "120/min",

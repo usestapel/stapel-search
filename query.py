@@ -98,7 +98,9 @@ def _float(params: Mapping[str, Any], key: str) -> float | None:
         raise SearchValidationError(ERR_400_BAD_GEO, reason=f"{key} is not a number") from None
 
 
-def parse_geo(params: Mapping[str, Any], *, mode: str = "filter") -> GeoFilter | None:
+def parse_geo(
+    params: Mapping[str, Any], *, mode: str = "filter", audience: str = "anonymous"
+) -> GeoFilter | None:
     """The EXCLUDING geo filter: ``lat``/``lon``/``radius_km`` or a ``bbox``.
 
     ``mode`` is what ``radius_km`` means for this request:
@@ -113,7 +115,16 @@ def parse_geo(params: Mapping[str, Any], *, mode: str = "filter") -> GeoFilter |
 
     ``bbox`` excludes under both modes: it is a viewport a caller drew, not
     a proximity preference, and there is no second reading of it to offer.
+    For an anonymous caller it is also grown OUTWARD onto the public grid
+    (``_shared.grid_aligned_bbox``), so the rectangle can only ever ask about
+    whole ~1.1km cells. A box is the cheapest position oracle this surface
+    has — it EXCLUDES rows, so halving it around a listing converges on the
+    pin in a few dozen requests — and a minimum box size would not close
+    that, because a smallest-allowed box slides continuously and the edge it
+    stops including the row at is the coordinate itself.
     """
+    from .backends import _shared as shared
+
     bbox_raw = params.get("bbox")
     if bbox_raw:
         parts = [p.strip() for p in str(bbox_raw).split(",")]
@@ -131,9 +142,12 @@ def parse_geo(params: Mapping[str, Any], *, mode: str = "filter") -> GeoFilter |
             )
         # min_lon > max_lon is NOT an error: it means the box crosses +/-180,
         # the contract borrowed verbatim from GeoSearchBackend.bbox.
-        return GeoFilter(
+        box = GeoFilter(
             min_lat=min_lat, min_lon=min_lon, max_lat=max_lat, max_lon=max_lon
         )
+        if shared.is_precise(audience):
+            return box
+        return shared.grid_aligned_bbox(box, shared.public_precision())
 
     lat = _float(params, "lat")
     lon = _float(params, "lon")
@@ -264,8 +278,20 @@ def resolve_language(params: Mapping[str, Any], *, accept_language: str = "") ->
     )
 
 
-def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> SearchQuery:
-    """Turn request parameters into a validated :class:`SearchQuery`."""
+def parse_query(
+    params: Mapping[str, Any],
+    *,
+    accept_language: str = "",
+    audience: str = "anonymous",
+) -> SearchQuery:
+    """Turn request parameters into a validated :class:`SearchQuery`.
+
+    *audience* is resolved once, by :func:`stapel_search.authz.resolve_audience`,
+    and travels on the query rather than being re-derived per backend: it is
+    what decides whether this reader's geo answers are measured against the
+    stored point or against the public grid. It defaults to the weakest
+    audience, so a caller that says nothing gets the grid.
+    """
     from .backends import _shared as shared
     from .conf import search_settings
     from .registry import get_sources
@@ -314,7 +340,7 @@ def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> Sear
         raise SearchValidationError(ERR_400_TOO_MANY_RANGES, limit=max_ranges)
 
     geo_mode = parse_geo_mode(params)
-    geo = parse_geo(params, mode=geo_mode)
+    geo = parse_geo(params, mode=geo_mode, audience=audience)
     near = parse_near(params, mode=geo_mode)
 
     sorts = tuple(search_settings.SORTS or ())
@@ -358,6 +384,7 @@ def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> Sear
         cursor=cursor,
         direction=direction,
         scorers=scorer_slugs_for(sort),
+        audience=audience,
     )
 
 

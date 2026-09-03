@@ -580,6 +580,59 @@ filter matches nothing whatever category it was aimed at.
 
 ---
 
+## The public geo grid (0.13.0)
+
+`/query` is `AllowAny`, the caller picks the centre, and the answer used to
+carry a distance computed from the seller's stored coordinates. That defeats
+the coarsening `stapel-listings` 0.21.0 applies to the public card, and it
+does so cheaply: three centres trilaterate the point, and `bbox` — which
+EXCLUDES rows — bisects onto it in about forty requests.
+
+**The rule: for an anonymous reader, a row's position is read through the same
+~1.1km grid the card publishes.** Not "the distance is rounded". Rounding the
+answer closes nothing, because the caller's centre and rectangle are
+continuous: whatever the emitted number, moving the centre until the answer
+flips traces a circle of known radius around the true point, and three of
+those are the point. Only putting one end of every measurement on a fixed grid
+removes the continuous probe.
+
+| What | Anonymous | Owner of the `owner=` scope, staff, service |
+|---|---|---|
+| `distance_km` | measured from the grid point, floored to the grid's cell **diagonal** (~1.574km) | exact |
+| `radius_km`, `sort=distance`, the `nearby` band, geo decay | measured from the grid point | exact |
+| `bbox` | grown OUTWARD to whole cells, so the smallest expressible box is one cell | as drawn |
+| `card` | coordinate keys rewritten onto the grid, unrecognised position keys removed, `geo_precision_km` added | as stored |
+
+The quantum is derived, not chosen: the grid declares one square cell of side
+`111.32 × 10⁻ᵖ` km indistinguishable, so the largest distance between two
+points it calls the same place is that cell's diagonal, `side × √2`. A finer
+quantum would separate two points the card does not.
+
+The audience is `stapel_attributes.visibility`'s — the same axis, resolved by
+the same rule as `stapel_listings.serializers.AudienceRedactionMixin`, because
+the coordinates this gates are the coordinates that mixin coarsens.
+`SearchQuery.audience` defaults to `anonymous`: a backend, a comm caller or a
+management command that never says who it is gets the grid.
+
+Two consequences worth stating:
+
+- A **coarse prefilter** (the geohash prefix, the radius box, Meilisearch's
+  own `_geoRadius`) reads the stored column while the exact half measures the
+  snapped point, so it is widened by half a cell diagonal. An optimisation
+  that removes correct answers is a defect.
+- The **index still stores the true point**, and must: staff and owners read
+  it, and the measurement is snapped at read time. A Meilisearch deployment
+  therefore holds true `_geo` in the engine, behind the engine's own key —
+  an infrastructure boundary, not a public one.
+
+`tests/test_geo_privacy.py` performs both attacks against the fixed code and
+asserts what a fix must actually buy: two pins 1.2km apart inside one cell are
+one answer, to trilateration, to `bbox` halving, to a radius binary search and
+to the band label. The conformance suite holds every engine to the same grid
+(`public_grid_*`).
+
+---
+
 ## Ranking, promotion and disclosure
 
 `GET /search/api/v1/ranking` and `docs/ranking.json` are rendered from the
@@ -669,6 +722,21 @@ HTTP client of our own.
 
 ## Known gaps
 
+- **`coarse_coordinates` exists twice in the fleet.** This module's
+  `backends/_shared.py` and `stapel_listings.serializers`
+  `AudienceRedactionMixin` each carry the same rounding rule and the same
+  `111.32` km/degree constant, and they MUST agree — the card and the distance
+  describing two differently-aligned areas around one point is the leak the
+  mixin blanks the public geohash to avoid. The durable home is `stapel-core`,
+  under both. Deliberately not done here: a core release sits under the whole
+  fleet, and this one is a privacy fix that ships now. Follow-up call sites:
+  `stapel_search/backends/_shared.py::coarse_coordinates` (plus `snap_to_grid`,
+  `cell_km`, `distance_quantum_km`, which are the same arithmetic grown up) and
+  `stapel_listings/serializers.py::AudienceRedactionMixin._coarsen_geo` (plus
+  `KM_PER_DEGREE`, `public_geo_precision_km`). Note when moving them: the
+  mixin quantizes with `Decimal`'s default rounding (half-even) while the grid
+  here rounds ties toward +infinity to match Postgres; one of the two has to
+  give, and the grid's rule is the one two engines already agree on.
 - **`categories.path` has no provider in the fleet.** The canonical name is
   declared here now (the `stapel-shop/projections.py:23-35` move). Until
   something answers it, `category_path` degrades to a single segment:

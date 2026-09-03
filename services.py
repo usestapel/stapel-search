@@ -1075,24 +1075,105 @@ def _understanding_payload(extraction) -> dict:
     }
 
 
-def _card_area(row) -> dict:
-    """The card's coordinates as an AREA — never the seller's pin.
+#: Card keys that carry one half of a coordinate pair. A public card keeps
+#: them, on the grid — a host map reading ``card.lat`` still works, it just
+#: draws an area. Matched case-insensitively, and also as a ``*_lat`` suffix,
+#: because the key is the host's to name.
+_CARD_LAT_KEYS = ("lat", "latitude")
+_CARD_LON_KEYS = ("lon", "lng", "long", "longitude")
 
-    A search card is a public object served to anyone who can type a URL, so
-    it carries the neighbourhood (``CARD_COORD_PRECISION`` decimals, ~1.1km
-    at the default 2) plus ``geo_precision_km``, which is what tells a
-    client to draw a circle instead of a marker. The EXACT distance still
-    rides on the item as ``distance_km``, computed server-side from the true
-    coordinates, so nothing about the answer got less accurate — only the
-    ability to locate the thing from the answer.
+#: Card keys that carry a position this module cannot rewrite into an area:
+#: an encoding (``geohash``), a nested object, a pair in one string. They are
+#: REMOVED rather than coarsened, for the reason ``AudienceRedactionMixin``
+#: blanks the public geohash instead of truncating it — a second,
+#: differently-aligned area around the same point intersects the first one
+#: down to a sliver, and one area with nothing to intersect is the only
+#: shape that keeps its promise.
+_CARD_POSITION_KEYS = (
+    "geohash",
+    "geo",
+    "_geo",
+    "geopoint",
+    "geo_point",
+    "coord",
+    "coords",
+    "coordinate",
+    "coordinates",
+    "location",
+    "point",
+    "position",
+    "pin",
+)
+
+
+def _coordinate_role(key: str) -> str | None:
+    """``"lat"`` | ``"lon"`` | ``"drop"`` | ``None`` for one card key."""
+    folded = str(key).strip().lower().replace("-", "_")
+    if folded in _CARD_LAT_KEYS or folded.endswith("_lat") or folded.endswith("_latitude"):
+        return "lat"
+    if folded in _CARD_LON_KEYS or folded.endswith("_lon") or folded.endswith("_lng") or folded.endswith("_longitude"):
+        return "lon"
+    if folded in _CARD_POSITION_KEYS:
+        return "drop"
+    return None
+
+
+def _public_card(row, audience: str) -> dict:
+    """The stored card as this reader may have it. The promise, enforced.
+
+    "The card never carries full-precision coordinates" was a docstring, and
+    the code under it ran only inside ``geo_mode=rank`` — which needs
+    ``GEO_BANDS``, which is off — and where it did run it OVERWROTE ``lat``
+    and ``lon``, so a card that spelled the same fact ``latitude`` or carried
+    a ``geohash`` walked through untouched. On this fleet that was safe by
+    accident: the host's card happens to carry no coordinates at all.
+
+    So: every path, flag or no flag. A recognised half of a pair is rewritten
+    onto the public grid from the row's OWN columns (never from what the card
+    happened to say); anything else that names a position is removed; and
+    ``geo_precision_km`` is added beside whatever survived, so a client draws
+    a circle rather than inferring precision from how many digits it can see.
     """
     from .backends import _shared as shared
-    from .conf import search_settings
+
+    card = dict(row.card or {}) if row is not None else {}
+    if row is None or not card or shared.is_precise(audience):
+        return card
+    lat, lon, precision_km = shared.coarse_coordinates(
+        row.lat, row.lon, shared.public_precision()
+    )
+    touched = False
+    for key in list(card):
+        role = _coordinate_role(key)
+        if role is None:
+            continue
+        coarse = lat if role == "lat" else None if role == "drop" else lon
+        if coarse is None:
+            card.pop(key)
+        else:
+            card[key] = coarse
+        touched = True
+    if touched and lat is not None:
+        card.setdefault("geo_precision_km", precision_km)
+    return card
+
+
+def _card_area(row) -> dict:
+    """The card's coordinates as an AREA — the ``rank`` mode's own addition.
+
+    Under ``geo_mode=rank`` a card gains the neighbourhood
+    (``CARD_COORD_PRECISION`` decimals, ~1.1km at the default 2) plus
+    ``geo_precision_km``, which is what tells a client to draw a circle
+    instead of a marker, even when the host's card carried no position at
+    all. Cards that DID carry one are already on the grid by then
+    (:func:`_public_card`); this only adds.
+    """
+    from .backends import _shared as shared
 
     if row is None:
         return {}
     lat, lon, precision_km = shared.coarse_coordinates(
-        row.lat, row.lon, int(search_settings.CARD_COORD_PRECISION)
+        row.lat, row.lon, shared.public_precision()
     )
     if lat is None or lon is None:
         return {}
@@ -1137,8 +1218,17 @@ def _honest_bands(result, items) -> list[dict]:
     return out
 
 
-def search(params, *, accept_language: str = "") -> dict:
-    """Run one query and shape the answer. The module's whole read path."""
+def search(params, *, accept_language: str = "", audience: str = "anonymous") -> dict:
+    """Run one query and shape the answer. The module's whole read path.
+
+    *audience* is ``stapel_attributes.visibility``'s axis — the one that
+    already decides who may read a VIN — resolved once by
+    :func:`stapel_search.authz.resolve_audience` and carried on the query. It
+    decides whether this reader's geo answers are measured against the stored
+    point or against the ~1.1km public grid, and whether the card is filtered
+    on the way out. It defaults to the weakest audience: a caller that does
+    not say who it is gets the grid.
+    """
     from .backends import get_backend
     from .errors import SearchBackendUnavailable
     from .facets import (
@@ -1159,7 +1249,7 @@ def search(params, *, accept_language: str = "") -> dict:
 
     started = timezone.now()
     reset_path_degradation()
-    q = parse_query(params, accept_language=accept_language)
+    q = parse_query(params, accept_language=accept_language, audience=audience)
     backend = get_backend()
 
     # The plan is built BEFORE the engine sees the query, because it is what
@@ -1231,7 +1321,7 @@ def search(params, *, accept_language: str = "") -> dict:
             # including when it is false. The serializer cannot omit it.
             "promoted": bool(row.promoted) if row is not None else False,
             "distance_km": hit.distance_km,
-            "card": dict(row.card or {}) if row is not None else {},
+            "card": _public_card(row, q.audience),
         }
         if ranked:
             item["band"] = hit.band
