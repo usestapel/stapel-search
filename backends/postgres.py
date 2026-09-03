@@ -373,8 +373,8 @@ class PostgresSearchBackend:
         return expr, [geo.lat, geo.lat, geo.lon]
 
     def _near_predicate(self, q: SearchQuery) -> tuple[str, list]:
-        """``TRUE`` for a row inside the near band — a WHERE clause, not a
-        projection, and that distinction is the whole performance story.
+        """``TRUE`` for a row inside the ``nearby`` band — a WHERE clause, not
+        a projection, and that distinction is the whole performance story.
 
         Sorting the whole table by a band EXPRESSION costs a full evaluation
         before anything can be ordered (measured at ~650ms on a 1M-row
@@ -433,10 +433,10 @@ class PostgresSearchBackend:
         return f"({coarse} AND ({distance_sql}) <= %s)", params
 
     def _band_clause(self, q: SearchQuery, band: str) -> tuple[str, list]:
-        """The WHERE fragment selecting one band. The far half is a negation
-        that must survive NULL.
+        """The WHERE fragment selecting one band. The ``all`` half is a
+        negation that must survive NULL.
 
-        ``NOT (<near>)`` is NOT the far band. One row shape makes the near
+        ``NOT (<nearby>)`` is NOT the ``all`` band. One row shape makes the
         predicate indeterminate rather than false: a geohash INSIDE the cell
         cover with ``lat``/``lon`` NULL. The coarse half is then ``TRUE``,
         the haversine is ``NULL``, ``TRUE AND NULL`` is ``NULL``, and ``NOT
@@ -460,7 +460,7 @@ class PostgresSearchBackend:
         near_sql, params = self._near_predicate(q)
         if not near_sql:
             return "", []
-        if band == "near":
+        if band == "nearby":
             return f"COALESCE({near_sql}, false)", params
         return f"NOT COALESCE({near_sql}, false)", params
 
@@ -717,10 +717,9 @@ class PostgresSearchBackend:
     def _run(self, q: SearchQuery, *, trigram: bool) -> tuple[list[Hit], bool]:
         """One page. With banding on, two ordered reads concatenated.
 
-        The near band and the far band are separate, individually indexable
-        queries; a page is the near band's rows followed by the far band's,
-        and a page that runs the near band dry simply fills its remainder
-        from the far one. The reader sees one ``items`` list and one cursor,
+        ``nearby`` and ``all`` are separate, individually indexable queries;
+        a page is ``nearby``'s rows followed by ``all``'s, and a page that
+        runs ``nearby`` dry simply fills its remainder from ``all``. The reader sees one ``items`` list and one cursor,
         so the boundary is invisible from outside — which is the point: a
         band is a heading, and a heading does not end a page.
         """
@@ -733,22 +732,22 @@ class PostgresSearchBackend:
         hits: list[Hit] = []
         if (resume or 0) == 0:
             near = self._read_band(
-                q, band="near", trigram=trigram, limit=q.limit + 1, anchored=True
+                q, band="nearby", trigram=trigram, limit=q.limit + 1, anchored=True
             )
-            hits.extend(self._hits(q, near, band="near"))
+            hits.extend(self._hits(q, near, band="nearby"))
             if len(hits) > q.limit:
                 return hits[: q.limit], True
-            # The near band is exhausted: the rest of this page comes from
-            # the far band, read from ITS beginning — the cursor that got us
+            # ``nearby`` is exhausted: the rest of this page comes from
+            # ``all``, read from ITS beginning — the cursor that got us
             # here anchors the band behind us and means nothing here.
             far = self._read_band(
-                q, band="far", trigram=trigram, limit=q.limit + 1 - len(hits), anchored=False
+                q, band="all", trigram=trigram, limit=q.limit + 1 - len(hits), anchored=False
             )
         else:
             far = self._read_band(
-                q, band="far", trigram=trigram, limit=q.limit + 1, anchored=True
+                q, band="all", trigram=trigram, limit=q.limit + 1, anchored=True
             )
-        hits.extend(self._hits(q, far, band="far"))
+        hits.extend(self._hits(q, far, band="all"))
         return hits[: q.limit], len(hits) > q.limit
 
     def _read_band(
@@ -888,7 +887,7 @@ class PostgresSearchBackend:
         cap = int(search_settings.FACET_CANDIDATE_CAP)
         where_sql, where_params = self._where(q, trigram=trigram)
         counts = {}
-        for band in ("near", "far"):
+        for band in ("nearby", "all"):
             band_sql, band_params = self._band_clause(q, band)
             sql = (
                 f"SELECT count(*) FROM (SELECT 1 FROM {_TABLE} d "
@@ -899,15 +898,15 @@ class PostgresSearchBackend:
                 counts[band] = int(cursor.fetchone()[0])
         return (
             BandSummary(
-                key="near",
-                count=min(counts["near"], cap),
-                count_is_lower_bound=counts["near"] > cap,
+                id="nearby",
+                count=min(counts["nearby"], cap),
+                count_is_lower_bound=counts["nearby"] > cap,
                 radius_km=shared.near_radius_km(q.near),
             ),
             BandSummary(
-                key="far",
-                count=min(counts["far"], cap),
-                count_is_lower_bound=counts["far"] > cap,
+                id="all",
+                count=min(counts["all"], cap),
+                count_is_lower_bound=counts["all"] > cap,
             ),
         )
 

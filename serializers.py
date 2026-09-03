@@ -30,12 +30,12 @@ class SearchItemSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
         help_text=(
-            "`near` | `far` | `\"\"`. Which labelled band this row sits in, "
-            "present only when `bands` is on. A LABEL, never a filter: the far "
-            "band carries every remaining row, including rows with no "
+            "`nearby` | `all` | `\"\"`. Which partition this row sits in, "
+            "present only under `geo_mode=rank`. A LABEL, never a filter: "
+            "`all` carries every remaining row, including rows with no "
             "coordinates at all, so a query never returns fewer results "
-            "because of distance. `\"\"` means bands were asked for but no "
-            "centre was given, which is not an error."
+            "because of distance. `\"\"` means the request ranked by "
+            "proximity but gave no centre, which is not an error."
         ),
     )
     match_count = serializers.IntegerField(
@@ -49,8 +49,8 @@ class SearchItemSerializer(serializers.Serializer):
     )
     card = serializers.DictField(
         help_text=(
-            "Stored row fields, so a result page costs one query. With `bands` "
-            "on it also carries `lat`/`lon` ROUNDED to CARD_COORD_PRECISION "
+            "Stored row fields, so a result page costs one query. Under "
+            "`geo_mode=rank` it also carries `lat`/`lon` ROUNDED to CARD_COORD_PRECISION "
             "plus `geo_precision_km`: draw an AREA, not a pin. The card never "
             "carries full-precision coordinates; the exact `distance_km` on "
             "the item is computed server-side from the true ones."
@@ -105,21 +105,22 @@ class FacetLabelsSerializer(serializers.Serializer):
 
 
 class BandSummarySerializer(serializers.Serializer):
-    """One labelled band of the answer — a heading, never a filter over it."""
+    """One partition of the answer — a heading, never a filter over it."""
 
-    key = serializers.ChoiceField(choices=["near", "far"])
+    id = serializers.ChoiceField(choices=["nearby", "all"])
     count = serializers.IntegerField(
         allow_null=True,
         help_text="How many rows are in this band. `null` when the engine "
-        "cannot say. The two counts add up to the unbanded `count`, which is "
+        "cannot say. The two counts add up to the top-level `count`, which is "
         "the machine-checkable form of 'nothing is hidden by distance'.",
     )
     count_is_lower_bound = serializers.BooleanField(
         help_text="True when `count` is a floor (a capped count). Render 'N+'."
     )
     radius_km = serializers.FloatField(
-        allow_null=True,
-        help_text="Set on `near` only: the edge, in km, the band was cut at.",
+        required=False,
+        help_text="Present on `nearby` only: the edge, in km, the band was cut "
+        "at. `all` has no edge — it is everything else, which is the promise.",
     )
 
 
@@ -173,10 +174,12 @@ class SearchResponseSerializer(serializers.Serializer):
         many=True,
         required=False,
         help_text=(
-            "Per-band counts in render order — «Объявления поблизости» then "
-            "«Все объявления». Present only when `bands` was asked for; empty "
-            "when it was asked for without a centre. The rows themselves carry "
-            "`band`; this is the summary a heading needs."
+            "Per-band counts in render order — `nearby` («Объявления "
+            "поблизости») then `all` («Все объявления»). Present only under "
+            "`geo_mode=rank`; empty when no centre was given. The rows "
+            "themselves carry `band`; this is the summary a heading needs. "
+            "The top-level `count` remains the WHOLE matching total, never "
+            "the nearby one."
         ),
     )
     query_understanding = QueryUnderstandingSerializer(

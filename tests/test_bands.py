@@ -68,7 +68,7 @@ def _corpus():
 
 
 ALL_KEYS = {"n0", "n4", "n11", "f_cologne", "f_paris", "nowhere"}
-NEAR_KEYS = {"n0", "n4", "n11"}
+NEARBY_KEYS = {"n0", "n4", "n11"}
 
 
 @pytest.fixture
@@ -100,6 +100,18 @@ def _get(api_client, **params):
     response = api_client.get(QUERY, {"type": DOC_TYPE, **params})
     assert response.status_code == 200, response.content
     return response.json()
+
+
+def _answer(payload):
+    """The response minus what a stopwatch decides.
+
+    ``took_ms`` is a measured duration, so asserting two answers are
+    identical must not assert they took the same number of milliseconds —
+    on SQLite both round to 1 and the equality holds by luck, on Postgres
+    one run is 2 and the test fails for a reason that has nothing to do
+    with what it is testing.
+    """
+    return {key: value for key, value in payload.items() if key != "took_ms"}
 
 
 # --------------------------------------------------------------------------
@@ -135,24 +147,24 @@ def test_a_cover_wider_than_the_cap_answers_with_nothing():
     assert shared.geohash_cells(CENTER[0], CENTER[1], 2000.0, precision=6, max_cells=64) == ()
 
 
-def test_a_row_with_no_coordinates_is_labelled_far_never_dropped():
+def test_a_row_with_no_coordinates_is_labelled_all_never_dropped():
     from stapel_search.backends import _shared as shared
     from stapel_search.dto import GeoFilter
 
     near = GeoFilter(lat=CENTER[0], lon=CENTER[1], radius_km=25.0)
-    assert shared.band_of(None, None, near) == "far"
-    assert shared.band_of(Decimal(str(CENTER[0])), Decimal(str(CENTER[1])), near) == "near"
-    assert shared.band_of(Decimal(str(PARIS[0])), Decimal(str(PARIS[1])), near) == "far"
-    # No centre at all: banding is inactive, and inactive is not "far".
+    assert shared.band_of(None, None, near) == "all"
+    assert shared.band_of(Decimal(str(CENTER[0])), Decimal(str(CENTER[1])), near) == "nearby"
+    assert shared.band_of(Decimal(str(PARIS[0])), Decimal(str(PARIS[1])), near) == "all"
+    # No centre at all: banding is inactive, and inactive is not "all".
     assert shared.band_of(None, None, None) == ""
 
 
 # --------------------------------------------------------------------------
-# off is off
+# the deploy flag is off, and off is off
 # --------------------------------------------------------------------------
 
 
-def test_bands_off_answers_exactly_what_it_answered_before(api_client, corpus):
+def test_the_flag_off_answers_exactly_what_it_answered_before(api_client, corpus):
     with _settings(GEO_BANDS=False):
         body = _get(api_client, lat=CENTER[0], lon=CENTER[1])
     assert "bands" not in body
@@ -162,7 +174,25 @@ def test_bands_off_answers_exactly_what_it_answered_before(api_client, corpus):
         assert set(item["card"]) <= {"title"}
 
 
-def test_bands_off_by_default_even_with_a_centre(api_client, corpus):
+def test_geo_mode_is_inert_while_the_flag_is_off(api_client, corpus):
+    """The wave keeps today's behaviour until the eval says otherwise.
+
+    `geo_mode=rank` is not a way around the deploy flag: with GEO_BANDS off
+    it changes nothing, and `radius_km` keeps CUTTING exactly as it always
+    has — which is the half a caller would notice first if the flag leaked.
+    """
+    with _settings(GEO_BANDS=False):
+        ranked = _get(api_client, lat=CENTER[0], lon=CENTER[1], geo_mode="rank")
+        cut = _get(
+            api_client, lat=CENTER[0], lon=CENTER[1], geo_mode="rank", radius_km=5
+        )
+        plain = _get(api_client, lat=CENTER[0], lon=CENTER[1])
+    assert _answer(ranked) == _answer(plain)
+    assert "bands" not in ranked
+    assert {item["key"] for item in cut["items"]} == {"n0", "n4"}
+
+
+def test_the_flag_off_is_the_default(api_client, corpus):
     with _settings():
         body = _get(api_client, lat=CENTER[0], lon=CENTER[1])
     assert "bands" not in body
@@ -170,47 +200,47 @@ def test_bands_off_by_default_even_with_a_centre(api_client, corpus):
 
 
 # --------------------------------------------------------------------------
-# on: an order, not a filter
+# geo_mode=rank: an order, not a gate
 # --------------------------------------------------------------------------
 
 
-def test_near_rows_come_first_and_nothing_is_dropped(api_client, corpus):
+def test_nearby_rows_come_first_and_nothing_is_dropped(api_client, corpus):
     with _settings(GEO_BANDS=True):
         banded = _get(api_client, lat=CENTER[0], lon=CENTER[1], limit=50)
-        plain = _get(api_client, bands="off", limit=50)
+        plain = _get(api_client, geo_mode="filter", limit=50)
 
     keys = [item["key"] for item in banded["items"]]
     bands = [item["band"] for item in banded["items"]]
     assert set(keys) == ALL_KEYS
     assert banded["count"] == plain["count"]
-    assert bands == ["near"] * 3 + ["far"] * 3
-    assert set(keys[:3]) == NEAR_KEYS
+    assert bands == ["nearby"] * 3 + ["all"] * 3
+    assert set(keys[:3]) == NEARBY_KEYS
     assert banded["bands"] == [
-        {"key": "near", "count": 3, "count_is_lower_bound": False, "radius_km": 25.0},
-        {"key": "far", "count": 3, "count_is_lower_bound": False, "radius_km": None},
+        {"id": "nearby", "count": 3, "count_is_lower_bound": False, "radius_km": 25.0},
+        {"id": "all", "count": 3, "count_is_lower_bound": False},
     ]
 
 
-def test_the_row_without_coordinates_is_in_the_far_band(api_client, corpus):
+def test_the_row_without_coordinates_is_in_the_all_band(api_client, corpus):
     with _settings(GEO_BANDS=True):
         body = _get(api_client, lat=CENTER[0], lon=CENTER[1], limit=50)
     row = next(item for item in body["items"] if item["key"] == "nowhere")
-    assert row["band"] == "far"
+    assert row["band"] == "all"
     assert row["distance_km"] is None
 
 
-def test_a_tighter_band_moves_a_row_without_removing_it(api_client, corpus):
+def test_radius_km_moves_a_row_between_bands_without_removing_it(api_client, corpus):
+    """Under `rank` the caller's own radius is the edge, and only the edge."""
     with _settings(GEO_BANDS=True):
-        body = _get(
-            api_client, lat=CENTER[0], lon=CENTER[1], near_radius_km=5, limit=50
-        )
+        body = _get(api_client, lat=CENTER[0], lon=CENTER[1], radius_km=5, limit=50)
     by_key = {item["key"]: item["band"] for item in body["items"]}
     assert set(by_key) == ALL_KEYS
-    assert by_key["n0"] == "near" and by_key["n4"] == "near"
-    assert by_key["n11"] == "far"
+    assert by_key["n0"] == "nearby" and by_key["n4"] == "nearby"
+    assert by_key["n11"] == "all"
+    assert body["bands"][0]["radius_km"] == 5.0
 
 
-def test_bands_on_without_a_centre_is_not_an_error(api_client, corpus):
+def test_ranking_without_a_centre_is_not_an_error(api_client, corpus):
     with _settings(GEO_BANDS=True):
         body = _get(api_client, limit=50)
     assert {item["key"] for item in body["items"]} == ALL_KEYS
@@ -224,7 +254,7 @@ def test_a_cover_above_the_cell_cap_still_bands_correctly(api_client, corpus):
         body = _get(api_client, lat=CENTER[0], lon=CENTER[1], limit=50)
     by_key = {item["key"]: item["band"] for item in body["items"]}
     assert set(by_key) == ALL_KEYS
-    assert {k for k, band in by_key.items() if band == "near"} == NEAR_KEYS
+    assert {k for k, band in by_key.items() if band == "nearby"} == NEARBY_KEYS
 
 
 # --------------------------------------------------------------------------
@@ -232,7 +262,7 @@ def test_a_cover_above_the_cell_cap_still_bands_correctly(api_client, corpus):
 # --------------------------------------------------------------------------
 
 
-def test_one_cursor_pages_straight_out_of_the_near_band(api_client, corpus):
+def test_one_cursor_pages_straight_out_of_the_nearby_band(api_client, corpus):
     with _settings(GEO_BANDS=True):
         first = _get(api_client, lat=CENTER[0], lon=CENTER[1], limit=50)
         expected = [item["key"] for item in first["items"]]
@@ -254,11 +284,11 @@ def test_one_cursor_pages_straight_out_of_the_near_band(api_client, corpus):
 
 
 def test_a_page_straddles_the_band_boundary(api_client, corpus):
-    """Three near rows, two per page: page two is one near plus one far.
+    """Three nearby rows, two per page: page two is one `nearby`, one `all`.
 
     The band is a heading, and a heading does not end a page. This is the
-    load-bearing case of the two-query execution — the near read comes back
-    short and the remainder of the page is filled from the far band's
+    load-bearing case of the two-query execution — the `nearby` read comes
+    back short and the remainder of the page is filled from `all`'s
     beginning.
     """
     with _settings(GEO_BANDS=True):
@@ -270,15 +300,15 @@ def test_a_page_straddles_the_band_boundary(api_client, corpus):
             limit=2,
             anchor=first["next_anchor"],
         )
-    assert [item["band"] for item in first["items"]] == ["near", "near"]
-    assert [item["band"] for item in second["items"]] == ["near", "far"]
+    assert [item["band"] for item in first["items"]] == ["nearby", "nearby"]
+    assert [item["band"] for item in second["items"]] == ["nearby", "all"]
     assert {item["key"] for item in first["items"]} & {
         item["key"] for item in second["items"]
     } == set()
 
 
-def test_the_two_bands_add_up_to_the_unbanded_answer(api_client, corpus):
-    """``count(near) + count(far) == count(unbanded)`` — the whole promise.
+def test_the_two_bands_add_up_to_the_whole_answer(api_client, corpus):
+    """``count(nearby) + count(all) == count`` — the whole promise.
 
     This is the owner's "nothing is ever hidden by distance" in the one
     form a machine can check, and it catches the entire class: a row that
@@ -288,7 +318,7 @@ def test_the_two_bands_add_up_to_the_unbanded_answer(api_client, corpus):
     from stapel_search.models import SearchDocument
     from stapel_geo import geohash as gh
 
-    # The row that bites: a geohash INSIDE the near cell cover, with the
+    # The row that bites: a geohash INSIDE the nearby cell cover, with the
     # coordinates cleared out from under it — the state a geo service
     # outage leaves behind, since the two are maintained separately.
     SearchDocument.objects.filter(doc_type=DOC_TYPE, doc_key="n11").update(
@@ -296,18 +326,18 @@ def test_the_two_bands_add_up_to_the_unbanded_answer(api_client, corpus):
     )
     with _settings(GEO_BANDS=True):
         banded = _get(api_client, lat=CENTER[0], lon=CENTER[1], limit=50)
-        plain = _get(api_client, bands="off", limit=50)
+        plain = _get(api_client, geo_mode="filter", limit=50)
 
     by_band = {row["key"]: row["band"] for row in banded["items"]}
     assert set(by_band) == {item["key"] for item in plain["items"]}
-    assert all(band in ("near", "far") for band in by_band.values())
-    assert by_band["n11"] == "far"
-    summary = {row["key"]: row["count"] for row in banded["bands"]}
-    assert summary["near"] + summary["far"] == plain["count"]
+    assert all(band in ("nearby", "all") for band in by_band.values())
+    assert by_band["n11"] == "all"
+    summary = {row["id"]: row["count"] for row in banded["bands"]}
+    assert summary["nearby"] + summary["all"] == plain["count"] == banded["count"]
 
 
-def test_the_far_band_predicate_survives_a_null_coordinate():
-    """``NOT (<near>)`` is not the far band — ``NOT NULL`` is ``NULL``.
+def test_the_all_band_predicate_survives_a_null_coordinate():
+    """``NOT (<nearby>)`` is not the `all` band — ``NOT NULL`` is ``NULL``.
 
     A row with no coordinates makes the haversine NULL, and a plain
     negation would drop it from both bands: present in neither query, gone
@@ -322,10 +352,10 @@ def test_the_far_band_predicate_survives_a_null_coordinate():
         doc_type=DOC_TYPE,
         near=GeoFilter(lat=CENTER[0], lon=CENTER[1], radius_km=25.0),
     )
-    far_sql, _ = PostgresSearchBackend()._band_clause(q, "far")
-    near_sql, _ = PostgresSearchBackend()._band_clause(q, "near")
-    assert far_sql.startswith("NOT COALESCE(")
-    assert near_sql.startswith("COALESCE(")
+    all_sql, _ = PostgresSearchBackend()._band_clause(q, "all")
+    nearby_sql, _ = PostgresSearchBackend()._band_clause(q, "nearby")
+    assert all_sql.startswith("NOT COALESCE(")
+    assert nearby_sql.startswith("COALESCE(")
 
 
 def test_the_cursor_carries_the_band_it_resumes_in():
@@ -333,11 +363,11 @@ def test_the_cursor_carries_the_band_it_resumes_in():
     from stapel_search.query import decode_cursor, encode_cursor
     from stapel_search.dto import Cursor
 
-    value = shared.banded_sort_value("far", 2, "2026-01-04T00:00:00+00:00")
+    value = shared.banded_sort_value("all", 2, "2026-01-04T00:00:00+00:00")
     raw = encode_cursor(Cursor(sort_value=value, doc_key="f_cologne", offset=3))
     rank, matches, base = shared.split_sort_value(decode_cursor(raw).sort_value)
     assert (rank, matches, base) == (1, 2, "2026-01-04T00:00:00+00:00")
-    # A plain cursor stays plain: bands off changes nothing about the codec.
+    # A plain cursor stays plain: `filter` changes nothing about the codec.
     assert shared.split_sort_value(3.5) == (None, None, 3.5)
 
 
@@ -357,9 +387,9 @@ def test_match_count_orders_within_a_band(corpus):
         signals=(("brand", "apple"), ("color", "red")),
     )
     result = corpus.backend.query(q)
-    near = [hit for hit in result.hits if hit.band == "near"]
-    assert [hit.key for hit in near] == ["n0", "n4", "n11"]
-    assert [hit.match_count for hit in near] == [2, 1, 0]
+    nearby = [hit for hit in result.hits if hit.band == "nearby"]
+    assert [hit.key for hit in nearby] == ["n0", "n4", "n11"]
+    assert [hit.match_count for hit in nearby] == [2, 1, 0]
     # And still nothing was dropped by either the band or the signals.
     assert {hit.key for hit in result.hits} == ALL_KEYS
 
@@ -402,35 +432,70 @@ def test_a_card_without_coordinates_gains_none(api_client, corpus):
 # --------------------------------------------------------------------------
 
 
-def test_the_band_parameters_parse(corpus):
+def test_radius_km_lands_on_the_band_under_rank_and_on_the_filter_under_filter(
+    corpus,
+):
+    """One parameter, two readings, and `geo_mode` is the only thing that
+    decides which. The carriers stay separate so the two can never merge."""
     from stapel_search.query import parse_query
 
+    centre = {"type": DOC_TYPE, "lat": "49.6", "lon": "6.1"}
     with _settings(GEO_BANDS=True):
-        q = parse_query({"type": DOC_TYPE, "lat": "49.6", "lon": "6.1"})
+        q = parse_query(centre)
         assert q.near is not None and q.near.radius_km == 25.0
-        q = parse_query(
-            {"type": DOC_TYPE, "lat": "49.6", "lon": "6.1", "near_radius_km": "7"}
-        )
+        assert q.geo.radius_km is None, "rank must leave the filter unbounded"
+
+        q = parse_query({**centre, "radius_km": "7"})
         assert q.near.radius_km == 7.0
-        assert parse_query({"type": DOC_TYPE, "lat": "49.6", "lon": "6.1",
-                            "bands": "off"}).near is None
+        assert q.geo.radius_km is None
+
+        q = parse_query({**centre, "radius_km": "7", "geo_mode": "filter"})
+        assert q.near is None
+        assert q.geo.radius_km == 7.0
+
     with _settings(GEO_BANDS=False):
-        assert parse_query({"type": DOC_TYPE, "lat": "49.6", "lon": "6.1"}).near is None
-        assert parse_query({"type": DOC_TYPE, "lat": "49.6", "lon": "6.1",
-                            "bands": "on"}).near is not None
+        q = parse_query({**centre, "radius_km": "7", "geo_mode": "rank"})
+        assert q.near is None, "the deploy flag wins over the parameter"
+        assert q.geo.radius_km == 7.0
 
 
-def test_the_band_never_narrows_while_radius_km_still_does(corpus):
-    """The two live side by side: one labels, the other excludes."""
+def test_filter_mode_still_excludes(corpus):
+    """The hard cut is still reachable — deliberately, by asking for it."""
     from stapel_search.query import parse_query
 
     with _settings(GEO_BANDS=True):
         q = parse_query(
-            {"type": DOC_TYPE, "lat": CENTER[0], "lon": CENTER[1], "radius_km": "5"}
+            {
+                "type": DOC_TYPE,
+                "lat": CENTER[0],
+                "lon": CENTER[1],
+                "radius_km": "5",
+                "geo_mode": "filter",
+            }
         )
     result = corpus.backend.query(q)
     assert {hit.key for hit in result.hits} == {"n0", "n4"}
-    assert all(hit.band == "near" for hit in result.hits)
+    assert result.bands == ()
+
+
+def test_total_is_the_whole_matching_count_never_the_nearby_one(api_client, corpus):
+    """«Never 0 because of geo», in one assertion.
+
+    A centre in the middle of the Atlantic with a 1km edge: the `nearby`
+    band is empty, and the answer is still the whole catalogue with a
+    `count` to match. A `total` that tracked the nearby band would read 0
+    here — over six visible cards.
+    """
+    with _settings(GEO_BANDS=True):
+        empty_nearby = _get(api_client, lat=0.0, lon=-30.0, radius_km=1, limit=50)
+        plain = _get(api_client, geo_mode="filter", limit=50)
+
+    assert empty_nearby["items"], "geo must never empty an answer"
+    assert {item["key"] for item in empty_nearby["items"]} == ALL_KEYS
+    assert empty_nearby["count"] == plain["count"] == len(ALL_KEYS)
+    assert all(item["band"] == "all" for item in empty_nearby["items"])
+    summary = {row["id"]: row["count"] for row in empty_nearby["bands"]}
+    assert summary == {"nearby": 0, "all": len(ALL_KEYS)}
 
 
 # --------------------------------------------------------------------------
@@ -521,10 +586,15 @@ def test_an_explicit_facet_beats_an_extracted_one(api_client, corpus, brand_sche
     assert extracted["applied"] is False
 
 
-@pytest.mark.parametrize("bad", ["maybe", "1"])
-def test_an_unknown_bands_value_is_refused(bad, corpus):
+@pytest.mark.parametrize("bad", ["maybe", "1", "on"])
+def test_an_unknown_geo_mode_is_refused_inside_the_feature(bad, corpus):
     from stapel_search.errors import SearchValidationError
     from stapel_search.query import parse_query
 
-    with pytest.raises(SearchValidationError):
-        parse_query({"type": DOC_TYPE, "bands": bad})
+    with _settings(GEO_BANDS=True):
+        with pytest.raises(SearchValidationError):
+            parse_query({"type": DOC_TYPE, "geo_mode": bad})
+    # Inert means inert: with the flag off there is nothing it could have
+    # changed, so there is nothing to refuse.
+    with _settings(GEO_BANDS=False):
+        assert parse_query({"type": DOC_TYPE, "geo_mode": bad}).near is None

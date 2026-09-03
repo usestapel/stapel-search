@@ -273,10 +273,12 @@ class NaiveSearchBackend:
         """
         if q.near is None or not q.near.has_center:
             return ()
-        near = sum(1 for item in rows if item[2].band == "near")
+        nearby = sum(1 for item in rows if item[2].band == "nearby")
         return (
-            BandSummary(key="near", count=near, radius_km=shared.near_radius_km(q.near)),
-            BandSummary(key="far", count=len(rows) - near),
+            BandSummary(
+                id="nearby", count=nearby, radius_km=shared.near_radius_km(q.near)
+            ),
+            BandSummary(id="all", count=len(rows) - nearby),
         )
 
     def facets(self, q: SearchQuery, plan: FacetPlan) -> FacetResult:

@@ -1052,13 +1052,18 @@ def _card_area(row) -> dict:
 
 
 def _honest_bands(result, items) -> list[dict]:
-    """Per-band counts the page in front of the reader cannot disprove.
+    """The ``bands[]`` block: ``{id, count, radius_km?}`` in display order.
 
     :func:`_honest_count`'s rule, applied one level down. A heading reading
     «Объявления поблизости» over three visible cards may not claim zero of
     them, whatever the engine computed — so what this page shows is a floor
     for its own band, and a count below it becomes that floor and says it is
     one.
+
+    ``radius_km`` rides on ``nearby`` alone: it is the edge that band was
+    cut at, and ``all`` has no edge — it is everything else, which is the
+    whole promise. Emitting it there as ``null`` would invite a reader to
+    look for a number that does not exist.
     """
     shown: dict[str, int] = {}
     for item in items:
@@ -1068,19 +1073,19 @@ def _honest_bands(result, items) -> list[dict]:
     out = []
     for band in result.bands:
         count, lower_bound = band.count, band.count_is_lower_bound
-        floor = shown.get(band.key, 0)
+        floor = shown.get(band.id, 0)
         if count is None:
             count, lower_bound = (floor, True) if floor else (None, False)
         elif count < floor:
             count, lower_bound = floor, True
-        out.append(
-            {
-                "key": band.key,
-                "count": count,
-                "count_is_lower_bound": bool(lower_bound),
-                "radius_km": band.radius_km,
-            }
-        )
+        entry = {
+            "id": band.id,
+            "count": count,
+            "count_is_lower_bound": bool(lower_bound),
+        }
+        if band.radius_km is not None:
+            entry["radius_km"] = band.radius_km
+        out.append(entry)
     return out
 
 
@@ -1098,8 +1103,8 @@ def search(params, *, accept_language: str = "") -> dict:
     from .models import SearchDocument
     from .query import (
         encode_cursor,
-        parse_bands,
         parse_facet_selection,
+        parse_geo_mode,
         parse_query,
         parse_understanding,
     )
@@ -1153,12 +1158,13 @@ def search(params, *, accept_language: str = "") -> dict:
         for row in SearchDocument.objects.filter(doc_type=q.doc_type, doc_key__in=keys)
     }
 
-    # Two different questions. `bands_requested` decides the SHAPE of the
-    # answer (a caller who asked for bands is told what it got, even when
-    # that is "no centre, so no banding"); `q.near` decides whether there is
-    # anything to label. With bands off neither is true and the answer is
-    # what it was before bands existed, key for key.
-    bands_requested = parse_bands(params)
+    # Two different questions. `geo_mode == "rank"` decides the SHAPE of
+    # the answer (a caller ranking by proximity is told what it got, even
+    # when that is "no centre, so no partition"); `q.near` decides whether
+    # there is anything to label. Under `filter` — which is every request
+    # while GEO_BANDS is off — neither is true and the answer is what it
+    # was before bands existed, key for key.
+    ranked = parse_geo_mode(params) == "rank"
     items = []
     for hit in result.hits:
         row = rows.get(hit.key)
@@ -1171,7 +1177,7 @@ def search(params, *, accept_language: str = "") -> dict:
             "distance_km": hit.distance_km,
             "card": dict(row.card or {}) if row is not None else {},
         }
-        if bands_requested:
+        if ranked:
             item["band"] = hit.band
             item["card"].update(_card_area(row))
         if q.signals:
@@ -1273,11 +1279,11 @@ def search(params, *, accept_language: str = "") -> dict:
         # extracted must look exactly like the answers that came before
         # extraction existed.
         answer["query_understanding"] = _understanding_payload(extraction)
-    if bands_requested:
-        # Present only while bands were asked for, so an answer with
-        # GEO_BANDS off is byte-for-byte the one this module gave before
-        # bands existed. Empty means "asked for, but there was no centre to
-        # band around" — which is an answer, not a failure.
+    if ranked:
+        # Present only under `geo_mode=rank`, so an answer with GEO_BANDS
+        # off is byte-for-byte the one this module gave before bands
+        # existed. Empty means "ranked, but there was no centre to partition
+        # around" — which is an answer, not a failure.
         answer["bands"] = _honest_bands(result, items)
     return answer
 

@@ -257,9 +257,9 @@ def geohash_cells(
 ) -> tuple[str, ...]:
     """The cells at *precision* covering the radius box, or ``()`` if too many.
 
-    The near band's indexed prefilter: each cell is one ``LIKE 'cell%'``
+    The ``nearby`` band's indexed prefilter: each cell is one ``LIKE 'cell%'``
     range scan, and their union provably contains the whole box, so no
-    border row can fall out of the near band by accident. ``()`` is not "no
+    border row can fall out of ``nearby`` by accident. ``()`` is not "no
     cells" — it is "this cover is not worth its OR", and the caller falls
     back to the bounding box, which answers the same question more coarsely.
 
@@ -306,7 +306,12 @@ def geohash_cells(
 
 
 def near_radius_km(near: GeoFilter | None) -> float:
-    """The band edge in km — the filter's own value, else the configured one."""
+    """The ``nearby`` edge in km — the request's own value, else the default.
+
+    Under ``geo_mode=rank`` this is where the request's ``radius_km`` went:
+    the same number the caller always sent, now partitioning the answer
+    instead of cutting it.
+    """
     from ..conf import search_settings
 
     if near is not None and near.radius_km:
@@ -315,14 +320,14 @@ def near_radius_km(near: GeoFilter | None) -> float:
 
 
 def band_of(lat, lon, near: GeoFilter | None) -> str:
-    """``"near"`` | ``"far"`` | ``""`` — the LABEL every backend must agree on.
+    """``"nearby"`` | ``"all"`` | ``""`` — the LABEL every backend must agree on.
 
     Deliberately the opposite of :func:`geo_distance_km`'s rule for a row
     with no coordinates. That function serves a FILTER, where "within 25km"
     is a claim a coordinate-less row cannot support, so it is excluded. This
     one serves a LABEL over an answer nothing is withheld from: a row that
-    cannot prove it is nearby is simply not nearby, and belongs in the far
-    band rather than nowhere.
+    cannot prove it is nearby is simply not nearby, and belongs in ``all``
+    rather than nowhere.
 
     ``""`` means banding is inactive (no centre was given), which is a
     normal answer and not an error.
@@ -331,8 +336,10 @@ def band_of(lat, lon, near: GeoFilter | None) -> str:
         return ""
     flat, flon = _as_float(lat), _as_float(lon)
     if flat is None or flon is None:
-        return "far"
-    return "near" if haversine_km(near.lat, near.lon, flat, flon) <= near_radius_km(near) else "far"
+        return "all"
+    if haversine_km(near.lat, near.lon, flat, flon) <= near_radius_km(near):
+        return "nearby"
+    return "all"
 
 
 def coarse_coordinates(lat, lon, precision: int) -> tuple[float | None, float | None, float]:
@@ -488,9 +495,9 @@ def _comparable(sort: str, value):
     return float(value)
 
 
-#: Band -> its rank in the answer. ``""`` (banding inactive) ranks with the
-#: near band so an inactive band is a no-op rather than a reordering.
-BAND_RANKS = {"near": 0, "": 0, "far": 1}
+#: Band -> its position in the answer. ``""`` (banding inactive) ranks with
+#: ``nearby`` so an inactive band is a no-op rather than a reordering.
+BAND_RANKS = {"nearby": 0, "": 0, "all": 1}
 
 #: Tag of a composite ``sort_value``. A plain sort value is a float, a
 #: string or ``None``, so a tagged list cannot be mistaken for one.
@@ -517,8 +524,8 @@ def banded_sort_value(band: str, matches: int, value):
     The band half is not a sort key an engine orders by — Postgres executes
     the two bands as two indexable queries and concatenates them — it is
     the answer to "which band does this cursor resume in, and at what
-    anchor". Carrying it here is what lets a single cursor walk out of the
-    near band into the far one: the boundary is not a page boundary and
+    anchor". Carrying it here is what lets a single cursor walk out of
+    ``nearby`` into ``all``: the boundary is not a page boundary and
     must not become one.
     """
     return [_COMPOSITE, BAND_RANKS.get(band, 1), int(matches), value]
@@ -544,7 +551,7 @@ def order_key(sort: str, value, doc_key: str) -> tuple:
     at the end whichever way the user pointed the arrow.
 
     A composite *value* (see :func:`banded_sort_value`) prepends the band
-    rank ascending and the signal match count descending, in that order.
+    position ascending and the signal match count descending, in that order.
     This is the ORDER of the answer, stated once so both engines produce
     it; how an engine reaches that order is its own business (Postgres runs
     the two bands as two indexed queries and concatenates them, this

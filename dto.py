@@ -286,10 +286,12 @@ class SearchQuery:
     facets: dict[str, list[str]] = field(default_factory=dict)
     ranges: tuple[RangeFilter, ...] = ()
     geo: GeoFilter | None = None
-    #: The near band's centre and edge. Carried SEPARATELY from ``geo`` on
+    #: The nearby band's centre and edge. Carried SEPARATELY from ``geo`` on
     #: purpose: ``geo`` excludes rows, ``near`` only labels and orders them.
     #: Folding the two together is exactly how a band becomes a hidden
-    #: radius filter again.
+    #: radius filter again. Under ``geo_mode=rank`` the request's own
+    #: ``radius_km`` populates THIS and leaves ``geo`` unbounded — proximity
+    #: is an ordering, not a gate.
     near: GeoFilter | None = None
     #: ``(slug, value)`` pairs the query produced, INCLUDING the soft ones
     #: that were not applied as filters. The backend counts how many of
@@ -367,11 +369,11 @@ class BandSummary:
     honesty rule as :class:`QueryResult`: ``None`` when unknown.
     """
 
-    #: ``near`` | ``far``
-    key: str
+    #: ``nearby`` | ``all``
+    id: str
     count: int | None = None
     count_is_lower_bound: bool = False
-    #: Set on ``near`` only: the edge, in km, the band was cut at.
+    #: Set on ``nearby`` only: the edge, in km, the band was cut at.
     radius_km: float | None = None
 
 
@@ -385,9 +387,9 @@ class Hit:
     #: Value of the active sort key, so the service can build the next cursor
     #: without a second read.
     sort_value: Any = None
-    #: ``near`` | ``far`` | ``""`` when banding is off. The LEADING order key
-    #: when set, which is what lets one cursor page straight out of the near
-    #: band into the far one.
+    #: ``nearby`` | ``all`` | ``""`` when banding is off. Which partition of
+    #: the answer this row sits in; carried on the cursor so one anchor pages
+    #: straight out of ``nearby`` into ``all``.
     band: str = ""
     #: How many of the query's extracted signals this row satisfies. The
     #: owner's "strongest first", made countable.

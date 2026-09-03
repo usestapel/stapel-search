@@ -98,8 +98,22 @@ def _float(params: Mapping[str, Any], key: str) -> float | None:
         raise SearchValidationError(ERR_400_BAD_GEO, reason=f"{key} is not a number") from None
 
 
-def parse_geo(params: Mapping[str, Any]) -> GeoFilter | None:
-    """``lat``/``lon``/``radius_km`` or ``bbox=minLat,minLon,maxLat,maxLon``."""
+def parse_geo(params: Mapping[str, Any], *, mode: str = "filter") -> GeoFilter | None:
+    """The EXCLUDING geo filter: ``lat``/``lon``/``radius_km`` or a ``bbox``.
+
+    ``mode`` is what ``radius_km`` means for this request:
+
+    * ``filter`` — the historical reading. The radius is a hard cut and a
+      row outside it is not in the answer. A deliberate act, never a
+      default and never injected on a caller's behalf.
+    * ``rank`` — the radius does not appear here at all. It went to
+      :func:`parse_near` as the ``nearby`` band's edge, and what stays
+      behind is the bare centre, which bounds nothing and only supplies
+      ``distance_km``. Proximity is an ordering, not a gate.
+
+    ``bbox`` excludes under both modes: it is a viewport a caller drew, not
+    a proximity preference, and there is no second reading of it to offer.
+    """
     bbox_raw = params.get("bbox")
     if bbox_raw:
         parts = [p.strip() for p in str(bbox_raw).split(",")]
@@ -132,25 +146,40 @@ def parse_geo(params: Mapping[str, Any]) -> GeoFilter | None:
         raise SearchValidationError(ERR_400_BAD_GEO, reason="coordinates out of range")
     if radius is not None and radius <= 0:
         raise SearchValidationError(ERR_400_BAD_GEO, reason="radius_km must be positive")
-    return GeoFilter(lat=lat, lon=lon, radius_km=radius)
+    return GeoFilter(lat=lat, lon=lon, radius_km=None if mode == "rank" else radius)
 
 
-def parse_bands(params: Mapping[str, Any]) -> bool:
-    """``bands=on|off``, defaulting to ``GEO_BANDS``. A closed switch.
+def parse_geo_mode(params: Mapping[str, Any]) -> str:
+    """``geo_mode=rank|filter`` — what ``radius_km`` MEANS for this request.
 
-    Refused rather than ignored when it is neither: a parameter the server
-    dropped without saying so is the most expensive kind of wrong answer
-    (module docstring), and here the wrong answer is an ordinary-looking
-    page that silently is not the one the caller asked for.
+    ``rank`` partitions: ``lat``/``lon`` and ``radius_km`` cut the answer
+    into ``nearby`` and ``all``, nothing is withheld, and a query can never
+    come back empty because of distance. ``filter`` is the hard cut, kept
+    for a caller who genuinely wants "only within N km" and reachable only
+    by asking for it.
+
+    Two gates, and the order matters. ``GEO_BANDS`` is the DEPLOY flag and
+    is off: while it is off this returns ``filter`` unconditionally, the
+    parameter is inert, and ``radius_km`` keeps excluding exactly as it
+    does today — the answer is byte-identical to the one this module gave
+    before bands existed. Only inside the feature does ``rank`` become the
+    default for a caller who says nothing.
+
+    Inert means inert, so an unreadable value is not refused while the flag
+    is off — there is nothing for it to have changed.
     """
     from .conf import search_settings
 
-    raw = str(params.get("bands") or "").strip().lower()
+    if not search_settings.GEO_BANDS:
+        return "filter"
+    raw = str(params.get("geo_mode") or "").strip().lower()
     if not raw:
-        return bool(search_settings.GEO_BANDS)
-    if raw in ("on", "off"):
-        return raw == "on"
-    raise SearchValidationError(ERR_400_BAD_GEO, reason="bands must be 'on' or 'off'")
+        return "rank"
+    if raw in ("rank", "filter"):
+        return raw
+    raise SearchValidationError(
+        ERR_400_BAD_GEO, reason="geo_mode must be 'rank' or 'filter'"
+    )
 
 
 def parse_understanding(params: Mapping[str, Any]) -> bool:
@@ -176,12 +205,13 @@ def parse_understanding(params: Mapping[str, Any]) -> bool:
     return raw == "auto"
 
 
-def parse_near(params: Mapping[str, Any]) -> GeoFilter | None:
-    """The near band's centre and edge — a LABEL, never a predicate.
+def parse_near(params: Mapping[str, Any], *, mode: str = "rank") -> GeoFilter | None:
+    """The ``nearby`` band's centre and edge — a LABEL, never a predicate.
 
-    Carried separately from :func:`parse_geo`'s result because the two mean
-    opposite things: ``radius_km`` excludes a row, ``near_radius_km`` only
-    decides which heading it sits under. Folding them into one filter is
+    Carried on ``SearchQuery.near``, separately from :func:`parse_geo`'s
+    result, because the two mean opposite things: under ``filter`` the
+    radius excludes a row, under ``rank`` the same number only decides
+    which heading it sits under. Keeping one carrier for both readings is
     exactly how a band becomes a hidden radius again, which is the defect
     this design exists to prevent.
 
@@ -193,7 +223,7 @@ def parse_near(params: Mapping[str, Any]) -> GeoFilter | None:
     """
     from .conf import search_settings
 
-    if not parse_bands(params):
+    if mode != "rank":
         return None
     lat = _float(params, "lat")
     lon = _float(params, "lon")
@@ -201,13 +231,11 @@ def parse_near(params: Mapping[str, Any]) -> GeoFilter | None:
         return None
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise SearchValidationError(ERR_400_BAD_GEO, reason="coordinates out of range")
-    radius = _float(params, "near_radius_km")
+    radius = _float(params, "radius_km")
     if radius is None:
         radius = float(search_settings.NEAR_BAND_RADIUS_KM)
     if radius <= 0:
-        raise SearchValidationError(
-            ERR_400_BAD_GEO, reason="near_radius_km must be positive"
-        )
+        raise SearchValidationError(ERR_400_BAD_GEO, reason="radius_km must be positive")
     return GeoFilter(lat=lat, lon=lon, radius_km=radius)
 
 
@@ -285,8 +313,9 @@ def parse_query(params: Mapping[str, Any], *, accept_language: str = "") -> Sear
     if len(ranges) > max_ranges:
         raise SearchValidationError(ERR_400_TOO_MANY_RANGES, limit=max_ranges)
 
-    geo = parse_geo(params)
-    near = parse_near(params)
+    geo_mode = parse_geo_mode(params)
+    geo = parse_geo(params, mode=geo_mode)
+    near = parse_near(params, mode=geo_mode)
 
     sorts = tuple(search_settings.SORTS or ())
     sort = str(params.get("sort") or "").strip()
@@ -363,9 +392,9 @@ __all__ = [
     "RANGE_PREFIX",
     "decode_cursor",
     "encode_cursor",
-    "parse_bands",
     "parse_facet_selection",
     "parse_geo",
+    "parse_geo_mode",
     "parse_near",
     "parse_query",
     "parse_understanding",
