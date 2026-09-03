@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-search"
-version = "0.11.1"
+version = "0.11.2"
 description = "Search index, facets, geo-radius and ranking for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -29,7 +29,12 @@ dependencies = [
     # keyed by attribute-type slug and caches on `registry_version()`.
     # Floor 0.8: `stapel_attributes.visibility` — the stamp a stored DAO
     # carries, and the predicate this indexer refuses to write a value on.
-    "stapel-attributes>=0.8,<0.9",
+    # <0.10 as of stapel-search 0.11.2: stapel-attributes 0.9.0 changes one
+    # rule semantic — `in` / `not_in` no longer match a controller that reads
+    # EMPTY. This module reads a feature CONFIG to decide facetability and
+    # never evaluates rules, so nothing here shifts; the cap moves so the
+    # fleet can install one attributes version.
+    "stapel-attributes>=0.8,<0.10",
     # Spec §7.2 + architect verdict §18.10: the geohash prefix/haversine
     # arithmetic is IMPORTED, not copied. `stapel_geo.geohash` is pure
     # (pygeohash only, no Django), so this is a library dependency —

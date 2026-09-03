@@ -4,6 +4,23 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] — 2026-09-03
+
+Patch. Cap only: `stapel-attributes` admits 0.9.
+
+stapel-attributes 0.9.0 changes one rule semantic — a VALUE predicate (`in` /
+`not_in`) no longer matches a controller that reads EMPTY, so a
+`require when X not_in […]` rule stops firing before anyone has answered `X`.
+Two UX walkers had hit that wall on an imported catalogue: a field starred and
+refusing "Next" while its own help line said it was needed only *if* another
+field said so, with that field untouched.
+
+This module reads a feature CONFIG to decide what is facetable and never
+evaluates rules, so no verdict here shifts. The cap moves so a fleet can
+install one attributes version instead of being pinned to the engine with the
+defect by its least-recently-capped member. The suite is green against 0.9.0
+with no edit.
+
 ## [0.11.1] — 2026-09-03
 
 ### Fixed
