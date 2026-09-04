@@ -1429,6 +1429,12 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                     widened = evidence_plan(
                         [(path[-1], count) for path, count in evidence_categories],
                         requested=requested,
+                        # The queried category's own plan is already in the
+                        # order the client draws it (schema order, mandatory
+                        # first). Widening adds axes BELOW it; it does not get
+                        # to reshuffle a page that has a schema — a thin leaf
+                        # widened from itself must come back identical.
+                        authored=plan.slugs + plan.skipped,
                     )
                     if widened.slugs:
                         # The queried category AUTHORED these, so they are not

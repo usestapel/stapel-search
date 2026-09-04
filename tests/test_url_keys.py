@@ -254,3 +254,65 @@ def test_outside_a_scope_the_answer_states_the_slug(conformance, car_scope):
     answer = search({"type": DOC_TYPE})
     for slug, labels in answer["facet_labels"].items():
         assert labels["url_key"] == slug, slug
+
+
+# --------------------------------------------------------------------------
+# a `chips` parent has a scope now (stapel-categories 0.20.1)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def chips_parent_scope():
+    """`categories.features` for a partition parent that declares nothing.
+
+    0.20.1 answers such a node with the INTERSECTION of its children's
+    schemas and `effective_from: "children"`. Before it, the node answered
+    an empty list — so it had no scope, and 0.14.4's rule shortened nothing
+    on the page a chip row is drawn over. The scope now has features, and
+    the same rule applies to it unchanged.
+    """
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    features = [
+        _feature(
+            "make_ref_select",
+            "ref_select",
+            optionsRef={"vocabulary": "autocatalog", "level": "Make"},
+        ),
+        _feature("year_int", "int"),
+        _feature("vin", "string"),
+    ]
+
+    def provider(payload):
+        cid = str(payload["category_id"])
+        return {
+            "category_id": cid,
+            "revision": 1,
+            "effective_from": "children" if cid == "141" else "own",
+            "features": features if cid == "141" else [],
+        }
+
+    register_function("categories.features", provider)
+    yield features
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+def test_a_chips_parent_shortens_keys_from_its_effective_schema(chips_parent_scope):
+    """The parent's scope is its children's intersection, and it is a scope."""
+    from stapel_search.facets import resolve_url_key, scope_slugs, url_keys
+
+    assert scope_slugs("141") == ("make_ref_select", "year_int", "vin")
+    keys = url_keys("141")
+    assert keys["make_ref_select"] == "make"
+    assert keys["year_int"] == "year"
+    assert keys["vin"] == "vin"
+    assert resolve_url_key("year", keys) == "year_int"
+
+
+def test_a_node_with_no_effective_schema_still_shortens_nothing(chips_parent_scope):
+    """A `tiles` branch answers its own (empty) schema, and the rule holds."""
+    from stapel_search.facets import url_keys
+
+    assert url_keys("999") == {}

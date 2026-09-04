@@ -4,6 +4,90 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.5] — 2026-09-04
+
+Patch. The facet budget is now cut in the order the page is DRAWN in.
+
+### «Год» was 43rd of 60, and no budget a deployment sets reaches that
+
+Live, on a cars leaf with `MAX_FACET_FIELDS` raised to 24: `year` still came
+back in `facet_meta.skipped`, with «Марка», «Модель» and «Пробег» beside it or
+below it. Raising the budget again would not have fixed it. 0.8.0 ranked a
+CHOICE above a MEASUREMENT — a fix for a phone board that spent its whole
+budget on parcel dimensions — and on an imported cars leaf that puts every one
+of the forty inline selects, the comfort block included, above the three
+numbers a car buyer actually narrows by.
+
+The client does not draw the page in that order. It draws the category's
+features in **schema order with the mandatory ones first**, which is what
+stapel-categories states for the composer ("required-bearing blocks first, and
+required first inside a block") — so a plan ranked by anything else spends its
+slots in the MIDDLE of the page: groups with counts sit below groups without
+them, and «Обогрев» is counted while «Год» is not.
+
+**The rank is now the schema's own.** `facet_plan` orders the mandatory
+features in authored order, then the rest in authored order. Two refinements
+sit on top of it and nothing else does:
+
+- **a free-text axis sorts last**, whatever its position — a `term`/`path`
+  axis of a free-text type with no option set and no vocabulary pointer. It
+  has a bucket per DOCUMENT, not a group of choices: on the live leaf those
+  are the plate number, four discount blurbs and the three `*_id` twins of the
+  vocabulary chain. A NUMBER is not this and keeps its schema position, which
+  is the whole point of the release;
+- **a `divergent` feature sorts after the ones the children agree on** — see
+  below.
+
+The measured effect on the 59-feature cars fixture at a budget of 12: the plan
+is the twelve mandatory features in authored order — make, model, fuel type,
+transmission, **year**, doors, body type, drive type, wheel side,
+availability, colour, body number — and the heating select is `skipped`. What
+this gives up, deliberately: the vocabulary chain (generation → modification →
+complectation) no longer jumps ahead of the mandatory block, and a mandatory
+`int` is in the plan again. Both are where the category's author put them, and
+that is now the answer to "why is this group here and that one not".
+
+`evidence_plan`'s ranking is **unchanged** — coverage band, then 0.8.0's flags
+— for every page that has no schema to be in order with: a `tiles` branch, a
+root, a text query. It is what still ranks the BORROWED half of a widened
+plan.
+
+### A widened plan may add axes below the page's own, never reorder them
+
+`evidence_plan` takes the queried category's plan as `authored` and puts it
+first, in the order it arrived. Before this, a category that has a schema AND
+borrows axes — a `chips` parent, whose candidate set holds its children — had
+its own mandatory `year` sorted below an optional select that half the feed
+cannot answer.
+
+### A `chips` parent has a schema now, and gets everything that follows from one
+
+stapel-categories 0.20.1 answers a partition parent (`Автомобили` over
+`Новые`/`С пробегом`) with the INTERSECTION of its children's schemas,
+`effective_from: "children"`. Nothing here had to change to consume it — the
+plan reads `categories.features` and now gets features where it used to get an
+empty list — but two things follow and are pinned by tests:
+
+- **the page has short `url_key`s** (0.14.4). The rule is "unambiguous among
+  the features of the category in scope", and the scope now has features, so
+  the chip row's page addresses `f.make` exactly as the leaf under it does;
+- **a `divergent` feature ranks after the non-divergent ones.** The parent
+  carries the WIDENED config where its children disagree and marks it
+  `divergent: true` so a client can hide a control that means something
+  different per chip. Last in the plan is where a control like that belongs —
+  ahead of nothing, and it does not cost a slot a group every chip shares
+  could use.
+
+### Verified
+
+539 passed / 124 skipped against the naive walk. Seven new tests — the budget
+cut on the cars fixture (year kept, heating dropped), the optional half still
+in authored order, the free-text tail, a `chips` parent's effective schema
+planned and ranked, its short keys, the widened plan keeping the page's own
+order on top (fails on 0.14.4 with `warranty` above `year_int`), and the
+evidence-only ranking pinned unchanged for a category with no schema. Three
+0.8.0 assertions were rewritten to the new rank and say what it gave up.
+
 ## [0.14.4] — 2026-09-04
 
 Patch. Two things about a category page: the address bar says how a feature

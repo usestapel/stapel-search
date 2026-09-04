@@ -515,6 +515,10 @@ resolved category, inherited features included, from the same
 share, or one that is itself a slug there, keeps the full slug; with no
 category in scope nothing is shortened at all.
 
+A `chips` parent is in scope like any other node since stapel-categories
+0.20.1 answers it with the intersection of its children's schemas: the page a
+chip row is drawn over has features, so it has short keys too (0.14.5).
+
 `f.<key>`/`r.<key>` accept both forms inside a scope and only the real slug
 outside one, resolved by that same map, with a real slug always winning a
 key. Derived per request and never stored: the slug stays the feature's
@@ -522,19 +526,36 @@ identity. Stripping the suffix GLOBALLY is not available — an audit of the
 imported catalogue found 181 suffixed slugs and 29 bases carrying two or
 three differently-typed variants — which is why the scope is a category.
 
-### What the facet budget is spent on (0.4.0)
+### What the facet budget is spent on (0.14.5)
 
 `MAX_FACET_FIELDS` is a real cap and a wide imported category overruns it.
-Until 0.4.0 the overflow was decided by *authoring order*, which is an
-accident of the feed the category came from: a live phone board counted
-parcel weight, length, height and width — the delivery block is authored
-first — and reported Colour and RAM as `skipped`, which are the two a phone
-buyer actually narrows by.
+The cut is **the category's own schema order, with the mandatory features
+first** — the order the client draws the groups in (stapel-categories 0.20.1:
+"the composer that puts required-bearing blocks first, and required first
+inside a block"). So the budget takes the TAIL of the page, and a group with
+counts is never left sitting below one without them.
 
-`facet_plan` now ranks by what the category **already says** about each
-feature: `show_at_title`, then `show_as_badge`, then `mandatory`, then the
-authored order as a stable tie-break. No list of slugs lives in this module;
-a search library holding opinions about phones is the thing being avoided.
+Two refinements sit on top of that order and nothing else does:
+
+- a **free-text** axis (a `term`/`path` axis of a free-text type, with no
+  option set and no vocabulary pointer) sorts last whatever its position. It
+  has a bucket per document — a plate number, a discount blurb — so it is not
+  a group a panel draws. A *number* is not this: `year` and `mileage` keep
+  their schema positions, which is the whole point of 0.14.5;
+- a **`divergent`** feature (stapel-categories 0.20.1 — a `chips` parent's
+  effective schema, where the children disagree about the feature's rules)
+  sorts after the ones they agree on, because a client may hide it until a
+  chip is picked.
+
+0.4.0 and 0.8.0 ranked by the author's flags instead — `show_at_title`, an
+`optionsRef`, `show_as_badge`, `mandatory`, and a choice above a measurement
+— which fixed a phone board counting parcel dimensions but ranked `year` 43rd
+of 60 on an imported cars leaf, where no budget a deployment would set could
+reach it. That ranking is still what `evidence_plan` uses for the **borrowed**
+half of a widened plan, where there is no single schema to be in order with;
+the queried category's own axes lead it, in schema order. No list of slugs
+lives in this module; a search library holding opinions about phones is the
+thing being avoided.
 
 A feature can also refuse outright: `facet: false` on the FeatureDef (or its
 config) drops it from the plan entirely, neither counted nor `skipped`. The

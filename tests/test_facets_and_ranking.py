@@ -152,7 +152,8 @@ def wide_import_schema():
         plain("video_url", "string"),
         plain("video_file_url", "string"),
         # The comfort block: 22 optional inline selects, authored here.
-        *[plain(f"comfort_{index}", "select") for index in range(22)],
+        plain("heating", "select"),
+        *[plain(f"comfort_{index}", "select") for index in range(21)],
         plain("body_number", "int", mandatory=True),
         plain("plate", "string"),
         plain("registered_locally", "select"),
@@ -170,60 +171,80 @@ def wide_import_schema():
     function_registry._schemas.pop("categories.features", None)
 
 
-def test_a_choice_outranks_a_measurement_in_a_59_feature_category(wide_import_schema):
-    """The live defect: the body number was counted, the make was not offered.
+def test_the_budget_is_cut_in_the_order_the_page_is_drawn_in(wide_import_schema):
+    """The live defect (0.14.5): «Год» was 43rd of 60 and no budget reached it.
 
-    Measured on the stand 2026-09-01. The 12 slots went to the author's
-    flags alone, so a mandatory `int` (the body number) took the last one
-    and the vocabulary chain — generation, modification, complectation,
-    engine size, power — fell past the cap. The SERP then offered a car
-    buyer the body number and nine dealer promotions to filter by, and not
-    the make.
+    0.8.0 ranked a CHOICE above a MEASUREMENT, which put every one of the
+    forty selects on this leaf above `year` — the third thing a car buyer
+    narrows by, after the make and the model. Raising `MAX_FACET_FIELDS` to
+    24 on the stand did not reach it either, and it could not: the client
+    draws its groups in schema order with the mandatory ones first, so a
+    plan ranked by anything else takes its slots out of the MIDDLE of the
+    page and leaves countless groups above the ones it counted.
+
+    So the cut is the schema's own order. Mandatory first, authored order
+    inside the block — which is exactly the twelve a 12-slug budget buys
+    here, with the heating select (optional, authored deep in the comfort
+    block) below the cut where the client draws it.
     """
     from stapel_search.facets import facet_plan
 
     plan = facet_plan("7")
 
     assert plan.slugs == (
-        # flagged into the title, in authored order
-        "make", "model", "colour",
-        # then the vocabulary chain, in authored order
-        "generation", "modification", "complectation", "fuel_type",
-        "transmission", "engine_size", "doors", "body_type", "drive_type",
+        "make", "model", "fuel_type", "transmission", "year", "doors",
+        "body_type", "drive_type", "wheel_side", "availability", "colour",
+        "body_number",
     )
     assert len(plan.slugs) == 12
+    assert "year" in plan.slugs, "the axis this release exists for"
+    assert "heating" in plan.skipped
+    assert plan.slugs.index("year") < 6
 
 
-def test_a_free_text_and_a_numeric_slug_never_outrank_a_choice(wide_import_schema):
-    """A `string` is a term axis with no option set — a list, not a choice.
+def test_the_optional_half_keeps_the_authored_order_too(wide_import_schema):
+    """Past the cut, `skipped` is the rest of the schema — still in order.
 
-    `body_number` is mandatory and `plate` is free text; both used to sort
-    above an unflagged vocabulary field. Numbers lose nothing by the demotion:
-    a range axis is drawn from the category schema and from `core_ranges`,
-    neither of which this budget caps.
+    The vocabulary chain (generation → modification → complectation) is the
+    first thing a wider budget buys, because that is where the author put
+    it, and nine `offer_*` dealer flags are the last of the drawable half
+    because the feed appended them.
     """
     from stapel_search.facets import facet_plan
 
     plan = facet_plan("7")
 
-    for slug in ("body_number", "plate", "year", "tradein_discount"):
-        assert slug not in plan.slugs
-        assert slug in plan.skipped
-    for slug in plan.skipped[:9]:
-        assert slug in ("power", "wheel_side", "availability") or slug.startswith(
-            "comfort_"
-        ), slug
-    assert "price" in facet_plan("7").core_ranges
+    assert plan.skipped[:5] == (
+        "generation", "modification", "complectation", "engine_size", "power",
+    )
+    offers = [slug for slug in plan.skipped if slug.startswith("offer_")]
+    assert len(offers) == 9
+    assert plan.skipped.index("offer_0") > plan.skipped.index("heating")
+    assert "price" in plan.core_ranges
 
 
-def test_the_budget_still_spends_on_choices_before_promotions(wide_import_schema):
-    """Nine `offer_*` flags are the feed's, not a buyer's, and they sort last."""
+def test_a_free_text_axis_is_the_one_thing_the_order_demotes(wide_import_schema):
+    """A `string` has a bucket per DOCUMENT — it is not a group to draw.
+
+    The one exception to "schema order", and it is not an opinion about two
+    groups: the plate number, the four discount blurbs and the three `*_id`
+    twins of the vocabulary chain enumerate as many values as there are
+    listings. They sort below every axis a panel can draw, mandatory or not.
+    A NUMBER is not this — `year` and the mandatory `body_number` keep their
+    schema positions, which is the whole point of the release.
+    """
     from stapel_search.facets import facet_plan
 
     plan = facet_plan("7")
-    offers = [slug for slug in plan.skipped if slug.startswith("offer_")]
-    assert len(offers) == 9
-    assert plan.skipped[-9:] == tuple(offers), "the feed's flags are the last thing counted"
+
+    assert plan.skipped[-10:] == (
+        "generation_id", "modification_id", "complectation_id",
+        "tradein_discount", "credit_discount", "insurance_discount",
+        "max_discount", "video_url", "video_file_url", "plate",
+    )
+    for slug in ("plate", "tradein_discount", "generation_id"):
+        assert slug not in plan.slugs
+    assert "body_number" in plan.slugs and "year" in plan.slugs
 
 
 def test_the_plan_comes_from_the_category_schema(category_schema):
@@ -617,3 +638,80 @@ def test_a_tombstoned_scorer_disappears_from_the_disclosure():
     with override_settings(STAPEL_SEARCH={"SCORERS": {"geo_decay": None}}):
         slugs = {e["slug"] for e in ranking_disclosure("listing")["scorers"]}
         assert "geo_decay" not in slugs
+
+
+# --------------------------------------------------------------------------
+# an effective schema: a `chips` parent (stapel-categories 0.20.1)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def effective_schema():
+    """What a `chips` parent answers: the children's intersection.
+
+    A feature whose children disagree about its rules carries
+    `divergent: true` beside the WIDENED config of theirs — it means
+    something different under each chip, and a client may hide it until one
+    is picked. `mileage_int` is that feature here, and it is mandatory, so
+    the fixture pins which of the two keys wins.
+    """
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    def feature(slug, type_slug, **flags):
+        return {
+            "id": 0, "slug": slug, "name": slug, "translate": "none",
+            "mandatory": False, "show_at_title": False, "show_as_badge": False,
+            **flags, "config": {"type": type_slug},
+        }
+
+    features = [
+        feature("make_ref_select", "ref_select", mandatory=True),
+        feature("mileage_int", "int", mandatory=True, divergent=True),
+        feature("year_int", "int", mandatory=True),
+        feature("heating_select", "select"),
+    ]
+
+    def provider(payload):
+        return {
+            "category_id": payload["category_id"],
+            "revision": 1,
+            "effective_from": "children",
+            "features": features,
+        }
+
+    register_function("categories.features", provider)
+    yield features
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+def test_a_chips_parent_plans_from_its_effective_schema(effective_schema):
+    """The page a chip row is drawn over gets a plan at all — and in order.
+
+    Before stapel-categories 0.20.1 this node answered an empty feature
+    list, so `facet_plan` was empty and the panel came from the aggregate
+    or from nothing.
+    """
+    from stapel_search.facets import facet_plan
+
+    plan = facet_plan("141")
+    assert plan.slugs[:2] == ("make_ref_select", "year_int")
+    assert plan.revision == 1
+
+
+def test_a_divergent_feature_ranks_after_the_ones_the_children_agree_on(
+    effective_schema,
+):
+    """It means something different under each chip: last, mandatory or not.
+
+    `mileage_int` is authored second and marked mandatory, and it still
+    sorts below the optional `heating_select` the children agree on — which
+    is what lets a client that hides a divergent control until a chip is
+    picked keep every counted group it CAN draw.
+    """
+    from stapel_search.facets import facet_plan
+
+    assert facet_plan("141").slugs == (
+        "make_ref_select", "year_int", "heating_select", "mileage_int",
+    )

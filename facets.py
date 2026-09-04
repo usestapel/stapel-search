@@ -495,6 +495,73 @@ def _is_choice(config: dict, mapping: Any) -> bool:
     return bool(config.get("options") or config.get("optionsRef"))
 
 
+#: Attribute types whose values are free TEXT. ``string`` is the only
+#: builtin one (``BUILTIN_FACET_MAPPINGS``): ``bool`` and ``hex_color`` are
+#: term axes too, but their domain is the TYPE — two booleans, eighteen
+#: simple colours — and a host type this library does not know is left in
+#: schema order rather than guessed at.
+FREE_TEXT_TYPES = frozenset({"string"})
+
+
+def _is_free_text(config: dict, mapping: Any) -> bool:
+    """Does this axis enumerate a bucket per DOCUMENT rather than per choice?
+
+    A ``term``/``path`` axis of a free-text type, with no option set and no
+    vocabulary pointer to bound it. On the live cars leaf those are the plate
+    number, four discount blurbs and the three ``*_id`` twins of the
+    vocabulary chain: nothing a panel draws as a group of choices, and each
+    one costs a budget slot an axis somebody can click would use.
+
+    A NUMBER is not this: it is drawn from two bounds, and it keeps its place
+    in the schema order — which is the whole point of 0.14.5, since «Год» and
+    «Пробег» are ``int``.
+    """
+    if getattr(mapping, "kind", "") not in ("term", "path"):
+        return False
+    if config.get("options") or config.get("optionsRef"):
+        return False
+    return str(config.get("type") or "") in FREE_TEXT_TYPES
+
+
+def _schema_rank(feature: dict, config: dict, mapping: Any) -> tuple[int, int, int]:
+    """Where the CATEGORY's own schema puts this feature, lower first.
+
+    The budget cut has to agree with the order the page is drawn in, and the
+    page is drawn from the schema: the composer and the rail put the
+    mandatory features of a category first and keep the authored order
+    inside each block (stapel-categories 0.20.1, "the composer that puts
+    required-bearing blocks first, and required first inside a block"). A
+    plan that ranks by anything else takes its 24 slots out of the MIDDLE of
+    what the client draws, and the reader sees a group with no counts sitting
+    between two groups that have them.
+
+    Measured, and it is what this release exists for: on the imported cars
+    leaf 0.8.0's ranking put ``year`` 43rd of 60, because a number is not a
+    choice and every one of the forty selects above it was. «Год» is the
+    third thing a car buyer narrows by and no sane budget reached it.
+
+    Three keys, and the caller adds the authored position under them:
+
+    - **a free-text axis last** (:func:`_is_free_text`) — not an ordering
+      opinion about two groups, but the observation that this is not a
+      group: it has a bucket per document. Everything a panel can draw keeps
+      its schema position, numbers included;
+    - **then a ``divergent`` feature after a non-divergent one.** On a
+      ``chips`` parent the schema is the INTERSECTION of the children's and a
+      feature whose children disagree about its rules is marked ``divergent``
+      (stapel-categories 0.20.1). It means something different per chip, so a
+      client may hide it until a chip is picked — it is the last thing this
+      budget should be spent on;
+    - **then ``mandatory`` first**, and the authored position inside each
+      block.
+    """
+    return (
+        1 if _is_free_text(config, mapping) else 0,
+        1 if feature.get("divergent") else 0,
+        0 if feature.get("mandatory") else 1,
+    )
+
+
 def _facet_rank(feature: dict, config: dict, mapping: Any) -> tuple[int, int]:
     """How much of the facet budget this feature has earned, lower first.
 
@@ -536,6 +603,11 @@ def _facet_rank(feature: dict, config: dict, mapping: Any) -> tuple[int, int]:
 
     Ties keep the authored order, so the ranking never reshuffles a panel
     whose features are all flagged the same.
+
+    Since 0.14.5 this ranks the BORROWED half of :func:`evidence_plan` only —
+    slugs drawn from other categories in the candidate set, where there is no
+    single schema to be in order with. A category's own features are ranked
+    by :func:`_schema_rank`, which is the order the client draws them in.
     """
     band = 0 if _is_choice(config, mapping) else 1
     if feature.get("show_at_title"):
@@ -636,6 +708,9 @@ class _Fold:
         self.conflicted: set[str] = set()
         self.vocabulary_refs: dict[str, tuple[str, str]] = {}
         self.rank: dict[str, tuple[int, int]] = {}
+        #: The declaring category's own order for the slug — see
+        #: :func:`_schema_rank`. Paired with `position` it IS the schema.
+        self.schema_rank: dict[str, tuple[int, int, int]] = {}
         self.position: dict[str, int] = {}
         #: Documents in the candidate set whose category declares this slug.
         #: Zero for the single-category plan, which does not rank by it.
@@ -714,6 +789,7 @@ def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
         # smaller index. A minority category may CONTRIBUTE an axis; it may
         # not reorder the majority's.
         fold.rank.setdefault(slug, _facet_rank(feature, config, mapping))
+        fold.schema_rank.setdefault(slug, _schema_rank(feature, config, mapping))
         fold.position.setdefault(slug, position)
         fold.weight[slug] = fold.weight.get(slug, 0) + weight
         label = _group_label(feature)
@@ -853,23 +929,32 @@ def facet_plan(
     turning into a dozen sequential scans.
 
     ``categories.features`` resolves a category's own features plus the ones
-    it inherits from its ANCESTORS, which is why this answers nothing at all
-    for a branch (a branch declares no axes; its LEAVES do) and nothing for
-    ``category_id=None`` (a text query names no category). That is D175, and
-    :func:`evidence_plan` is where it is answered — here, deliberately, the
-    behaviour is unchanged.
+    it inherits from its ANCESTORS — and, since stapel-categories 0.20.1, the
+    intersection of its CHILDREN's for a ``chips`` parent that declares
+    nothing itself, which is how a partition parent gets a plan (and short
+    ``url_key``s) at all. It still answers nothing for a ``tiles`` branch and
+    nothing for ``category_id=None`` (a text query names no category). That
+    is D175, and :func:`evidence_plan` is where it is answered.
+
+    **The order is the schema's** (:func:`_schema_rank`): mandatory first,
+    then the rest as authored, which is the order the client draws the groups
+    in. The budget therefore cuts the TAIL of the page rather than a band out
+    of its middle.
     """
     fold = _Fold()
     features, revision = _feature_defs(category_id) if category_id else ([], None)
     _collect(features, fold)
     ranked = sorted(
-        fold.admitted(), key=lambda slug: (fold.rank[slug], fold.position[slug])
+        fold.admitted(), key=lambda slug: (fold.schema_rank[slug], fold.position[slug])
     )
     return _shape(fold, ranked, requested=requested, revision=revision)
 
 
 def evidence_plan(
-    category_counts: list[tuple[Any, int]], *, requested: tuple[str, ...] | None = None
+    category_counts: list[tuple[Any, int]],
+    *,
+    requested: tuple[str, ...] | None = None,
+    authored: tuple[str, ...] = (),
 ) -> FacetPlan:
     """What to count, drawn from the categories the CANDIDATE SET contains.
 
@@ -898,6 +983,13 @@ def evidence_plan(
     88.5% of them. The subtree is a description of the catalogue; the
     aggregate is a description of the corpus, and only one of the two is
     what the reader is looking at.
+
+    *authored* is the queried category's own plan, already in schema order
+    (:func:`facet_plan`), and it goes FIRST and in that order: a page that
+    has a schema is drawn in that schema, and a widened plan may add axes
+    BELOW it but may not reshuffle it. Everything else — the borrowed half —
+    is ranked by evidence exactly as before, which is the whole plan for a
+    branch, a root and a text query, because they author nothing.
     """
     from .conf import search_settings
 
@@ -937,10 +1029,14 @@ def evidence_plan(
         share = fold.weight[slug] / total
         return sum(1 for edge in EVIDENCE_BANDS if share < edge)
 
-    ranked = sorted(
-        fold.admitted(),
-        key=lambda slug: (band(slug), fold.rank[slug], fold.position[slug]),
-    )
+    own = {slug: index for index, slug in enumerate(authored)}
+
+    def key(slug: str) -> tuple:
+        if slug in own:
+            return (0, own[slug])
+        return (1, band(slug), fold.rank[slug], fold.position[slug])
+
+    ranked = sorted(fold.admitted(), key=key)
     return _shape(fold, ranked, requested=requested, evidence=tuple(ranked))
 
 
@@ -955,6 +1051,7 @@ def fill_zero_options(counts: dict[str, dict[str, int]], plan: FacetPlan) -> dic
 
 
 __all__ = [
+    "FREE_TEXT_TYPES",
     "URL_KEY_SUFFIXES",
     "evidence_plan",
     "category_path",

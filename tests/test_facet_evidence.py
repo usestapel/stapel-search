@@ -792,3 +792,151 @@ def test_a_borrowed_axis_is_still_governed_by_the_floor(mixed_catalogue, mixed_c
         "memory_size",
         "ram_size",
     ]
+
+
+# --------------------------------------------------------------------------
+# 0.14.5 — a page that HAS a schema is widened below it, never reordered
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def chips_parent(conformance):
+    """A `chips` parent over two children, as stapel-categories 0.20.1 answers it.
+
+    The parent declares nothing of its own, so its features are the
+    INTERSECTION of its children's (`effective_from: "children"`) — make and
+    year here. Each child carries one axis of its own, which the parent's
+    schema deliberately does NOT contain: it appears only when its chip is
+    picked. So the parent's page is the one case where a category has both a
+    schema of its own AND borrowed axes below it.
+    """
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    def number(slug, **flags):
+        return {
+            "id": 0, "slug": slug, "name": slug, "translate": "none",
+            "mandatory": False, "show_at_title": False, "show_as_badge": False,
+            **flags, "config": {"type": "int"},
+        }
+
+    make = {
+        "id": 0, "slug": "make_ref_select", "name": "Марка", "mandatory": True,
+        "show_at_title": True, "show_as_badge": False, "translate": "none",
+        "config": {
+            "type": "ref_select",
+            "optionsRef": {"vocabulary": "autocatalog", "level": "Make"},
+        },
+    }
+    year = number("year_int", mandatory=True)
+    schemas = {
+        "cars": [make, year],
+        "new": [make, year, _select("warranty", "yes", "no")],
+        "used": [make, year, number("mileage_int")],
+    }
+
+    def provider(payload):
+        cid = str(payload["category_id"])
+        return {
+            "category_id": cid,
+            "revision": 1,
+            "effective_from": "children" if cid == "cars" else "own",
+            "features": schemas.get(cid, []),
+        }
+
+    register_function("categories.features", provider)
+
+    conformance.backend.clear(DOC_TYPE)
+    SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(
+                doc_key=f"n{index}",
+                title=f"Новый {index}",
+                card={"title": f"Новый {index}"},
+                category_id="new",
+                category_path=("cars", "new"),
+                features={
+                    "make_ref_select": {"type": "ref_select", "value": ["toyota"]},
+                    "year_int": {"type": "int", "value": [2024]},
+                    "warranty": {"type": "select", "value": ["yes"]},
+                },
+            )
+            for index in range(2)
+        ]
+        + [
+            _document(
+                doc_key=f"u{index}",
+                title=f"С пробегом {index}",
+                card={"title": f"С пробегом {index}"},
+                category_id="used",
+                category_path=("cars", "used"),
+                features={
+                    "make_ref_select": {"type": "ref_select", "value": ["lada"]},
+                    "year_int": {"type": "int", "value": [2012]},
+                    "mileage_int": {"type": "int", "value": [120000]},
+                },
+            )
+            for index in range(2)
+        ],
+    )
+    yield schemas
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+def test_the_widened_plan_keeps_the_pages_own_schema_order_on_top(chips_parent):
+    """«Год» above a child's «Гарантия», because the parent's schema says so.
+
+    The parent authors make and year; `warranty` and `mileage_int` are
+    borrowed from one child each. The authored pair leads, in schema order,
+    and the borrowed pair follows ranked by evidence exactly as before — a
+    choice above a measurement at equal support. Before 0.14.5 the whole
+    plan was ranked that way, and `year_int` (a number, and mandatory on
+    every listing of the page) sorted BELOW an optional select half the feed
+    cannot answer.
+    """
+    from stapel_search.services import search
+
+    with tuned(**{"FACET_MIN_COVERAGE": 0}):
+        answer = search({"type": DOC_TYPE, "category": "cars"})
+
+    assert answer["count"] == 4
+    assert answer["facet_meta"]["plan"] == "evidence"
+    assert answer["facet_meta"]["counted"] == [
+        "make_ref_select", "year_int", "warranty", "mileage_int",
+    ]
+
+
+def test_the_budget_cuts_the_borrowed_half_first(chips_parent):
+    """Three slots: the page's own two axes, then one borrowed one."""
+    from stapel_search.services import search
+
+    with tuned(**{"MAX_FACET_FIELDS": 3, "FACET_MIN_COVERAGE": 0}):
+        answer = search({"type": DOC_TYPE, "category": "cars"})
+
+    assert answer["facet_meta"]["counted"] == [
+        "make_ref_select", "year_int", "warranty",
+    ]
+    assert answer["facet_meta"]["skipped"] == ["mileage_int"]
+
+
+def test_a_category_with_no_schema_of_its_own_ranks_by_evidence_alone(catalogue):
+    """Unchanged: a branch, a root and a text query author nothing.
+
+    `authored` is empty for them, so the ranking is 0.14.0's — coverage
+    band, then `_facet_rank` inside it — and this is the pin that says the
+    schema order added in 0.14.5 did not reach the pages that have no
+    schema to be ordered by.
+    """
+    from stapel_search.facets import evidence_plan
+
+    plan = evidence_plan([("phones", 8), ("laptops", 1)])
+    assert plan.slugs == ("vendor", "memory", "cpu", "screen")
+    assert plan.slugs == evidence_plan([("phones", 8), ("laptops", 1)], authored=()).slugs
+    assert plan.evidence == plan.slugs, "every slug of it is borrowed"

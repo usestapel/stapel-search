@@ -154,19 +154,23 @@ def wide_category():
 
 
 def test_the_plan_ranks_the_flags_the_category_already_carries(wide_category, settings):
-    """Title beats badge beats mandatory beats the order it was authored in.
+    """Mandatory first, then the authored order — the page's own order.
 
     The live symptom this closes: a phone SERP counted parcel weight,
     length, height and width while reporting Colour and RAM as *skipped* —
     the panel spent its whole budget on the delivery block because that
-    block happens to be authored first.
+    block happens to be authored first. The three axes the category marked
+    mandatory now open the plan whatever their position, so the delivery
+    block can only have what is left over, and it has it in the place the
+    client draws it. `video_url` is free text (a bucket per document) and is
+    the one thing this order demotes.
     """
     from stapel_search.facets import facet_plan
 
     settings.STAPEL_SEARCH = {"MAX_FACET_FIELDS": 4}
     plan = facet_plan("c1")
-    assert list(plan.slugs) == ["vendor", "condition", "ram_size", "video_url"]
-    assert "weight_for_delivery" in plan.skipped
+    assert list(plan.slugs) == ["condition", "vendor", "ram_size", "weight_for_delivery"]
+    assert plan.skipped == ("length_for_delivery", "wholesale_packing", "video_url")
 
 
 def test_a_feature_can_refuse_to_be_a_facet(wide_category):
