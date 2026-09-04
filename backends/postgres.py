@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re as _re
+from dataclasses import replace
 from decimal import Decimal
 
 from django.db import connection
@@ -1040,6 +1041,60 @@ class PostgresSearchBackend:
             candidates=max_candidates,
             degraded=("exact_facet_counts",) if approximate else (),
         )
+
+    def ranges(self, q: SearchQuery, plan: FacetPlan) -> dict[str, tuple[Decimal, Decimal]]:
+        """OPTIONAL verb: the low and high bound of every numeric axis.
+
+        Two aggregates over :meth:`_where` — the same single place that
+        decides what a candidate is — and never one per axis: the side table
+        answers every attribute axis in one ``GROUP BY n.slug`` on the
+        ``(slug, value)`` index, and the core columns in one row beside it.
+
+        The range filters are removed from the query first (all of them, in
+        one pass), so a picker reports the domain it can still be widened
+        to rather than the ends of its own current selection.
+        """
+        self._require_postgres()
+        from ..index_schema import CORE_RANGE_FIELDS
+
+        unbounded = replace(q, ranges=())
+        where_sql, where_params = self._where(unbounded, trigram=self._widened_arm(q))
+        out: dict[str, tuple[Decimal, Decimal]] = {}
+
+        columns = [
+            (slug, CORE_RANGE_FIELDS[slug])
+            for slug in plan.core_ranges
+            if slug in CORE_RANGE_FIELDS
+        ]
+        if columns:
+            projection = ", ".join(
+                f"min(d.{column}), max(d.{column})" for _slug, column in columns
+            )
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT {projection} FROM {_TABLE} d WHERE {where_sql}",
+                    list(where_params),
+                )
+                row = cursor.fetchone() or ()
+            for position, (slug, _column) in enumerate(columns):
+                low, high = row[position * 2], row[position * 2 + 1]
+                if low is not None and high is not None:
+                    out[slug] = (Decimal(str(low)), Decimal(str(high)))
+
+        wanted = [slug for slug in plan.range_candidates if slug not in plan.hidden]
+        if wanted:
+            sql = f"""
+                SELECT n.slug, min(n.value), max(n.value)
+                  FROM {_TABLE} d
+                  JOIN search_number n ON n.document_id = d.id
+                 WHERE {where_sql} AND n.slug = ANY(%s::text[])
+                 GROUP BY n.slug
+            """
+            with connection.cursor() as cursor:
+                cursor.execute(sql, list(where_params) + [wanted])
+                for slug, low, high in cursor.fetchall():
+                    out[slug] = (Decimal(str(low)), Decimal(str(high)))
+        return out
 
     def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:
         """OPTIONAL verb: which categories *q*'s candidate set is made of.

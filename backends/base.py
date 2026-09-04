@@ -79,6 +79,17 @@ VERBS = (
 #: Postgres implement it; the conformance scenario ``suggest_categories``
 #: skips engines without it and holds the rest to the naive reference.
 
+#: A THIRD optional verb, same rule: ``ranges(q, plan) -> {slug: (low,
+#: high)}`` — the bounds of every numeric axis over the candidate set, with
+#: the range filters removed. A bucket list answers "which values are left";
+#: a from/to picker has no values to enumerate and needs two ends, and a
+#: client that is told neither draws no picker or draws one over a guess.
+#: Optional for the same reason as ``category_counts``: an engine without it
+#: has not failed ``search.E002``. The service layer probes with ``getattr``
+#: and reports ``facet_ranges`` in ``degraded[]``. Naive and Postgres
+#: implement it; the conformance scenario ``range_bounds`` skips engines
+#: without it and holds the rest to the naive reference.
+
 #: Value prefix a backend uses in ``READ_PATH_IMPL`` when it answers a
 #: declared read path through a NATIVE engine capability rather than
 #: through a hand-written clause — e.g. Meilisearch answers ``geo:prefilter``

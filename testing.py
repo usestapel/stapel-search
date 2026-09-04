@@ -410,6 +410,46 @@ def _s_core_range_price(ctx: Context) -> None:
     assert set(ctx.keys(q)) == {"1"}
 
 
+def _s_range_bounds(ctx: Context) -> None:
+    """The OPTIONAL third verb: the two ends of every numeric axis.
+
+    A bucket list answers "which values are left"; a from/to picker has
+    nothing to enumerate and needs a min and a max. An engine without the
+    verb is skipped here and degrades loudly (``facet_ranges``) at the
+    service layer; an engine WITH it answers what the naive walk answers
+    over this corpus.
+
+    The corpus years are 2015, 2014 and 2020, and the prices 500, 300 and
+    10 with one document carrying none.
+    """
+    from .dto import FacetPlan, RangeFilter
+
+    fn = getattr(ctx.backend, "ranges", None)
+    if fn is None:
+        raise ConformanceSkip("ranges")
+
+    plan = FacetPlan(slugs=("year",), kinds={"year": "range"}, range_candidates=("year",),
+                     core_ranges=("price",))
+    bounds = fn(ctx.query(), plan)
+    assert bounds["year"] == (Decimal(2014), Decimal(2020))
+    # The unpriced document contributes no bound, and does not become a zero.
+    assert bounds["price"] == (Decimal("10.00"), Decimal("500.00"))
+
+    # Narrowed by everything EXCEPT the ranges: the category cuts the set,
+    # the year filter does not cut its own axis.
+    scoped = ctx.query(
+        category_path=("electronics", "phones"),
+        ranges=(RangeFilter(slug="year", lower=Decimal(2015), upper=Decimal(2015)),),
+    )
+    scoped_bounds = fn(scoped, plan)
+    assert scoped_bounds["year"] == (Decimal(2014), Decimal(2015)), (
+        "a bound narrowed by its own filter is a slider that can only narrow"
+    )
+
+    # An axis nobody asked to bound is not bounded.
+    assert "price" not in fn(ctx.query(), FacetPlan(range_candidates=("year",)))
+
+
 def _s_facet_counts(ctx: Context) -> None:
     ctx.require("facet_counts")
     from .dto import FacetPlan
@@ -1000,6 +1040,11 @@ SCENARIOS: tuple[Scenario, ...] = (
         "core_range_price",
         _s_core_range_price,
         "r.price filters the document's own column, and composes with attribute ranges",
+    ),
+    Scenario(
+        "range_bounds",
+        _s_range_bounds,
+        "min/max per numeric axis, measured with the range filters removed",
     ),
     Scenario("facet_counts", _s_facet_counts, "counts equal the candidate set"),
     Scenario("facet_drilldown", _s_facet_drilldown, "a selection does not zero neighbours"),

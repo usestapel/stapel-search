@@ -94,6 +94,29 @@ def _decimal(value) -> Decimal | None:
         return None
 
 
+def _numeric_code(values: list) -> Decimal | None:
+    """A TERM value that is also a number, so a choice can be a from/to.
+
+    The catalogue calls `year` a choice — on an imported leaf it is a
+    vocabulary of numeric codes, and `floor` and `doors` are inline option
+    lists of them — while a buyer calls all three a range. The type says
+    nothing about it: the same `2015` is a `ref_select` code here and an
+    `int` one category over, and only one of the two answered `r.year=2015..`
+    before this.
+
+    A number is written only for a SINGLE scalar value: a multi-value axis
+    has no one number to bound, and ``bool`` is `False == 0`, which is a term
+    and never a bound. The term is still written — an axis can be both, and
+    ``facets=year`` keeps counting buckets while ``r.year`` gets its bounds.
+    """
+    if len(values) != 1:
+        return None
+    value = values[0]
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal, str)):
+        return None
+    return _decimal(value)
+
+
 def _datetime(value):
     if value in (None, ""):
         return None
@@ -180,6 +203,16 @@ def build_facets(doc: SearchDocumentInput) -> tuple[dict, list[str], dict, int]:
             if not listed:
                 continue
             facets[slug] = listed
+            # The projection carries no type, so the VALUE decides: a single
+            # scalar that parses as a number is a number. Until 0.14.7 this
+            # branch wrote no numbers at all, which is why a live stand held
+            # 0 rows in `search_number` while every listing carried a year
+            # and a mileage — the range half of the panel was empty by
+            # construction, not by configuration, on every producer that
+            # hands over this projection instead of DAOs.
+            number = _numeric_code(listed)
+            if number is not None:
+                numbers[slug] = number
             for value in listed:
                 term, cut = _truncate(f"{slug}={value}")
                 truncated += int(cut)
@@ -216,6 +249,13 @@ def build_facets(doc: SearchDocumentInput) -> tuple[dict, list[str], dict, int]:
 
         if mapping.numeric:
             number = _decimal(values[0])
+            if number is not None:
+                numbers[slug] = number
+        elif mapping.kind == "term":
+            # A vocabulary-backed or inline choice whose CODE is a number
+            # (`year`, `floor`, `doors`). Not `path`: a root->leaf address is
+            # not a magnitude, and its segments are rolled up by prefix.
+            number = _numeric_code(values)
             if number is not None:
                 numbers[slug] = number
 
@@ -844,6 +884,31 @@ def _honest_count(result, *, offset: int, shown: int) -> tuple[int | None, bool]
     if total < seen:
         return seen, True
     return total, bool(getattr(result, "total_is_lower_bound", False))
+
+
+def _range_payload(bounds) -> dict[str, dict]:
+    """``{slug: (low, high)}`` -> ``{slug: {"min": n, "max": n}}``.
+
+    Numbers, not strings. A price crosses the wire as a string on the CARD
+    because a written price must not be rounded on its way to a human; a
+    slider END is arithmetic the client does immediately, and handing it
+    `"2015"` to parse buys nothing. Integral values render integral, so a
+    year is `2015` and an engine volume is `1.4`.
+    """
+    payload: dict[str, dict] = {}
+    for slug, pair in (bounds or {}).items():
+        low, high = pair
+        if low is None or high is None:
+            continue
+        payload[str(slug)] = {"min": _number(low), "max": _number(high)}
+    return payload
+
+
+def _number(value):
+    """A Decimal as the narrowest JSON number that loses nothing."""
+    number = Decimal(str(value))
+    integral = number == number.to_integral_value()
+    return int(number) if integral else float(number)
 
 
 def _degradations(capabilities, q, facet_result, path_degraded: str, exact_total: bool) -> tuple[str, ...]:
@@ -1494,6 +1559,23 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     if plan.slugs and capabilities.facet_counts:
         facet_result = backend.facets(q, plan)
 
+    # The BOUNDS of the numeric axes, which the counting verb cannot give:
+    # a from/to picker has nothing to enumerate. Asked for whether or not
+    # facets were counted — a range axis is not on the facet budget — and
+    # never fatal: a panel without bounds is worse than one with them, and
+    # both are better than a 503 over a slider.
+    range_bounds: dict[str, dict] = {}
+    range_degraded: tuple[str, ...] = ()
+    bounder = getattr(backend, "ranges", None)
+    if bounder is None:
+        range_degraded = ("facet_ranges",)
+    elif plan.range_candidates or plan.core_ranges:
+        try:
+            range_bounds = _range_payload(bounder(q, plan))
+        except Exception as exc:  # noqa: BLE001 — a bound is never fatal
+            logger.warning("ranges failed on %s: %s", backend.name, exc)
+            range_degraded = ("facet_ranges",)
+
     keys = [hit.key for hit in result.hits]
     rows = {
         row.doc_key: row
@@ -1684,6 +1766,12 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             # that renders a confident wrong narrowing.
             "dropped_filters": list(dropped_filters),
             "core_ranges": list(plan.core_ranges),
+            # `{slug: {min, max}}` for every axis that HAS a number in this
+            # candidate set — core columns and attributes alike, measured
+            # with the range filters removed. This is what a from/to picker
+            # is drawn from; an axis absent here has no numbers behind it on
+            # this page, which is a different fact from a bound of zero.
+            "ranges": range_bounds,
             # Where the plan came from. `category` is the authored schema of
             # the queried category; `evidence` means it was drawn from the
             # categories the candidate set actually contains, because that
@@ -1730,6 +1818,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 + tuple(extraction.degraded if extraction is not None else ())
                 + plan_degraded
                 + category_degraded
+                + range_degraded
             )
         ),
         "backend": getattr(backend, "name", "unknown"),

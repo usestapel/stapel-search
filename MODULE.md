@@ -484,6 +484,41 @@ The plan announces the axes in `facet_meta.core_ranges` rather than requiring
 every frontend to keep its own list of which slugs are core. They are not in
 `slugs`: there is nothing to count, only an axis to offer.
 
+### A numeric axis is written, and its two ends are reported (0.14.7)
+
+Two halves of one gap, found on a live stand whose `search_number` table was
+**empty** beside a full corpus of cars.
+
+**The write.** A producer that hands over the `features_search` projection
+instead of stapel-attributes DAOs got `numbers = {}` unconditionally — the
+projection carries values with no type, so the indexer had nothing to call a
+range, and the loss was total rather than partial. It now reads the VALUE: a
+single scalar that parses as a number is a number. The same rule closes the
+second half on the DAO path — a vocabulary-backed or inline CHOICE whose
+codes are numbers (`year` on an imported leaf, `floor`, `doors`) is a term
+**and** a range, because the catalogue calls it a choice and a buyer calls it
+a from/to. Never a `bool` (`False == 0`), never a multi-value axis (no one
+number to bound), never a path (an address is not a magnitude).
+
+**The report.** `facet_meta.ranges` is `{slug: {min, max}}` for every axis
+that has a number on this page, core columns and attributes alike. A bucket
+list answers "which values are left"; a from/to picker has nothing to
+enumerate and needs two ends, and a client told neither draws no picker or
+draws one over a guess. Bounds are measured with the range filters
+**removed**, so a slider reports the domain it can be widened back to rather
+than the ends of its own selection. Uncapped by `MAX_FACET_FIELDS`: that
+budget governs counting — and it ranks a choice above a measurement, so the
+numeric axes are exactly the ones it drops — while a bound is one grouped
+aggregate for all of them together. `ranges(q, plan)` is an OPTIONAL backend
+verb beside `category_counts`; an engine without it degrades loudly
+(`facet_ranges`) instead of answering an empty rail.
+
+Documents indexed before this are back-filled from their own stored facets by
+`manage.py search_backfill_numbers` — no source pull, no engine, one pass
+over the index's own table. It only ADDS rows, and skips a slug whose stored
+terms carry a `/`, which is how a path facet is recognized without the
+schema.
+
 ### Option captions ship with the counts (0.4.0)
 
 Until 0.4.0 a bucket was `{value: count}` and nothing else, on the reasoning

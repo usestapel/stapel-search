@@ -4,6 +4,104 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.7] — 2026-09-04
+
+Patch. `search_number` was empty on a corpus made of numbers.
+
+### Д263: 0 numeric rows beside 2 901 cars
+
+The audit found the table there and unfilled, and the storefront agreed: a
+cars page's answer carried no year, no mileage, no engine volume and no
+power, so the rail's from/to block never rendered and the client's
+schema-based skeleton appeared and vanished.
+
+**The writer, at `services.py:166`.** A producer that hands over the
+`features_search` projection rather than stapel-attributes DAOs took a
+branch that returns `numbers = {}` before it looks at a single value. The
+projection is values with no type, and the indexer had nothing to call a
+range — so the loss was not "some axes", it was every axis, on every
+document, on every deployment whose mapper serves that projection. The
+fleet's does (`stapel-classified/search_sources.py:map_listing` sets
+`features_search=` and no `features=`, deliberately and in a comment).
+
+The branch now reads the VALUE: **a single scalar that parses as a number is
+a number** (`services._numeric_code`). The term is still written — an axis
+can be both, and `facets=year` keeps counting buckets while `r.year` gets
+its bounds.
+
+**The same rule closes the second half, on the DAO path.** `int`, `float`,
+`convertible_unit` and `date` were numeric; a vocabulary-backed or inline
+CHOICE whose codes are numbers — `year` on an imported leaf, `floor`,
+`doors` — was a term and only a term. The catalogue calls it a choice and a
+buyer calls it a from/to, and both are now served. Never a `bool` (`False ==
+0` is a term, never a bound), never a multi-value axis (no one number to
+bound), never a path (a root->leaf address is not a magnitude, however
+numeric a segment reads).
+
+### `facet_meta.ranges` — the two ends a picker is drawn from
+
+Writing the rows is half the answer. Nothing ever reported a MIN and a MAX,
+so even a corpus with numbers behind it could not tell a client where to put
+the ends of a slider:
+
+```json
+"facet_meta": {
+  "ranges": {
+    "year":  {"min": 2015, "max": 2020},
+    "mileage": {"min": 40000, "max": 120000},
+    "engine_volume": {"min": 1.4, "max": 2.5},
+    "price": {"min": 9000, "max": 18000}
+  }
+}
+```
+
+Core columns and attributes in one report, because one rail draws both. An
+axis absent has no numbers behind it on this page — a different fact from a
+bound of zero. Numbers, not strings: a written price must not be rounded on
+its way to a human, a slider END is arithmetic the client does immediately.
+
+**Bounds are measured with the range filters REMOVED**, all of them, in one
+pass — the way a facet bucket is counted with its own slug's filter removed.
+A slider whose ends are the ends of its own selection is a control that can
+only ever narrow.
+
+**Uncapped by `MAX_FACET_FIELDS`.** That budget governs counting, and since
+0.14.5 it ranks a choice above a measurement — so on a wide leaf the numeric
+axes are precisely the ones it drops, and they are precisely the ones a
+from/to picker exists for. A bound is one grouped aggregate over
+`(slug, value)` for every axis at once, so the cost that justifies the
+budget is not there to pay. `FacetPlan.range_candidates` is the uncapped
+list; `plan.hidden` still excludes a VIN from it.
+
+`ranges(q, plan)` is an OPTIONAL backend verb, beside `category_counts` and
+under the same rule: naive and Postgres implement it, an engine without it
+does not fail `search.E002`, and the service layer reports `facet_ranges` in
+`degraded[]` rather than shipping an empty rail that looks like a corpus
+with no numbers.
+
+### The back-fill
+
+`manage.py search_backfill_numbers [--type listing] [--dry-run]` re-derives
+the missing rows from each document's OWN stored facets: no source pull, no
+comm call, no engine, one pass over the index's own table. It only ADDS —
+a row written from a DAO knew the feature's type and this pass does not —
+and skips a slug whose stored terms carry a `/`, which is how a path facet
+is recognized without the schema. `search_rebuild` still does the same and
+more, at the cost of re-pulling the whole corpus; reach for that one when
+the documents themselves are stale.
+
+### Verified
+
+558 passed / 128 skipped against the naive walk (545 before). Thirteen new
+tests: the three write-side rules and their three refusals, a cars leaf
+indexed the way the live producer indexes it (bounds for four axes,
+`r.year=2015..2018` narrowing to two of three, bounds unmoved by the
+filter's own selection, an axis past a `MAX_FACET_FIELDS` of 1 still
+bounded), a vocabulary-`year` leaf answering both as buckets and as a range,
+and the back-fill recovering an index emptied of its numbers. Plus the
+conformance scenario `range_bounds`, which holds every engine to the naive
+walk's answer — Postgres included, on CI, where a Postgres is reachable.
+
 ## [0.14.6] — 2026-09-04
 
 Patch. A drawn area no longer erases the centre it was drawn around.

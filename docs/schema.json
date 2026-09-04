@@ -613,6 +613,11 @@
             },
             "description": "Range slugs that address a core document column rather than an attribute (`r.price`). Offer them as filters unconditionally: they exist for every document in every category, which is why they are not in the category's own plan."
           },
+          "ranges": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "`{slug: {min, max}}` — the low and high bound of every numeric axis that HAS a number on this page, core columns (`price`) and attributes (`year`, `mileage`, `engine_volume`) alike. What a from/to picker is drawn from: a range axis has no values to enumerate, so `facets` says nothing about it and a client without these two numbers either draws no picker or draws one over a guess. Measured with the range filters REMOVED, so the ends are the domain the picker can be widened back to and not the ends of its own selection. An axis absent here has no numbers behind it in this candidate set — which is a different fact from a bound of zero. Not capped by MAX_FACET_FIELDS: the budget governs counting, and every bound is one aggregate. Empty, with `facet_ranges` in `degraded[]`, on an engine that does not implement the optional `ranges` verb."
+          },
           "plan": {
             "type": "string",
             "description": "Where the plan came from. `category` — the queried category's own authored schema. `evidence` — the categories the CANDIDATE SET actually contains, used when that schema did not fill MAX_FACET_FIELDS, which is every branch category and every text query (`categories.features` resolves own + ANCESTOR-inherited features, so a branch owns no axes; its leaves do)."
@@ -642,6 +647,7 @@
           "counted",
           "dropped_filters",
           "plan",
+          "ranges",
           "skipped",
           "withheld"
         ]

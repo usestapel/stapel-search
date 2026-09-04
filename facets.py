@@ -913,6 +913,10 @@ def _shape(
         # lets a panel offer «Цена от … до …» without the frontend keeping
         # its own list of which slugs are core.
         core_ranges=tuple(CORE_RANGE_FIELDS),
+        # UNCAPPED on purpose — see FacetPlan.range_candidates. The budget
+        # decides what is COUNTED; a bound is one aggregate for every axis
+        # at once, and the numeric axes are the ones the budget drops.
+        range_candidates=tuple(ordered),
         evidence=tuple(slug for slug in selected if slug in evidence),
     )
 

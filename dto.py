@@ -497,6 +497,14 @@ class FacetPlan:
     #: (``index_schema.CORE_RANGE_FIELDS``). Not part of ``slugs``: there is
     #: nothing to count, only an axis to offer.
     core_ranges: tuple[str, ...] = ()
+    #: Every slug the category admitted, UNCAPPED — the axes a range report
+    #: may put bounds on. Deliberately not ``slugs``: the facet budget ranks
+    #: a choice above a measurement (``facets._facet_rank``), so `mileage`
+    #: and `engine_volume` are routinely past ``MAX_FACET_FIELDS`` while
+    #: being exactly the axes a from/to picker is drawn for. A bound costs
+    #: one grouped aggregate for all of them together, not one pass each,
+    #: so the budget that governs counting does not govern this.
+    range_candidates: tuple[str, ...] = ()
     #: The subset of ``slugs`` admitted by the CANDIDATE SET's categories
     #: rather than by the queried category's own schema (``evidence_plan``).
     #: Empty for an authored plan. Only these are governed by

@@ -20,6 +20,9 @@ candidate cap still apply.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+from decimal import Decimal
+
 from ..dto import (
     BackendCapabilities,
     BackendHealth,
@@ -310,6 +313,53 @@ class NaiveSearchBackend:
             # being the one answer that has none.
             counts[slug] = shared.top_buckets(bucket, shared.bucket_limit(plan, slug))
         return FacetResult(counts=counts, approximate=False, candidates=candidates)
+
+    def ranges(self, q: SearchQuery, plan: FacetPlan) -> dict[str, tuple[Decimal, Decimal]]:
+        """OPTIONAL verb: the low and high bound of every numeric axis.
+
+        What a from/to picker needs and a bucket list cannot give it. The
+        counting verb answers "which values are left"; a range axis has no
+        values to enumerate — it has two ends, and a client that does not
+        know them either draws no picker at all or draws one over a guess.
+
+        **Bounds are measured with the range filters REMOVED** (every one of
+        them, in a single pass), the way :meth:`facets` measures a bucket
+        with its own slug's filter removed. A slider whose ends are the ends
+        of the current selection cannot be widened again, which is a control
+        that can only ever narrow.
+
+        Pure Python over the same candidate walk the rest of this backend
+        uses, so this is the reference semantics the conformance scenario
+        holds Postgres to.
+        """
+        from ..index_schema import CORE_RANGE_FIELDS
+        from ..models import SearchNumber
+
+        rows = [row for _key, _value, _hit, row in self._rows(replace(q, ranges=()))]
+        out: dict[str, tuple[Decimal, Decimal]] = {}
+        for slug in plan.core_ranges:
+            column = CORE_RANGE_FIELDS.get(slug)
+            if column is None:
+                continue
+            values = [
+                getattr(row, column) for row in rows if getattr(row, column) is not None
+            ]
+            if values:
+                out[slug] = (min(values), max(values))
+        wanted = [slug for slug in plan.range_candidates if slug not in plan.hidden]
+        if rows and wanted:
+            from django.db.models import Max, Min
+
+            grouped = (
+                SearchNumber.objects.filter(
+                    document_id__in=[row.id for row in rows], slug__in=wanted
+                )
+                .values("slug")
+                .annotate(low=Min("value"), high=Max("value"))
+            )
+            for entry in grouped:
+                out[entry["slug"]] = (entry["low"], entry["high"])
+        return out
 
     def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:
         """OPTIONAL verb: which categories *q*'s candidate set is made of.

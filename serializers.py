@@ -107,6 +107,24 @@ class FacetMetaSerializer(serializers.Serializer):
             "they are not in the category's own plan."
         ),
     )
+    ranges = serializers.DictField(
+        help_text=(
+            "`{slug: {min, max}}` — the low and high bound of every numeric "
+            "axis that HAS a number on this page, core columns (`price`) and "
+            "attributes (`year`, `mileage`, `engine_volume`) alike. What a "
+            "from/to picker is drawn from: a range axis has no values to "
+            "enumerate, so `facets` says nothing about it and a client "
+            "without these two numbers either draws no picker or draws one "
+            "over a guess. Measured with the range filters REMOVED, so the "
+            "ends are the domain the picker can be widened back to and not "
+            "the ends of its own selection. An axis absent here has no "
+            "numbers behind it in this candidate set — which is a different "
+            "fact from a bound of zero. Not capped by MAX_FACET_FIELDS: the "
+            "budget governs counting, and every bound is one aggregate. "
+            "Empty, with `facet_ranges` in `degraded[]`, on an engine that "
+            "does not implement the optional `ranges` verb."
+        )
+    )
     plan = serializers.CharField(
         help_text=(
             "Where the plan came from. `category` — the queried category's "
