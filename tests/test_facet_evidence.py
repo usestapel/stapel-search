@@ -693,3 +693,102 @@ def test_a_capped_bucket_list_is_never_withheld(mixed_catalogue, mixed_corpus):
 
     assert "memory_size" in answer["facets"]
     assert answer["facet_meta"]["withheld"] == []
+
+
+# --------------------------------------------------------------------------
+# the queried category's own axes are not borrowed (0.14.4)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def thin_leaf(conformance):
+    """One leaf with three axes, and only a third of its listings filling one.
+
+    Three axes is fewer than `MAX_FACET_FIELDS`, so the plan is widened from
+    the aggregate — and the only category the aggregate holds is this leaf
+    itself. That is the case in which the exemption used to be erased.
+    """
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    features = [
+        {
+            "id": 1, "slug": "make_ref_select", "name": "Марка", "mandatory": True,
+            "show_at_title": True, "show_as_badge": False, "translate": "none",
+            "config": {
+                "type": "ref_select",
+                "optionsRef": {"vocabulary": "autocatalog", "level": "Make"},
+            },
+        },
+        _select("condition", "new", "used"),
+        _select("wheel", "left", "right"),
+    ]
+
+    def provider(payload):
+        return {"category_id": payload["category_id"], "revision": 1, "features": features}
+
+    register_function("categories.features", provider)
+
+    conformance.backend.clear(DOC_TYPE)
+    SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(
+                doc_key=f"c{index}",
+                title=f"Авто {index}",
+                card={"title": f"Авто {index}"},
+                category_id="cars",
+                category_path=("cars",),
+                features=(
+                    {
+                        "condition": {"type": "select", "value": ["used"]},
+                        "make_ref_select": {"type": "ref_select", "value": ["toyota"]},
+                    }
+                    if index == 0
+                    else {"condition": {"type": "select", "value": ["used"]}}
+                ),
+            )
+            for index in range(3)
+        ],
+    )
+    yield features
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+def test_the_queried_categorys_own_axis_is_never_withheld_for_coverage(thin_leaf):
+    """The exemption 0.14.3 states, on the page that erased it.
+
+    A leaf with fewer axes than the budget is WIDENED from an aggregate that
+    contains only itself, and `evidence_plan` marks everything it ranked. So
+    the leaf's own mandatory make — filled by one listing in three, coverage
+    0.33 against a 0.6 floor — was withheld from its own category page, with
+    real buckets behind it. A vocabulary-backed group is the one a client
+    cannot enumerate from the schema, so withholding it deletes the filter.
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "cars"})
+
+    assert answer["facet_meta"]["plan"] == "evidence"
+    assert answer["facet_meta"]["withheld"] == []
+    assert answer["facets"]["make_ref_select"] == {"toyota": 1}
+    assert answer["facet_labels"]["make_ref_select"]["label"] == "Марка"
+
+
+def test_a_borrowed_axis_is_still_governed_by_the_floor(mixed_catalogue, mixed_corpus):
+    """The exemption is the queried category's, and there is none here: an
+    uncategorised feed borrows every axis, so 0.14.3's floor is untouched."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE})
+
+    assert [row["slug"] for row in answer["facet_meta"]["withheld"]] == [
+        "memory_size",
+        "ram_size",
+    ]

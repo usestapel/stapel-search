@@ -502,6 +502,26 @@ dotted key or an untranslated word. A vocabulary-backed slug is **absent**
 from the map: its level lives outside the schema, and the plan will not
 invent a caption it has not read.
 
+### The key a facet group has in the address (0.14.4)
+
+An importer mints a type suffix onto every slug it creates, and the suffix
+then travels in the address bar: `f.make_ref_select=toyota` states how the
+make is stored and nothing a reader wanted. `facet_labels[slug].url_key` is
+the slug with that suffix (`_select`, `_ref_select`, `_int`, `_bool`,
+`_string`, longest match) dropped, **but only where dropping it stays
+unambiguous among the features of the category in scope** — the query's
+resolved category, inherited features included, from the same
+`categories.features` the plan reads. A short form two slugs of the scope
+share, or one that is itself a slug there, keeps the full slug; with no
+category in scope nothing is shortened at all.
+
+`f.<key>`/`r.<key>` accept both forms inside a scope and only the real slug
+outside one, resolved by that same map, with a real slug always winning a
+key. Derived per request and never stored: the slug stays the feature's
+identity. Stripping the suffix GLOBALLY is not available — an audit of the
+imported catalogue found 181 suffixed slugs and 29 bases carrying two or
+three differently-typed variants — which is why the scope is a category.
+
 ### What the facet budget is spent on (0.4.0)
 
 `MAX_FACET_FIELDS` is a real cap and a wide imported category overruns it.

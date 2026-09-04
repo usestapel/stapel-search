@@ -162,6 +162,18 @@ class FacetLabelsSerializer(serializers.Serializer):
             "question as `translatable`, one level up."
         )
     )
+    url_key = serializers.CharField(
+        help_text=(
+            "What to call this group in the address: `f.<url_key>` and "
+            "`r.<url_key>`. The slug without the importer type suffix "
+            "(`_select`, `_ref_select`, `_int`, `_bool`, `_string`) where "
+            "that stays unambiguous among the features of the category in "
+            "scope, and the slug itself otherwise — and always when the "
+            "query names no category. Derived per request, never stored: the "
+            "slug remains the feature's identity, and both forms are "
+            "accepted inside the scope."
+        )
+    )
     translatable = serializers.BooleanField(
         help_text=(
             "True when `values` holds translation KEYS to run through the "
@@ -297,8 +309,9 @@ class SearchResponseSerializer(serializers.Serializer):
     facet_labels = serializers.DictField(
         child=FacetLabelsSerializer(),
         help_text=(
-            "{slug: {label, label_translatable, translatable, values: {value: "
-            "caption}}} — one entry for EVERY group in `facets`. `label` is "
+            "{slug: {label, label_translatable, url_key, translatable, "
+            "values: {value: caption}}} — one entry for EVERY group in "
+            "`facets`. `url_key` is the group's key in the address. `label` is "
             "the group's heading and is null when the definition has no name; "
             "`values` is empty for a slug whose options are not inline in the "
             "category schema and whose vocabulary resolved nothing, because "

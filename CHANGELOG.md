@@ -4,6 +4,100 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.4] — 2026-09-04
+
+Patch. Two things about a category page: the address bar says how a feature
+is STORED, and the page could withhold its own axes.
+
+### `f.make`, not `f.make_ref_select` — a scoped short key
+
+An importer mints a type suffix onto every slug it creates, so the address
+of a filtered car board reads `?f.make_ref_select=toyota&r.year_int=2015..`
+— "make" once, "how the make is stored" once, and nothing else. Every group
+in `facet_labels` now carries the key it has in the address:
+
+```json
+"facet_labels": {
+  "make_ref_select":  {"url_key": "make",             "label": "Марка", …},
+  "condition_select": {"url_key": "condition_select", "label": "Состояние", …}
+}
+```
+
+**The rule.** Drop the type suffix — exactly `_select`, `_ref_select`,
+`_int`, `_bool`, `_string`, at the end, longest match first so
+`make_ref_select` loses `_ref_select` and not `_select` — when the result is
+unambiguous among the FEATURES OF THE CATEGORY IN SCOPE: the query's
+resolved category, inherited features included, read from the same
+`categories.features` the plan reads. `url_key` is the slug itself when
+
+- two slugs of the scope shorten to the same form (`condition_select` and
+  `condition_ref_select` — neither may take `condition`);
+- the short form is a real slug of the scope (`body` exists, so
+  `body_select` keeps its full slug and `f.body` is `body`);
+- the slug carries no such suffix;
+- **there is no category scope at all** — a text query, a root, a branch.
+
+Derived on every read and never stored: the slug remains the feature's
+identity, and this is only its address. The scope is a category rather than
+the catalogue because a global strip is not available: the audit behind this
+counted 181 suffixed slugs with 29 bases carrying two or three
+differently-typed variants. On the reference cars leaf, 5 of 62 features are
+suffixed and all five shorten cleanly (`make`, `fuel_type`, `body_type`,
+`drive_type`, `power`).
+
+**Parsing** takes both forms. Inside a scope `f.<key>`/`r.<key>` resolve a
+short key to its slug by that same map — so `f.make=toyota` in `141/151` IS
+`f.make_ref_select=toyota`, and `r.year=2015..2020` is `r.year_int` — while
+a key that matches a real slug is that slug and is never re-read as somebody
+else's short form. Outside a scope only real slugs filter anything. It runs
+after `category=` is resolved to ids, so a slug address gets short keys on
+the same terms an id path does, and it costs no extra call in the steady
+state: it reads the revision-cached features the plan reads one step later.
+
+An unrecognised key is left **exactly** as it arrived, which is 0.14.3's
+behaviour for an unknown facet: it is not a 400, it is carried into the
+query, matches nothing, and the answer reports what it actually counted in
+`facet_meta.counted`. This release does not invent a refusal there — a link
+that works today does not acquire a new way to fail.
+
+### A category page cannot withhold its own axes
+
+0.14.3 raised `FACET_MIN_COVERAGE` to 0.6 and stated an exemption: a slug
+the QUERIED CATEGORY authored is not governed by it. Widening erased that.
+`evidence_plan` marks everything it ranked as evidence, and the widening
+runs whenever the queried category's own plan does not fill the budget — so
+a thin leaf was widened from an aggregate containing only ITSELF, and its own
+axes came back marked borrowed. A leaf whose mandatory make is filled by one
+listing in three then withheld the make from its own page, with real buckets
+behind it. Worst on exactly the group that cannot be recovered client-side: a
+vocabulary-backed axis carries a pointer and no options, so a client can
+neither enumerate it nor draw it (`search-react/MODULE.md`, "the gap the seam
+does not close: EXISTENCE").
+
+The widened plan now keeps the queried category's authored slugs out of
+`evidence`, which is what the documented exemption always said. A borrowed
+axis is governed exactly as before: the uncategorised feed still withholds
+`memory_size` and `ram_size`.
+
+Checked against the deployed stand before writing this: on the cars leaf the
+mandatory `make_ref_select` IS counted, with buckets and a caption for every
+one of them, so the integrator's note is not reproduced there — what is
+missing from that panel (`drive_type_ref_select`, `power_ref_select`, `year`)
+is missing to `MAX_FACET_FIELDS` and is named in `facet_meta.skipped`, which
+is a budget the deployment sets, not a defect. The withholding path above is
+the one that deletes an axis silently, and it is the one closed here.
+
+### Verified
+
+532 passed / 124 skipped against the naive walk, and CI green on the tagged
+commit. Eleven new tests for the key rule — the suffix dropped in scope, a
+collision keeping the full slug, a real slug owning its key, no scope
+shortening nothing, `f.make` in `141/151` parsing to `f.make_ref_select`, a
+range taking the short key, an unknown key untouched, both forms filtering
+the same page, and every group stating a `url_key` — plus two for the
+exemption, the first of which fails on 0.14.3's code with
+`{"slug": "make_ref_select", "coverage": 1, "candidates": 3}` in `withheld`.
+
 ## [0.14.3] — 2026-09-04
 
 Patch. A category page whose address reads `/c/avtomobili` could not ask

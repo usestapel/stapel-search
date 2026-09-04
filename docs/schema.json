@@ -552,6 +552,10 @@
             "type": "boolean",
             "description": "True when `label` is a translation KEY (`FeatureDef.translate` is `all` or `title`), false when it is literal text. Same question as `translatable`, one level up."
           },
+          "url_key": {
+            "type": "string",
+            "description": "What to call this group in the address: `f.<url_key>` and `r.<url_key>`. The slug without the importer type suffix (`_select`, `_ref_select`, `_int`, `_bool`, `_string`) where that stays unambiguous among the features of the category in scope, and the slug itself otherwise — and always when the query names no category. Derived per request, never stored: the slug remains the feature's identity, and both forms are accepted inside the scope."
+          },
           "translatable": {
             "type": "boolean",
             "description": "True when `values` holds translation KEYS to run through the catalogue; false when it holds literal captions. The reader cannot tell by looking — `b.apple` and `Б/у` are both strings."
@@ -567,6 +571,7 @@
           "label",
           "label_translatable",
           "translatable",
+          "url_key",
           "values"
         ]
       },
@@ -965,7 +970,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/FacetLabels"
             },
-            "description": "{slug: {label, label_translatable, translatable, values: {value: caption}}} — one entry for EVERY group in `facets`. `label` is the group's heading and is null when the definition has no name; `values` is empty for a slug whose options are not inline in the category schema and whose vocabulary resolved nothing, because this module will not invent a caption it has not read."
+            "description": "{slug: {label, label_translatable, url_key, translatable, values: {value: caption}}} — one entry for EVERY group in `facets`. `url_key` is the group's key in the address. `label` is the group's heading and is null when the definition has no name; `values` is empty for a slug whose options are not inline in the category schema and whose vocabulary resolved nothing, because this module will not invent a caption it has not read."
           },
           "facet_meta": {
             "$ref": "#/components/schemas/FacetMeta"

@@ -276,6 +276,87 @@ def category_path(category_id: Any) -> tuple[str, ...]:
     return (str(category_id),)
 
 
+#: The type suffixes an importer mints onto a feature slug. Longest match
+#: first, so ``make_ref_select`` loses ``_ref_select`` and not ``_select``.
+URL_KEY_SUFFIXES = ("_ref_select", "_select", "_string", "_bool", "_int")
+
+
+def _short_key(slug: str) -> str | None:
+    """*slug* without its importer type suffix, or ``None`` when it has none."""
+    for suffix in sorted(URL_KEY_SUFFIXES, key=len, reverse=True):
+        if slug.endswith(suffix) and len(slug) > len(suffix):
+            return slug[: -len(suffix)]
+    return None
+
+
+def scope_slugs(category_id: Any) -> tuple[str, ...]:
+    """Every feature slug the category in scope declares or inherits.
+
+    ``categories.features`` already answers a category's own features PLUS
+    its ancestors', which is exactly the set a short key has to be unique
+    among: the scope of an address is the page it addresses.
+    """
+    features, _revision = _feature_defs(category_id) if category_id else ([], None)
+    return tuple(
+        dict.fromkeys(
+            str(feature["slug"])
+            for feature in features
+            if isinstance(feature, dict) and feature.get("slug")
+        )
+    )
+
+
+def url_keys(category_id: Any) -> dict[str, str]:
+    """``{slug: url_key}`` for the features of the category in scope.
+
+    The key a reader sees in the address bar. The type suffix an importer
+    mints (``_select``, ``_ref_select``, ``_int``, ``_bool``, ``_string``)
+    carries nothing a reader or a client needs — ``f.make_ref_select=toyota``
+    says "make" twice and "how it is stored" once — so it is dropped, but
+    only where dropping it stays unambiguous INSIDE THIS SCOPE:
+
+    - a short form that another slug in the scope also shortens to keeps the
+      full slug on both. The audit behind this rule counted 29 bases with
+      two or three differently-typed variants across the whole catalogue,
+      which is why the scope is a category and never the catalogue;
+    - a short form that IS a slug of this scope keeps the full slug too,
+      because the real slug owns that key (see :func:`resolve_url_key`);
+    - no scope (a text query, a branch, an evidence plan) shortens nothing.
+
+    Derived on every read from the same provider the plan uses, never
+    stored: a feature's identity is its slug, and this is only its address.
+    """
+    slugs = scope_slugs(category_id)
+    real = set(slugs)
+    shorts: dict[str, int] = {}
+    for slug in slugs:
+        short = _short_key(slug)
+        if short:
+            shorts[short] = shorts.get(short, 0) + 1
+    keys: dict[str, str] = {}
+    for slug in slugs:
+        short = _short_key(slug)
+        keys[slug] = (
+            short if short and short not in real and shorts[short] == 1 else slug
+        )
+    return keys
+
+
+def resolve_url_key(key: str, keys: dict[str, str]) -> str:
+    """A key off the address -> the slug it names, given :func:`url_keys`.
+
+    A real slug always wins: ``f.make`` in a scope that declares both
+    ``make`` and ``make_ref_select`` is the feature called ``make``, and the
+    other one is addressed by its full slug (which is what ``url_keys``
+    hands the client for it). An unrecognised key is returned unchanged and
+    goes on to be whatever it was before this rule existed.
+    """
+    if key in keys:
+        return key
+    matches = [slug for slug, url_key in keys.items() if url_key == key]
+    return matches[0] if len(matches) == 1 else key
+
+
 def _ref_field(options_ref: Any, name: str) -> str:
     """One field of an ``optionsRef``, dataclass or dict alike.
 
@@ -874,6 +955,7 @@ def fill_zero_options(counts: dict[str, dict[str, int]], plan: FacetPlan) -> dic
 
 
 __all__ = [
+    "URL_KEY_SUFFIXES",
     "evidence_plan",
     "category_path",
     "facet_plan",
@@ -884,5 +966,8 @@ __all__ = [
     "note_path_degradation",
     "path_degradation",
     "reset_path_degradation",
+    "resolve_url_key",
+    "scope_slugs",
     "slugs_for_ids",
+    "url_keys",
 ]

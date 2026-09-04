@@ -332,6 +332,8 @@ def test_a_vocabulary_backed_facet_ships_captions_for_what_it_counted(
     assert answer["facet_labels"]["vendor"] == {
         "label": "Vendor",
         "label_translatable": False,
+        # No suffix on this slug, so the address key is the slug (0.14.4).
+        "url_key": "vendor",
         "translatable": False,
         "values": {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"},
     }
@@ -420,6 +422,7 @@ def test_the_answer_ships_the_captions_beside_the_counts(
     assert answer["facet_labels"]["condition"] == {
         "label": "Condition",
         "label_translatable": True,
+        "url_key": "condition",
         "translatable": False,
         "values": {"novoe": "Новое", "b-u": "Б/у"},
     }

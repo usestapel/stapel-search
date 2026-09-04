@@ -388,6 +388,39 @@ def parse_query(
     )
 
 
+def resolve_feature_keys(q: SearchQuery, keys: Mapping[str, str]) -> SearchQuery:
+    """``f.<key>``/``r.<key>`` short keys -> the slugs the index holds.
+
+    *keys* is :func:`stapel_search.facets.url_keys` for the category in
+    scope, and it is empty outside one — so outside a scope this is the
+    identity and only a real slug filters anything, which is the whole
+    safety of the rule: a short key means something only where it was
+    derived, and it is derived per category.
+
+    Runs AFTER the category is resolved to ids, so a slug address
+    (``/c/avtomobili``) gets short keys on the same terms an id path does.
+    A key that is a real slug is left alone before any short form is
+    considered, and an unrecognised key stays exactly as it arrived — the
+    answer already says what it counted (``facet_meta.counted``) and an
+    unknown facet is not a refusal here, so inventing one now would break
+    links this module currently serves.
+    """
+    if not keys:
+        return q
+    from dataclasses import replace
+
+    from .facets import resolve_url_key
+
+    facets = {resolve_url_key(slug, keys): values for slug, values in q.facets.items()}
+    ranges = []
+    for band in q.ranges:
+        slug = resolve_url_key(band.slug, keys)
+        ranges.append(band if slug == band.slug else replace(band, slug=slug))
+    if facets == q.facets and tuple(ranges) == q.ranges:
+        return q
+    return replace(q, facets=facets, ranges=tuple(ranges))
+
+
 def parse_facet_selection(params: Mapping[str, Any]) -> tuple[str, ...] | None:
     """``facets=on|off|<slug>,<slug>`` -> requested slugs, or ``None``/``()``.
 
@@ -425,5 +458,6 @@ __all__ = [
     "parse_near",
     "parse_query",
     "parse_understanding",
+    "resolve_feature_keys",
     "resolve_language",
 ]

@@ -1359,6 +1359,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         fill_zero_options,
         path_degradation,
         reset_path_degradation,
+        url_keys,
         vocabulary_labels,
     )
     from .models import SearchDocument
@@ -1368,6 +1369,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         parse_geo_mode,
         parse_query,
         parse_understanding,
+        resolve_feature_keys,
     )
 
     started = timezone.now()
@@ -1377,6 +1379,13 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     # segment and the engine filters on the whole of it, so a bare id or a
     # slug has to BE the id path by the time either looks.
     q, category_resolved, category_degraded = _resolve_category(q)
+    # The address the reader sees carries `f.make`, the index holds
+    # `make_ref_select`, and the scope that makes the short form unambiguous
+    # is the category just resolved. Derived here from the same provider the
+    # plan reads, so the two can never disagree about which slug a key names;
+    # empty outside a scope, where only a real slug filters anything.
+    scope_keys = url_keys(q.category_path[-1] if q.category_path else None)
+    q = resolve_feature_keys(q, scope_keys)
     backend = get_backend()
 
     # The plan is built BEFORE the engine sees the query, because it is what
@@ -1422,7 +1431,23 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                         requested=requested,
                     )
                     if widened.slugs:
-                        plan = widened
+                        # The queried category AUTHORED these, so they are not
+                        # borrowed and the coverage floor does not govern them —
+                        # the exemption 0.14.3 states. Widening used to erase
+                        # it: `evidence_plan` marks everything it ranked, and a
+                        # thin leaf (fewer axes than the budget) is widened from
+                        # ITSELF, so its own mandatory axes then faced a 0.6
+                        # floor. A make filled by a third of a small leaf's
+                        # listings vanished from the panel with real buckets
+                        # behind it, and a vocabulary-backed group the client
+                        # cannot enumerate on its own is gone for good.
+                        authored = set(plan.slugs)
+                        plan = replace(
+                            widened,
+                            evidence=tuple(
+                                slug for slug in widened.evidence if slug not in authored
+                            ),
+                        )
                         plan_source = "evidence"
     # Extraction runs AFTER the plan (it needs an option space to resolve
     # against) and BEFORE the hidden-filter sweep, so a word that resolves
@@ -1613,11 +1638,23 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         facet_labels[slug] = {
             "label": name,
             "label_translatable": bool(name_translatable),
+            # What this group is called in the address bar: the slug without
+            # its importer type suffix where that stays unambiguous in this
+            # category, and the slug itself otherwise (and always, with no
+            # category in scope). The client writes this and reads both.
+            "url_key": scope_keys.get(slug, slug),
             "translatable": bool(plan.translatable_labels.get(slug, True)),
             "values": dict(plan.option_labels.get(slug) or {}),
         }
     for slug, values in vocabulary_labels(plan, counts).items():
-        facet_labels.setdefault(slug, {"label": None, "label_translatable": False})
+        facet_labels.setdefault(
+            slug,
+            {
+                "label": None,
+                "label_translatable": False,
+                "url_key": scope_keys.get(slug, slug),
+            },
+        )
         facet_labels[slug].update({"translatable": False, "values": values})
     answer = {
         "items": items,
