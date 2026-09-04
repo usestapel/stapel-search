@@ -1025,11 +1025,14 @@ class PostgresSearchBackend:
             where_sql, where_params = self._where(drilled, trigram=trigram, skip_facet=slug)
             candidates = self._count_candidates(where_sql, where_params, cap)
             max_candidates = max(max_candidates, candidates)
+            buckets = shared.bucket_limit(plan, slug)
             if candidates > cap:
                 approximate = True
-                counts[slug] = self._sampled_counts(slug, where_sql, where_params, cap)
+                counts[slug] = self._sampled_counts(
+                    slug, where_sql, where_params, cap, buckets
+                )
             else:
-                counts[slug] = self._exact_counts(slug, where_sql, where_params)
+                counts[slug] = self._exact_counts(slug, where_sql, where_params, buckets)
 
         return FacetResult(
             counts=counts,
@@ -1108,7 +1111,9 @@ class PostgresSearchBackend:
             return int(cursor.fetchone()[0])
 
     @staticmethod
-    def _exact_counts(slug: str, where_sql: str, where_params: list) -> dict[str, int]:
+    def _exact_counts(
+        slug: str, where_sql: str, where_params: list, buckets: int
+    ) -> dict[str, int]:
         sql = f"""
             WITH cand AS (
                 SELECT d.facet_terms_arr AS terms FROM {_TABLE} d WHERE {where_sql}
@@ -1118,17 +1123,17 @@ class PostgresSearchBackend:
              WHERE t.term LIKE %s
              GROUP BY t.term
              ORDER BY n DESC, t.term ASC
-             LIMIT 200
+             LIMIT %s
         """
         with connection.cursor() as cursor:
-            cursor.execute(sql, list(where_params) + [f"{slug}=%"])
+            cursor.execute(sql, list(where_params) + [f"{slug}=%", buckets])
             rows = cursor.fetchall()
         offset = len(slug) + 1
         return {term[offset:]: int(n) for term, n in rows}
 
     @staticmethod
     def _sampled_counts(
-        slug: str, where_sql: str, where_params: list, cap: int
+        slug: str, where_sql: str, where_params: list, cap: int, buckets: int
     ) -> dict[str, int]:
         """Scaled ``TABLESAMPLE SYSTEM`` counts for an over-cap candidate set.
 
@@ -1154,10 +1159,10 @@ class PostgresSearchBackend:
              WHERE t.term LIKE %s
              GROUP BY t.term
              ORDER BY n DESC, t.term ASC
-             LIMIT 200
+             LIMIT %s
         """
         with connection.cursor() as cursor:
-            cursor.execute(sql, list(where_params) + [f"{slug}=%"])
+            cursor.execute(sql, list(where_params) + [f"{slug}=%", buckets])
             rows = cursor.fetchall()
         offset = len(slug) + 1
         return {term[offset:]: int(round(int(n) * scale)) for term, n in rows}

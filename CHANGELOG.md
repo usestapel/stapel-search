@@ -4,6 +4,119 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.2] — 2026-09-04
+
+Patch, and all three parts of it are things the answer already knew and did
+not say. A browse page over an imported catalogue: the panel counted a make
+group and printed its slug as the heading, a link built from a category ID
+answered `count: 0`, and a make dictionary arrived with 218 of its 418 terms
+missing.
+
+### A facet group now carries its own name
+
+`facet_labels` shipped captions for the VALUES and nothing for the GROUP, so
+a host that renders a panel from the answer alone had no heading to print
+but the slug — `make_ref_select` above the makes. That is the same defect
+0.4.0 closed one level down (`«Состояние: b-u»`) and it was left open one
+level up.
+
+The name is the feature definition's own (`FeatureDef.name`), read exactly
+the way an option caption is read: the text, plus the flag that says how to
+read it. `FeatureDef.translate` (`all` / `title` / `none`) is that flag, and
+it is the same field a category author already sets for the title.
+
+```json
+"facet_labels": {
+  "make":      {"label": "Марка", "label_translatable": false,
+                "translatable": false, "values": {"toyota": "Toyota"}},
+  "condition": {"label": "feature.condition", "label_translatable": true,
+                "translatable": false, "values": {"b-u": "Б/у"}},
+  "colour":    {"label": null, "label_translatable": false,
+                "translatable": true, "values": {}}
+}
+```
+
+Two rules the shape encodes:
+
+- **an entry exists for every group in `facets`**, captions or not. It used
+  to exist only for slugs with inline options or a resolved vocabulary,
+  which is precisely the set that did not include the group a panel could
+  not name;
+- **`label: null` when the definition carries no name** — a slug counted
+  through `facets=<slug>` that no category declares, or a definition whose
+  `name` is empty. The slug is never promoted into a heading here. A client
+  that falls back to it can tell it is doing so, which is what makes the
+  fallback something a storefront test can fail on.
+
+### `category=<id>` is the node, not a root segment
+
+`category` is a path and it filters by PREFIX, so a bare `166` was read as a
+root: it matched documents whose ancestry STARTS at 166, a leaf three levels
+down has none, and the answer was `count: 0` with an empty panel at HTTP
+200 — over a node that holds listings and answers `141/151/166`. Every link
+carrying a category id rather than a rendered path landed there.
+
+A one-segment filter is now resolved through the same `categories.path` the
+INDEXER writes each document's ancestry with — one place knows the tree —
+and three outcomes stay three answers:
+
+| the provider | the answer |
+|---|---|
+| resolves the id | filter on the full path; `166` == `141/151/166` |
+| knows no such id | **400** `error.400.search_unknown_category`, naming it |
+| is unreachable | the segment stands, `degraded: ["category_rollup"]` |
+
+The 400 is the point of the middle row: `count: 0` cannot be told apart from
+an empty category, so a typo in a link and a catalogue that lost a branch
+looked identical. The third row is why it is not simply "no path, no
+answer": an outage upstream does not make a caller's request invalid, and
+`lookup_path` reports which of the two happened instead of collapsing both
+into the single-segment fallback `category_path` still owes the indexer.
+
+Multi-segment paths are untouched, prefix semantics included: `141` still
+finds everything under it.
+
+### The bucket cap was 200, hardcoded, and a dictionary is bigger
+
+`_exact_counts` / `_sampled_counts` ended in a literal `LIMIT 200`; the
+reference walk had no cap at all. So the cap was invisible (no setting named
+it, no field reported it), engine-dependent (200 buckets on Postgres, all of
+them on the naive backend — two products), and **below the size of the data
+it was cutting**: the autocatalog make level holds 418 terms. Ordered by
+count, that left the 200 commonest makes in the panel and silently deleted
+the tail, which is fatal for a client-side dictionary control — it can only
+filter the buckets it was sent.
+
+Of the two ways out, this takes the smaller one: **raise the cap for
+vocabulary-backed groups**, not add a `facet_query=<group>:<prefix>`
+server-side filter. The filter would be a new query parameter through the
+query parser, the plan, all four backends and their SQL, and it would have
+to reproduce the translit-aware matching the client already does (`тимберленд`
+→ `timberland`) or answer differently from the control above it. The cap is
+one number, and the group whose option set is DATA rather than a hand-written
+list is exactly the group that needs a bigger one:
+
+- `MAX_FACET_VALUES` — **200**, unchanged, for every other group;
+- `MAX_FACET_VALUES_VOCABULARY` — **1000**, for a group the plan knows is
+  vocabulary-backed (`optionsRef`).
+
+Both are switches now, read by `backends/_shared.bucket_limit`, and the
+naive backend applies them too — a cap is a semantic, and the reference
+semantics an engine is held to cannot be the one answer with no cap in it.
+The response does not grow by the cap: the buckets a query produces are
+bounded by the distinct values its own candidate set carries, never by the
+level's size. Meilisearch's engine-side `maxValuesPerFacet` (default 100)
+is NOT touched by this release and remains that deployment's own ceiling.
+
+### Verified
+
+558 passed / 63 skipped against real PostgreSQL 16 (throwaway container,
+this module's exact dependency pins), 497 / 124 against the naive walk.
+Eleven new tests: the label present, localized and null; the bare id equal
+to its path, the path still a prefix, the unknown id a 400 at the service
+and over HTTP, an unreachable provider still answering; and both caps
+measured on one corpus at the same moment.
+
 ## [0.14.1] — 2026-09-03
 
 Patch, and it changes numbers a client can see on one kind of page: a

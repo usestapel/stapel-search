@@ -305,7 +305,10 @@ class NaiveSearchBackend:
                 for term in row.facet_terms or []:
                     if isinstance(term, str) and term.startswith(prefix):
                         bucket[term[len(prefix):]] = bucket.get(term[len(prefix):], 0) + 1
-            counts[slug] = bucket
+            # Capped by the same rule the SQL engines apply, so the reference
+            # semantics this backend defines include the cap rather than
+            # being the one answer that has none.
+            counts[slug] = shared.top_buckets(bucket, shared.bucket_limit(plan, slug))
         return FacetResult(counts=counts, approximate=False, candidates=candidates)
 
     def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:

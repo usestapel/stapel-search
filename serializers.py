@@ -143,8 +143,25 @@ class FacetMetaSerializer(serializers.Serializer):
 
 
 class FacetLabelsSerializer(serializers.Serializer):
-    """Captions for one slug's option codes."""
+    """The heading for one facet group, plus captions for its option codes."""
 
+    label = serializers.CharField(
+        allow_null=True,
+        help_text=(
+            "The feature definition's own name — the HEADING above this "
+            "group's buckets. `null` when the definition carries no name: a "
+            "client renders the slug only as a dev-mode fallback, because a "
+            "raw slug in a heading is not a caption, and this field is how "
+            "it can tell that case from a name the server has."
+        ),
+    )
+    label_translatable = serializers.BooleanField(
+        help_text=(
+            "True when `label` is a translation KEY (`FeatureDef.translate` "
+            "is `all` or `title`), false when it is literal text. Same "
+            "question as `translatable`, one level up."
+        )
+    )
     translatable = serializers.BooleanField(
         help_text=(
             "True when `values` holds translation KEYS to run through the "
@@ -247,10 +264,12 @@ class SearchResponseSerializer(serializers.Serializer):
     facet_labels = serializers.DictField(
         child=FacetLabelsSerializer(),
         help_text=(
-            "{slug: {translatable, values: {value: caption}}} for slugs whose "
-            "options are inline in the category schema. Absent for a "
-            "vocabulary-backed slug: its level lives outside the schema and "
-            "the plan will not invent a caption it has not read."
+            "{slug: {label, label_translatable, translatable, values: {value: "
+            "caption}}} — one entry for EVERY group in `facets`. `label` is "
+            "the group's heading and is null when the definition has no name; "
+            "`values` is empty for a slug whose options are not inline in the "
+            "category schema and whose vocabulary resolved nothing, because "
+            "this module will not invent a caption it has not read."
         ),
     )
     facet_meta = FacetMetaSerializer()

@@ -18,6 +18,7 @@ ERR_400_TOO_MANY_FACETS = "error.400.search_too_many_facets"
 ERR_400_TOO_MANY_RANGES = "error.400.search_too_many_ranges"
 ERR_400_WINDOW_EXCEEDED = "error.400.search_window_exceeded"
 ERR_400_BAD_CURSOR = "error.400.search_bad_cursor"
+ERR_400_UNKNOWN_CATEGORY = "error.400.search_unknown_category"
 ERR_403_FORBIDDEN_MANAGE = "error.403.search_forbidden"
 ERR_503_BACKEND_UNAVAILABLE = "error.503.search_backend_unavailable"
 
@@ -35,6 +36,10 @@ STAPEL_SEARCH_ERRORS = {
         "search instead of paging deeper."
     ),
     ERR_400_BAD_CURSOR: "The pagination cursor is not valid",
+    ERR_400_UNKNOWN_CATEGORY: (
+        "No category '{category}' exists. `category` takes the node id or its "
+        "root/leaf path."
+    ),
     ERR_403_FORBIDDEN_MANAGE: "You may not manage the search index",
     ERR_503_BACKEND_UNAVAILABLE: "The search engine is unavailable",
 }
@@ -68,6 +73,7 @@ __all__ = [
     "ERR_400_SORT_NEEDS_CENTER",
     "ERR_400_TOO_MANY_FACETS",
     "ERR_400_TOO_MANY_RANGES",
+    "ERR_400_UNKNOWN_CATEGORY",
     "ERR_400_UNKNOWN_DOC_TYPE",
     "ERR_400_UNKNOWN_SORT",
     "ERR_400_WINDOW_EXCEEDED",

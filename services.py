@@ -1218,6 +1218,48 @@ def _honest_bands(result, items) -> list[dict]:
     return out
 
 
+def _resolve_bare_category(q):
+    """``category=<id>`` means the node, not a root segment.
+
+    ``category`` is a PATH and it filters by prefix, so a single segment is
+    read as a root: ``category=166`` matched documents whose ancestry STARTS
+    at 166, of which a leaf three levels down has none, and the answer was
+    ``count: 0`` with an empty panel at HTTP 200 — over a category that holds
+    listings and is reachable by its full ``141/151/166``. Every link that
+    carries a category id rather than a rendered path lands there, and
+    nothing in the answer said why.
+
+    So a one-segment filter is resolved through the same
+    ``categories.path`` the INDEXER writes the document's ancestry with —
+    the one place that knows the tree — and the query filters on what the
+    index actually holds. A multi-segment path is untouched: it is already
+    the answer this lookup would give.
+
+    The three outcomes are three different answers, and collapsing them is
+    how a 400 ends up printed over an unreachable provider:
+
+    - resolved -> filter on the full path;
+    - the provider knows no such node -> **400**, naming the id. A bare
+      ``count: 0`` is indistinguishable from an empty category, and a reader
+      cannot tell a typo in a link from a catalogue that lost a branch;
+    - the provider is unreachable -> the segment stands as it was, and
+      ``degraded: ["category_rollup"]`` says the rollup could not be built.
+      An engine outage upstream does not make the caller's request invalid.
+    """
+    from .errors import ERR_400_UNKNOWN_CATEGORY, SearchValidationError
+    from .facets import lookup_path, note_path_degradation
+
+    if len(q.category_path) != 1:
+        return q
+    path, outcome, detail = lookup_path(q.category_path[0])
+    if outcome == "ok" and path:
+        return replace(q, category_path=path)
+    if outcome == "unknown":
+        raise SearchValidationError(ERR_400_UNKNOWN_CATEGORY, category=q.category_path[0])
+    note_path_degradation(detail)
+    return q
+
+
 def search(params, *, accept_language: str = "", audience: str = "anonymous") -> dict:
     """Run one query and shape the answer. The module's whole read path.
 
@@ -1252,6 +1294,10 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     started = timezone.now()
     reset_path_degradation()
     q = parse_query(params, accept_language=accept_language, audience=audience)
+    # Before anything reads `q.category_path`: the plan is drawn from its last
+    # segment and the engine filters on the whole of it, so a bare id has to
+    # BE the path by the time either looks.
+    q = _resolve_bare_category(q)
     backend = get_backend()
 
     # The plan is built BEFORE the engine sees the query, because it is what
@@ -1448,6 +1494,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 for slug, address in plan.vocabulary_refs.items()
                 if slug not in withheld_slugs
             },
+            group_labels={
+                slug: label
+                for slug, label in plan.group_labels.items()
+                if slug not in withheld_slugs
+            },
         )
 
     counts = fill_zero_options(facet_result.counts, plan) if facet_result else {}
@@ -1458,15 +1509,27 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     # for these without asking: a vocabulary term's label is literal text an
     # owner curated, never a translation key — that is the difference between
     # a vocabulary and an inline option list.
-    facet_labels: dict[str, dict] = {
-        slug: {
+    #
+    # An entry exists for EVERY group in `facets`, captions or not, because
+    # `label` is owed for every group. A panel with no heading of its own
+    # falls back to the slug and prints `make_ref_select` above the makes,
+    # which is a group nobody recognizes as the make filter — the axis was
+    # there and unreadable. `label: null` says the definition carries no
+    # name, which is a different fact from a name this module invented out
+    # of the slug, and the client can tell the two apart.
+    groups = list(counts) + [slug for slug in plan.option_labels if slug not in counts]
+    facet_labels: dict[str, dict] = {}
+    for slug in groups:
+        name, name_translatable = plan.group_labels.get(slug, (None, False))
+        facet_labels[slug] = {
+            "label": name,
+            "label_translatable": bool(name_translatable),
             "translatable": bool(plan.translatable_labels.get(slug, True)),
-            "values": values,
+            "values": dict(plan.option_labels.get(slug) or {}),
         }
-        for slug, values in plan.option_labels.items()
-    }
     for slug, values in vocabulary_labels(plan, counts).items():
-        facet_labels[slug] = {"translatable": False, "values": values}
+        facet_labels.setdefault(slug, {"label": None, "label_translatable": False})
+        facet_labels[slug].update({"translatable": False, "values": values})
     answer = {
         "items": items,
         "facets": counts,

@@ -93,14 +93,35 @@ def reset_path_degradation() -> None:
     _path_degraded["reason"] = ""
 
 
-def category_path(category_id: Any) -> tuple[str, ...]:
-    """Root->leaf ancestry for *category_id*, as strings.
+def note_path_degradation(reason: str) -> None:
+    """Record why a path lookup was incomplete, for a caller that did its own.
 
-    Falls back to ``(category_id,)`` when no provider answers — see the
-    module docstring for why that is a loud degradation and not a failure.
+    :func:`lookup_path` reports rather than degrades, so the caller that
+    chose to carry on with an unresolved segment is the one that owes the
+    answer its ``degraded[]`` entry.
+    """
+    _path_degraded["reason"] = reason
+
+
+def lookup_path(category_id: Any) -> tuple[tuple[str, ...], str, str]:
+    """``(path, outcome, detail)`` for *category_id* — the raw provider lookup.
+
+    ``outcome`` is one of:
+
+    - ``"ok"`` — the provider answered with an ancestry;
+    - ``"unknown"`` — the provider answered and knows no such node
+      (``categories.path`` simply omits an id with no row);
+    - ``"unavailable"`` — nobody answered at all.
+
+    The last two are a different fact and only ONE of them is the caller's
+    fault. :func:`category_path` collapses both into the loud single-segment
+    fallback, because an INDEXER cannot refuse a document over an unreachable
+    provider; a READ that was handed a bare category id can, and does
+    (``services._resolve_bare_category``): a 400 that names the id beats a
+    silent ``count: 0`` over a catalogue that has the node.
     """
     if category_id in (None, ""):
-        return ()
+        return (), "ok", ""
     from stapel_core.comm import call
     from stapel_core.comm.exceptions import CommError
 
@@ -108,14 +129,13 @@ def category_path(category_id: Any) -> tuple[str, ...]:
 
     cached = cache.get(_path_key(category_id))
     if cached is not None:
-        return tuple(cached)
+        return tuple(cached), "ok", ""
 
     name = search_settings.CATEGORY_PATH_FUNCTION
     try:
         result = call(name, {"category_ids": [_coerce_category_id(category_id)]})
     except (CommError, LookupError, KeyError, TypeError) as exc:
-        _path_degraded["reason"] = f"{name} unavailable: {exc.__class__.__name__}"
-        return (str(category_id),)
+        return (), "unavailable", f"{name} unavailable: {exc.__class__.__name__}"
 
     raw = None
     if isinstance(result, dict):
@@ -124,12 +144,26 @@ def category_path(category_id: Any) -> tuple[str, ...]:
             paths = result["paths"]
             raw = paths.get(str(category_id)) or paths.get(_coerce_category_id(category_id))
     if not raw:
-        _path_degraded["reason"] = f"{name} returned no path for {category_id!r}"
-        return (str(category_id),)
+        return (), "unknown", f"{name} returned no path for {category_id!r}"
 
     path = tuple(str(segment) for segment in raw)
     cache.set(_path_key(category_id), list(path), search_settings.CATEGORY_CACHE_TIMEOUT)
-    return path
+    return path, "ok", ""
+
+
+def category_path(category_id: Any) -> tuple[str, ...]:
+    """Root->leaf ancestry for *category_id*, as strings.
+
+    Falls back to ``(category_id,)`` when no provider answers — see the
+    module docstring for why that is a loud degradation and not a failure.
+    """
+    if category_id in (None, ""):
+        return ()
+    path, outcome, detail = lookup_path(category_id)
+    if outcome == "ok":
+        return path
+    _path_degraded["reason"] = detail
+    return (str(category_id),)
 
 
 def _ref_field(options_ref: Any, name: str) -> str:
@@ -399,6 +433,11 @@ class _Fold:
         self.open: set[str] = set()
         self.labels: dict[str, dict[str, str]] = {}
         self.translatable: dict[str, bool] = {}
+        #: ``{slug: (name, translatable)}`` — the definition's own NAME, which
+        #: is what a panel puts above the bucket list. Taken as a pair from
+        #: ONE declarer so a name can never be paired with another
+        #: declaration's opinion about whether it is a translation key.
+        self.group_labels: dict[str, tuple[str, bool]] = {}
         #: Slugs whose declaring categories disagree about a caption's
         #: nature or a vocabulary's address. The reader cannot tell `b.apple`
         #: from `Б/у` by looking, and neither can this: on a disagreement the
@@ -422,6 +461,27 @@ class _Fold:
 
     def closed_options(self) -> dict[str, tuple[str, ...]]:
         return {slug: values for slug, values in self.closed.items() if slug not in self.open}
+
+
+def _group_label(feature: dict) -> tuple[str, bool] | None:
+    """The definition's display name and whether it is a translation KEY.
+
+    ``FeatureDef.name`` is the caption stapel-categories already stores for
+    the axis, and ``FeatureDef.translate`` is the same module's declaration
+    of what may be run through a catalogue: ``all`` (title + options),
+    ``title``, or ``none``. So the group's caption is read exactly like an
+    option's — the value plus the flag that says how to read it — rather
+    than being guessed at from the slug, and a definition that carries no
+    name yields NOTHING here instead of a fabricated one.
+
+    Defaults to translatable, which is ``TranslateMode.ALL``: a definition
+    written before the field existed reads as the model's own default.
+    """
+    name = str(feature.get("name") or "").strip()
+    if not name:
+        return None
+    mode = str(feature.get("translate") or "all").strip().lower()
+    return name, mode in ("all", "title")
 
 
 def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
@@ -465,6 +525,9 @@ def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
         fold.rank.setdefault(slug, _facet_rank(feature, config, mapping))
         fold.position.setdefault(slug, position)
         fold.weight[slug] = fold.weight.get(slug, 0) + weight
+        label = _group_label(feature)
+        if label is not None:
+            fold.group_labels.setdefault(slug, label)
         if config.get("optionsRef"):
             # A vocabulary-backed field (ref_select, and any host type that
             # points at a vocabulary the same way) has no closed option set to
@@ -573,6 +636,11 @@ def _shape(
             if slug in fold.translatable and slug not in fold.conflicted
         },
         vocabulary_refs={slug: refs[slug] for slug in selected if slug in refs},
+        group_labels={
+            slug: fold.group_labels[slug]
+            for slug in selected
+            if slug in fold.group_labels
+        },
         # Not conditioned on the category: a core range addresses a column
         # every document in every corpus has. Announcing it here is what
         # lets a panel offer «Цена от … до …» without the frontend keeping
@@ -700,7 +768,9 @@ __all__ = [
     "category_path",
     "facet_plan",
     "fill_zero_options",
+    "lookup_path",
     "note_changed",
+    "note_path_degradation",
     "path_degradation",
     "reset_path_degradation",
 ]

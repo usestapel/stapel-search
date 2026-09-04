@@ -50,6 +50,43 @@ def facet_terms_for(slug: str, values) -> list[str]:
     return [f"{slug}={v}" for v in values]
 
 
+def bucket_limit(plan, slug: str) -> int:
+    """How many buckets one facet group may answer with.
+
+    ONE rule for every engine, because a cap is a semantic and not an
+    implementation detail: a panel that shows 200 makes on Postgres and all
+    of them on the reference walk is two products.
+
+    Two numbers, and the split is the whole point. An INLINE option set is
+    authored by hand and a category that lists 200 of them has a different
+    problem; a VOCABULARY level is data — a live make dictionary holds 418
+    terms — and 0.14.1's flat ``LIMIT 200`` cut it at 200, silently, ordered
+    by count, so the tail of the alphabet simply did not exist in the panel
+    and no field in the answer said so. A dictionary control that filters
+    the bucket list can only filter what it was sent.
+
+    So ``MAX_FACET_VALUES_VOCABULARY`` governs the slugs the plan knows are
+    vocabulary-backed (``optionsRef``) and ``MAX_FACET_VALUES`` governs the
+    rest. Both are still caps: an unbounded group is a response whose size
+    is set by the corpus.
+    """
+    from ..conf import search_settings
+
+    if slug in (getattr(plan, "vocabulary_refs", None) or {}):
+        return int(search_settings.MAX_FACET_VALUES_VOCABULARY)
+    return int(search_settings.MAX_FACET_VALUES)
+
+
+def top_buckets(counts: dict[str, int], limit: int) -> dict[str, int]:
+    """The *limit* biggest buckets, ties broken by the term — the SQL order.
+
+    ``ORDER BY n DESC, term ASC LIMIT k`` in Python, so an engine that counts
+    in memory truncates the same way the one that counts in SQL does.
+    """
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return dict(ranked[:limit])
+
+
 def facets_match(row_terms, wanted: dict[str, list[str]]) -> bool:
     """AND between slugs, OR within a slug — the only semantics a facet
     panel's user expects without being told.

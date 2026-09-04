@@ -60,7 +60,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "root/leaf path; a prefix filter, so a parent finds its descendants."
+            "description": "root/leaf path; a prefix filter, so a parent finds its descendants. A BARE node id is resolved to that node's full path first, so `166` and `141/151/166` answer the same page; an id no category has is a 400, never an empty answer."
           },
           {
             "in": "query",
@@ -519,8 +519,17 @@
       },
       "FacetLabels": {
         "type": "object",
-        "description": "Captions for one slug's option codes.",
+        "description": "The heading for one facet group, plus captions for its option codes.",
         "properties": {
+          "label": {
+            "type": "string",
+            "nullable": true,
+            "description": "The feature definition's own name — the HEADING above this group's buckets. `null` when the definition carries no name: a client renders the slug only as a dev-mode fallback, because a raw slug in a heading is not a caption, and this field is how it can tell that case from a name the server has."
+          },
+          "label_translatable": {
+            "type": "boolean",
+            "description": "True when `label` is a translation KEY (`FeatureDef.translate` is `all` or `title`), false when it is literal text. Same question as `translatable`, one level up."
+          },
           "translatable": {
             "type": "boolean",
             "description": "True when `values` holds translation KEYS to run through the catalogue; false when it holds literal captions. The reader cannot tell by looking — `b.apple` and `Б/у` are both strings."
@@ -533,6 +542,8 @@
           }
         },
         "required": [
+          "label",
+          "label_translatable",
           "translatable",
           "values"
         ]
@@ -923,7 +934,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/FacetLabels"
             },
-            "description": "{slug: {translatable, values: {value: caption}}} for slugs whose options are inline in the category schema. Absent for a vocabulary-backed slug: its level lives outside the schema and the plan will not invent a caption it has not read."
+            "description": "{slug: {label, label_translatable, translatable, values: {value: caption}}} — one entry for EVERY group in `facets`. `label` is the group's heading and is null when the definition has no name; `values` is empty for a slug whose options are not inline in the category schema and whose vocabulary resolved nothing, because this module will not invent a caption it has not read."
           },
           "facet_meta": {
             "$ref": "#/components/schemas/FacetMeta"

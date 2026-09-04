@@ -61,6 +61,19 @@ DEFAULTS = {
     # proxy rig. Re-validate on the target 12c/64g rig before freezing.
     "FACET_CANDIDATE_CAP": 15000,
     "FACET_CACHE_TTL": 30,
+    # Buckets ONE group may answer with, biggest first. Was a hardcoded
+    # `LIMIT 200` in the Postgres backend until 0.14.2 and is a semantic,
+    # not an implementation detail, so it is a switch and every engine reads
+    # it (`backends/_shared.bucket_limit`).
+    "MAX_FACET_VALUES": 200,
+    # The same cap for a VOCABULARY-backed group (`optionsRef`), where the
+    # option set is DATA rather than a hand-authored list: a live make
+    # dictionary holds 418 terms, so 200 cut it in the middle with nothing in
+    # the answer saying so. 1000 covers the dictionaries the fleet has and
+    # still bounds the response — the buckets a query produces are limited by
+    # the distinct values its candidate set actually carries, never by the
+    # level's size.
+    "MAX_FACET_VALUES_VOCABULARY": 1000,
     # --- a plan the RESULT SET justifies (D175) ---------------------------
     # How many categories the plan may draw feature definitions from when
     # the queried category's own schema did not fill MAX_FACET_FIELDS — a

@@ -330,6 +330,8 @@ def test_a_vocabulary_backed_facet_ships_captions_for_what_it_counted(
     _index_vendor_docs()
     answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
     assert answer["facet_labels"]["vendor"] == {
+        "label": "Vendor",
+        "label_translatable": False,
         "translatable": False,
         "values": {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"},
     }
@@ -389,16 +391,22 @@ def test_a_code_the_vocabulary_cannot_resolve_is_absent_rather_than_echoed(
     assert answer["facets"]["vendor"]["ghost-vendor"] == 1, "still counted, just uncaptioned"
 
 
-def test_no_resolver_registered_answers_exactly_as_before(
+def test_no_resolver_registered_still_answers_and_still_names_the_group(
     conformance, labelled_category
 ):
     """A caption is an improvement on a code, never a precondition for
-    answering. No `vendor_resolver` fixture here, on purpose."""
+    answering. No `vendor_resolver` fixture here, on purpose.
+
+    The group's HEADING is not the resolver's to give — it is the feature
+    definition's name — so it is present with no captions under it, which is
+    exactly the state a panel has to render: a named filter over raw codes.
+    """
     from stapel_search.services import search
 
     _index_vendor_docs()
     answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
-    assert "vendor" not in answer["facet_labels"]
+    assert answer["facet_labels"]["vendor"]["values"] == {}
+    assert answer["facet_labels"]["vendor"]["label"] == "Vendor"
     assert answer["facets"]["vendor"]["apple"] == 1
 
 
@@ -410,6 +418,8 @@ def test_the_answer_ships_the_captions_beside_the_counts(
 
     answer = search({"type": DOC_TYPE, "category": "c1"})
     assert answer["facet_labels"]["condition"] == {
+        "label": "Condition",
+        "label_translatable": True,
         "translatable": False,
         "values": {"novoe": "Новое", "b-u": "Б/у"},
     }

@@ -219,6 +219,16 @@
     "owner": "stapel_search"
   },
   {
+    "code": "error.400.search_unknown_category",
+    "status": 400,
+    "params": [
+      "category"
+    ],
+    "remediation": "fix_input",
+    "en": "No category '{category}' exists. `category` takes the node id or its root/leaf path.",
+    "owner": "stapel_search"
+  },
+  {
     "code": "error.400.search_unknown_doc_type",
     "status": 400,
     "params": [

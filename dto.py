@@ -486,6 +486,13 @@ class FacetPlan:
     #: which is not known until the counting is done. This is the address the
     #: post-count pass needs.
     vocabulary_refs: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: ``{slug: (name, translatable)}`` — the feature definition's own name,
+    #: which is the HEADING a panel puts above the buckets, and whether that
+    #: name is a translation key (``FeatureDef.translate``) or literal text.
+    #: The same pair an option caption ships as, one level up. A slug with no
+    #: definition is simply absent: the answer says ``label: null`` for it
+    #: rather than inventing a heading out of the slug.
+    group_labels: dict[str, tuple[str, bool]] = field(default_factory=dict)
     #: Reserved range slugs that address a core document column
     #: (``index_schema.CORE_RANGE_FIELDS``). Not part of ``slugs``: there is
     #: nothing to count, only an axis to offer.
