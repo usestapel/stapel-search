@@ -1719,7 +1719,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     # there and unreadable. `label: null` says the definition carries no
     # name, which is a different fact from a name this module invented out
     # of the slug, and the client can tell the two apart.
-    groups = list(counts) + [slug for slug in plan.option_labels if slug not in counts]
+    groups = (
+        list(counts)
+        + [slug for slug in plan.option_labels if slug not in counts]
+        + [slug for slug in plan.vocabulary_refs if slug not in counts]
+    )
     facet_labels: dict[str, dict] = {}
     for slug in groups:
         name, name_translatable = plan.group_labels.get(slug, (None, False))
@@ -1734,15 +1738,27 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             "translatable": bool(plan.translatable_labels.get(slug, True)),
             "values": dict(plan.option_labels.get(slug) or {}),
         }
+        # The vocabulary a client can't otherwise learn: a branch page has no
+        # leaf schema of its own, and the plan's feature definition is the
+        # only place that still knows this axis is `ref_select` rather than
+        # an inline `select` — same source `vocabulary_labels` reads below.
+        # `None` for an inline option set, never simply absent, so a reader
+        # can tell "no vocabulary" from "field not built yet".
+        ref = plan.vocabulary_refs.get(slug)
+        facet_labels[slug]["vocabulary"] = ref[0] if ref else None
+        if ref:
+            facet_labels[slug]["level"] = ref[1]
     for slug, values in vocabulary_labels(plan, counts).items():
-        facet_labels.setdefault(
-            slug,
-            {
-                "label": None,
-                "label_translatable": False,
-                "url_key": scope_keys.get(slug, slug),
-            },
-        )
+        ref = plan.vocabulary_refs.get(slug)
+        default = {
+            "label": None,
+            "label_translatable": False,
+            "url_key": scope_keys.get(slug, slug),
+            "vocabulary": ref[0] if ref else None,
+        }
+        if ref:
+            default["level"] = ref[1]
+        facet_labels.setdefault(slug, default)
         facet_labels[slug].update({"translatable": False, "values": values})
     answer = {
         "items": items,

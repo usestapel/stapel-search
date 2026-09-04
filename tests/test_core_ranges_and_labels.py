@@ -340,6 +340,8 @@ def test_a_vocabulary_backed_facet_ships_captions_for_what_it_counted(
         "url_key": "vendor",
         "translatable": False,
         "values": {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"},
+        "vocabulary": "phones",
+        "level": "Vendor",
     }
 
 
@@ -429,6 +431,7 @@ def test_the_answer_ships_the_captions_beside_the_counts(
         "url_key": "condition",
         "translatable": False,
         "values": {"novoe": "Новое", "b-u": "Б/у"},
+        "vocabulary": None,
     }
     assert answer["facet_labels"]["brand"]["translatable"] is True
 

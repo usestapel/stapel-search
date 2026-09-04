@@ -200,6 +200,23 @@ class FacetLabelsSerializer(serializers.Serializer):
         )
     )
     values = serializers.DictField(child=serializers.CharField())
+    vocabulary = serializers.CharField(
+        allow_null=True,
+        help_text=(
+            "The vocabulary name this group's options come from, when the "
+            "feature is `ref_select` (or any host type pointing at a "
+            "vocabulary the same way). `null` for a group with an inline "
+            "option set — a client that only sees this answer, with no "
+            "leaf schema of its own (a branch page, a text query), still "
+            "needs this to draw a vocabulary-backed axis as its picker "
+            "rather than as a plain checkbox list."
+        ),
+    )
+    level = serializers.CharField(
+        required=False,
+        help_text="The vocabulary level `vocabulary` resolves against. Present only "
+        "alongside a non-null `vocabulary`.",
+    )
 
 
 class BandSummarySerializer(serializers.Serializer):
@@ -328,12 +345,16 @@ class SearchResponseSerializer(serializers.Serializer):
         child=FacetLabelsSerializer(),
         help_text=(
             "{slug: {label, label_translatable, url_key, translatable, "
-            "values: {value: caption}}} — one entry for EVERY group in "
-            "`facets`. `url_key` is the group's key in the address. `label` is "
-            "the group's heading and is null when the definition has no name; "
-            "`values` is empty for a slug whose options are not inline in the "
-            "category schema and whose vocabulary resolved nothing, because "
-            "this module will not invent a caption it has not read."
+            "values: {value: caption}, vocabulary, level}} — one entry for "
+            "EVERY group in `facets`. `url_key` is the group's key in the "
+            "address. `label` is the group's heading and is null when the "
+            "definition has no name; `values` is empty for a slug whose "
+            "options are not inline in the category schema and whose "
+            "vocabulary resolved nothing, because this module will not "
+            "invent a caption it has not read. `vocabulary` names the "
+            "vocabulary a `ref_select` axis reads its options from and is "
+            "null for an inline `select` — the only way a client with no "
+            "leaf schema of its own can tell the two apart."
         ),
     )
     facet_meta = FacetMetaSerializer()

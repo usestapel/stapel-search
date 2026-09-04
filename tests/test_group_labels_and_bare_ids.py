@@ -99,6 +99,20 @@ def test_every_counted_group_ships_a_label(conformance, named_category):
     assert answer["facet_labels"]["condition"]["label_translatable"] is True
 
 
+def test_a_ref_select_group_names_its_vocabulary(conformance, named_category):
+    """A client with no leaf schema of its own — a branch page, a text
+    query — can only tell a `ref_select` axis from an inline `select` by
+    reading the answer. `make` points at a vocabulary and must say so;
+    `condition`, an inline `select`, must say it does not."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "c1"})
+    assert answer["facet_labels"]["make"]["vocabulary"] == "autocatalog"
+    assert answer["facet_labels"]["make"]["level"] == "Make"
+    assert answer["facet_labels"]["condition"]["vocabulary"] is None
+    assert "level" not in answer["facet_labels"]["condition"]
+
+
 def test_a_group_with_no_definition_says_so_rather_than_inventing_a_name(
     conformance, named_category
 ):

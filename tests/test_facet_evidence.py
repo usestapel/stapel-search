@@ -59,11 +59,26 @@ def _select(slug, *values, **flags):
     }
 
 
+def _ref_select(slug, *, vocabulary, level, **flags):
+    return {
+        "id": 0, "slug": slug, "name": slug, "translate": "none",
+        "mandatory": False, "show_at_title": False, "show_as_badge": False,
+        **flags,
+        "config": {
+            "type": "ref_select",
+            "optionsRef": {"vocabulary": vocabulary, "level": level},
+        },
+    }
+
+
 #: What each category declares. ``branch`` owns nothing, exactly as
 #: ``telefony`` and ``elektronika`` do on the stand.
 CATALOGUE = {
     "branch": [],
-    "phones": [_select("vendor", "apple", "samsung"), _select("memory", "64", "128")],
+    "phones": [
+        _ref_select("vendor", vocabulary="autocatalog", level="Vendor"),
+        _select("memory", "64", "128"),
+    ],
     "laptops": [_select("cpu", "intel", "amd"), _select("screen", "13", "15")],
 }
 
@@ -182,6 +197,28 @@ def test_the_answer_names_the_categories_it_drew_the_plan_from(catalogue, branch
         {"category": "branch/phones", "count": 8},
         {"category": "branch/laptops", "count": 1},
     ]
+
+
+def test_a_branch_names_a_vocabulary_backed_axis_same_as_its_leaf(catalogue, branch_corpus):
+    """The live gap: a branch has no leaf schema of its own, so the client
+    can only learn `vendor` is `ref_select` (and render the sheet rather
+    than 17 checkboxes) from this answer. Both the leaf and the evidence
+    plan drawn from the branch's own documents fold the same feature
+    definition, so both must say so — `memory`, an inline `select`, must
+    not."""
+    from stapel_search.services import search
+
+    leaf = search({"type": DOC_TYPE, "category": "phones"})
+    assert leaf["facet_labels"]["vendor"]["vocabulary"] == "autocatalog"
+    assert leaf["facet_labels"]["vendor"]["level"] == "Vendor"
+    assert leaf["facet_labels"]["memory"]["vocabulary"] is None
+
+    branch = search({"type": DOC_TYPE, "category": "branch"})
+    assert branch["facet_meta"]["plan"] == "evidence"
+    assert branch["facet_labels"]["vendor"]["vocabulary"] == "autocatalog"
+    assert branch["facet_labels"]["vendor"]["level"] == "Vendor"
+    assert branch["facet_labels"]["memory"]["vocabulary"] is None
+    assert "level" not in branch["facet_labels"]["memory"]
 
 
 def test_a_slug_only_a_handful_of_documents_carry_is_withheld(catalogue, branch_corpus):

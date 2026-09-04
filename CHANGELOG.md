@@ -4,6 +4,63 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.9] — 2026-09-05
+
+Patch. A branch page had no way to tell a vocabulary-backed axis from an
+inline one, so it drew 17 checkboxes where the leaf drew a sheet.
+
+### The wire contract: `facet_labels[slug].vocabulary`
+
+The client renders a vocabulary-backed axis (`ref_select`) as a searchable
+sheet and an inline option set (`select`) as checkboxes — the right call
+when the host has the category's own schema, which types the feature
+directly. A branch page has none: `categories.features` answers nothing for
+`telefony` the way it answers nothing for `elektronika` (D175), and a text
+query names no category at all. On both, `facet_labels` carried a `label`,
+`translatable` and `values` for `vendor` and never said which KIND of group
+it was — so a leaf's «Производитель» rendered as a sheet and the same axis,
+one click up on `/c/telefony`, fell back to a checkbox list of 17.
+
+`facet_labels[slug]` now carries the answer plainly:
+
+```json
+"facet_labels": {
+  "vendor": {
+    "label": "Производитель",
+    "vocabulary": "autocatalog",
+    "level": "Vendor",
+    "...": "..."
+  },
+  "condition": {
+    "label": "Состояние",
+    "vocabulary": null,
+    "...": "..."
+  }
+}
+```
+
+`vocabulary` is the vocabulary name for a feature whose config carries an
+`optionsRef` — `ref_select`, and any host type pointing at a vocabulary the
+same way — and `null` for an inline `select`, never simply absent, so a
+reader can tell "no vocabulary" from "field not built yet". `level` rides
+beside it only when `vocabulary` is non-null.
+
+The source is `FacetPlan.vocabulary_refs`, which already exists for
+`vocabulary_labels()`'s caption resolution and already survives the fold
+that builds an evidence plan from a branch's own candidate documents — so a
+`chips` parent (whose plan is its children's feature intersection, per
+stapel-categories 0.20.1) and a plan drawn from evidence both answer this
+the same way a leaf's own schema does. No new read: this is the same
+feature definition the plan already carries, reported one field further.
+
+### Verified
+
+Two new tests, one per surface: a `ref_select` axis carries `vocabulary` on
+a leaf (`categories.features` answers directly) and on its parent branch
+(the evidence plan folds it from the leaf's own documents); an inline
+`select` carries `vocabulary: null` on both. `make contract` regenerated
+`docs/schema.json` for the two new `FacetLabels` fields.
+
 ## [0.14.8] — 2026-09-04
 
 Patch. The back-fill no longer looks useful on an engine that ignores it.
