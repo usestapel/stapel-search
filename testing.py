@@ -572,6 +572,23 @@ def _s_bbox(ctx: Context) -> None:
     assert set(ctx.keys(ctx.query(geo=box))) == {"1", "2"}
 
 
+def _s_bbox_with_centre_reports_distance(ctx: Context) -> None:
+    """A drawn area cuts the answer; the centre beside it still measures it.
+
+    The rectangle decides membership and the centre decides ``distance_km``,
+    and neither erases the other. Before 0.14.6 the parser dropped the
+    centre the moment a ``bbox`` arrived, so every hit of such a request came
+    back with ``distance_km: null`` while the band went on calling the same
+    rows ``nearby``.
+    """
+    box = GeoFilter(
+        lat=CENTER[0], lon=CENTER[1], min_lat=49.0, min_lon=6.0, max_lat=50.0, max_lon=7.0
+    )
+    hits = ctx.backend.query(ctx.query(geo=box)).hits
+    assert {hit.key for hit in hits} == {"1", "2"}, "the box still cuts the answer"
+    assert all(hit.distance_km is not None for hit in hits)
+
+
 def _s_bbox_antimeridian(ctx: Context) -> None:
     """``min_lon > max_lon`` crosses +/-180 — the contract from stapel-geo."""
     box = GeoFilter(min_lat=-10.0, min_lon=179.0, max_lat=10.0, max_lon=-179.0)
@@ -1013,6 +1030,11 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("geo_distance_reported", _s_geo_distance_reported, "the distance comes back"),
     Scenario("sort_distance", _s_sort_distance, "nearest first"),
     Scenario("bbox", _s_bbox, "a plain rectangle"),
+    Scenario(
+        "bbox_with_centre_reports_distance",
+        _s_bbox_with_centre_reports_distance,
+        "a box cuts, a centre beside it still measures",
+    ),
     Scenario("bbox_antimeridian", _s_bbox_antimeridian, "min_lon > max_lon crosses +/-180"),
     Scenario(
         "public_grid_distance_is_quantized",

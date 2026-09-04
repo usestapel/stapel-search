@@ -4,6 +4,61 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.6] — 2026-09-04
+
+Patch. A drawn area no longer erases the centre it was drawn around.
+
+### Д262: `distance_km: null` on 15 of 15, and a distance on 24 of 24
+
+Live, on `ruberi.ru`, from ONE centre (55.7558, 37.6176):
+
+```
+GET /query?type=listing&lat=…&lon=…&radius_km=25
+    -> 24 items, distance_km on 24 of them
+GET /query?type=listing&category=32/149/163&lat=…&lon=…&bbox=…
+    -> 15 items, distance_km null on 15 of them
+```
+
+The phone leaf applies its place as a RECTANGLE — a city area, not a pin —
+and `parse_geo` read the `bbox` first and returned a rectangle-only
+`GeoFilter`, dropping the `lat`/`lon` the same request carried. Everything
+downstream measures from `q.geo`: `_shared.geo_distance_km` returns `None`
+the moment `has_center` is false, and the Postgres projection becomes
+`NULL::double precision` (`backends/postgres.py:_distance_to`). So the card
+had nothing to draw, on a page whose card code is the home band's card code.
+
+The tell was already in the file. `parse_near` reads `lat`/`lon` **off the
+params directly**, "so that a `bbox` query can still be banded around a
+point" — so one request had two answers about one centre: the band called
+the row `nearby` and the distance said it did not know. That is the seam,
+not the arithmetic; the category had nothing to do with it beyond being the
+page that draws an area.
+
+**A box says which rows; a centre says how far.** `parse_geo` now keeps the
+centre on a `bbox` filter (`query.py:_center`), read exactly as the band
+reads it: half a pair is ignored, as `parse_near` has always ignored it, so
+no link that works today starts refusing; an out-of-range pair is refused,
+as `parse_near` already refused it. The rectangle still decides membership,
+grown onto the public grid for an anonymous reader — `grid_aligned_bbox`
+grows it through `replace`, so the centre rides along untouched.
+
+**`radius_km` is deliberately NOT carried onto a box.** The box is the cut,
+and adding a second one would change which rows come back — this release
+changes what an answer SAYS about its rows, never which rows they are.
+
+Two consequences, both wanted: `sort=distance` is now available to a query
+that drew a box and gave a centre (it was a 400), and a geo-decay scorer
+sees a distance on such a query instead of zero.
+
+### Verified
+
+545 passed / 126 skipped against the naive walk. Four new tests: the
+conformance scenario `bbox_with_centre_reports_distance` (both engines — the
+box still cuts to `{1, 2}` and both hits carry a distance), the end-to-end
+Д262 pair on a category-scoped page (the leaf's box + centre reports on
+every hit; a box with NO centre still reports `null`, so the fix is not
+"always emit a number"), and the parse contract for the centre a box keeps.
+
 ## [0.14.5] — 2026-09-04
 
 Patch. The facet budget is now cut in the order the page is DRAWN in.

@@ -642,6 +642,7 @@ removes the continuous probe.
 | `distance_km` | measured from the grid point, floored to the grid's cell **diagonal** (~1.574km) | exact |
 | `radius_km`, `sort=distance`, the `nearby` band, geo decay | measured from the grid point | exact |
 | `bbox` | grown OUTWARD to whole cells, so the smallest expressible box is one cell | as drawn |
+| `bbox` + `lat`/`lon` | the box cuts, the centre measures — `distance_km` is reported and the box's `radius_km` is not a second cut (0.14.6) | same |
 | `card` | coordinate keys rewritten onto the grid, unrecognised position keys removed, `geo_precision_km` added | as stored |
 
 The quantum is derived, not chosen: the grid declares one square cell of side

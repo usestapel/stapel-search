@@ -98,6 +98,23 @@ def _float(params: Mapping[str, Any], key: str) -> float | None:
         raise SearchValidationError(ERR_400_BAD_GEO, reason=f"{key} is not a number") from None
 
 
+def _center(params: Mapping[str, Any]) -> tuple[float, float] | None:
+    """``lat``/``lon`` as a centre, or ``None`` — read as the BAND reads it.
+
+    Half a pair is not an error here, because :func:`parse_near` has always
+    ignored one and a link that works today must go on working; an
+    out-of-range pair is, because that function already refuses it and two
+    readings of one parameter in one parser is the defect this closes.
+    """
+    lat = _float(params, "lat")
+    lon = _float(params, "lon")
+    if lat is None or lon is None:
+        return None
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        raise SearchValidationError(ERR_400_BAD_GEO, reason="coordinates out of range")
+    return lat, lon
+
+
 def parse_geo(
     params: Mapping[str, Any], *, mode: str = "filter", audience: str = "anonymous"
 ) -> GeoFilter | None:
@@ -122,6 +139,16 @@ def parse_geo(
     pin in a few dozen requests — and a minimum box size would not close
     that, because a smallest-allowed box slides continuously and the edge it
     stops including the row at is the coordinate itself.
+
+    **A box does not erase the centre.** A request may carry both — a drawn
+    area AND the place the reader is standing in — and the rectangle then
+    says which rows are in the answer while the centre says how far each of
+    them is. Dropping the centre here made ``distance_km`` ``null`` on every
+    hit of such a request while :func:`parse_near`, which reads ``lat``/
+    ``lon`` off the params directly, went on labelling the same rows
+    ``nearby``: one request, two answers about one centre. The radius is
+    deliberately NOT carried onto a box — the box is the cut, and a second
+    one would change which rows come back.
     """
     from .backends import _shared as shared
 
@@ -142,11 +169,19 @@ def parse_geo(
             )
         # min_lon > max_lon is NOT an error: it means the box crosses +/-180,
         # the contract borrowed verbatim from GeoSearchBackend.bbox.
+        center = _center(params)
         box = GeoFilter(
-            min_lat=min_lat, min_lon=min_lon, max_lat=max_lat, max_lon=max_lon
+            lat=None if center is None else center[0],
+            lon=None if center is None else center[1],
+            min_lat=min_lat,
+            min_lon=min_lon,
+            max_lat=max_lat,
+            max_lon=max_lon,
         )
         if shared.is_precise(audience):
             return box
+        # `grid_aligned_bbox` grows the rectangle through `replace`, so the
+        # centre rides along untouched.
         return shared.grid_aligned_bbox(box, shared.public_precision())
 
     lat = _float(params, "lat")

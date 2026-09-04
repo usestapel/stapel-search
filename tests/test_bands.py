@@ -676,3 +676,40 @@ def test_a_genuinely_empty_catalogue_keeps_its_chips(
         )
     assert body["items"] == []
     assert "understanding_withdrawn" not in body["degraded"]
+
+
+# --------------------------------------------------------------------------
+# a drawn area beside a centre (0.14.6)
+# --------------------------------------------------------------------------
+
+
+def test_a_drawn_area_on_a_category_page_still_reports_the_distance(api_client, corpus):
+    """Д262: the leaf's box cut the answer and took the centre with it.
+
+    Live, the same centre gave a distance on every hit of the unscoped band
+    and ``null`` on every hit of the phone leaf, because the leaf applied
+    the place as a RECTANGLE and the parser dropped the centre the moment a
+    ``bbox`` arrived. The box says which rows; the centre says how far.
+    """
+    home = _get(api_client, lat=CENTER[0], lon=CENTER[1], radius_km=25, limit=50)
+    assert home["items"]
+    assert all(item["distance_km"] is not None for item in home["items"])
+
+    leaf = _get(
+        api_client,
+        category="electronics/phones",
+        lat=CENTER[0],
+        lon=CENTER[1],
+        bbox="49.0,5.5,50.5,7.0",
+        limit=50,
+    )
+    assert leaf["items"]
+    assert {item["key"] for item in leaf["items"]} == NEARBY_KEYS
+    assert all(item["distance_km"] is not None for item in leaf["items"])
+
+
+def test_a_box_with_no_centre_still_has_nothing_to_measure_from(api_client, corpus):
+    """The other half of the rule, so the fix is not "always emit a number"."""
+    body = _get(api_client, bbox="49.0,5.5,50.5,7.0", limit=50)
+    assert body["items"]
+    assert all(item["distance_km"] is None for item in body["items"])

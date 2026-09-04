@@ -113,6 +113,33 @@ def test_bbox_parsing_including_the_antimeridian():
     assert _refusal(bbox="10,2,-10,3").code == ERR_400_BAD_GEO
 
 
+def test_a_bbox_keeps_the_centre_it_arrived_with():
+    """The box excludes, the centre measures — one request, both answers."""
+    q = _parse(bbox="49.0,6.0,50.0,7.0", lat="49.61", lon="6.13")
+    assert q.geo.is_bbox is True
+    assert q.geo.has_center is True
+    # NOT carried onto a box: the rectangle is the cut, and a second one
+    # would change which rows come back.
+    assert q.geo.radius_km is None
+    # Anonymous: the rectangle is grown onto the public grid, and the centre
+    # rides through that growth untouched.
+    assert q.geo.min_lat <= 49.0 and q.geo.max_lat >= 50.0
+    assert (q.geo.lat, q.geo.lon) == (49.61, 6.13)
+
+
+def test_a_bbox_with_a_centre_may_be_sorted_by_distance():
+    assert _parse(bbox="49.0,6.0,50.0,7.0", lat="49.61", lon="6.13", sort="distance")
+    assert _refusal(bbox="49.0,6.0,50.0,7.0", sort="distance").code == (
+        ERR_400_SORT_NEEDS_CENTER
+    )
+
+
+def test_a_half_centre_beside_a_box_is_ignored_as_the_band_ignores_it():
+    q = _parse(bbox="49.0,6.0,50.0,7.0", lat="49.61")
+    assert q.geo.has_center is False
+    assert _refusal(bbox="49.0,6.0,50.0,7.0", lat="999", lon="0").code == ERR_400_BAD_GEO
+
+
 def test_coordinates_are_validated():
     assert _refusal(lat="49.6").code == ERR_400_BAD_GEO
     assert _refusal(lat="999", lon="0").code == ERR_400_BAD_GEO
