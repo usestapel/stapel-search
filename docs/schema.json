@@ -60,7 +60,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "root/leaf path; a prefix filter, so a parent finds its descendants. A BARE node id is resolved to that node's full path first, so `166` and `141/151/166` answer the same page; an id no category has is a 400, never an empty answer."
+            "description": "root/leaf path; a prefix filter, so a parent finds its descendants. Segments are node IDS or SLUGS, in any mix: a bare node id is resolved to that node's full path (`166` == `141/151/166`), and a slug is a whole address on its own because slugs are globally unique (`avtomobili` == `transport/avtomobili` == `141/151`). The form that answered is echoed in `category_resolved`. A segment no category has is a 400, never an empty answer."
           },
           {
             "in": "query",
@@ -384,6 +384,28 @@
           "count",
           "count_is_lower_bound",
           "id"
+        ]
+      },
+      "CategoryResolved": {
+        "type": "object",
+        "description": "The queried category in both forms an address can carry.",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The slash-joined ID path this answer actually filtered on — what to send back as `category`. `category=` accepts an id, an id path, a slug, a slug path and any mix, so the string the caller sent is not necessarily this one: `avtomobili` and `141/avtomobili` both answer `141/151`."
+          },
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "The same node as slug segments, root->leaf — what a readable URL is built from (`/c/avtomobili`). `null`, never partial, when any segment has no slug: half a slug path builds a wrong address and a client cannot see that by looking. `null` here with `category_names` in `degraded[]` means the names provider was unreachable, not that the node has no slug."
+          }
+        },
+        "required": [
+          "path",
+          "slugs"
         ]
       },
       "CategorySuggestion": {
@@ -904,6 +926,15 @@
               "$ref": "#/components/schemas/SearchItem"
             }
           },
+          "category_resolved": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CategoryResolved"
+              }
+            ],
+            "nullable": true,
+            "description": "The category this answer filtered on, in both addressable forms. `null` when the query named no category."
+          },
           "bands": {
             "type": "array",
             "items": {
@@ -989,6 +1020,7 @@
         },
         "required": [
           "backend",
+          "category_resolved",
           "count",
           "count_is_lower_bound",
           "degraded",

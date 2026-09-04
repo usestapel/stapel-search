@@ -531,10 +531,165 @@ def test_the_aggregate_is_taken_over_the_querys_own_candidate_set(
     assert scoped == {("branch", "laptops"): 1}
 
 
-def test_the_shipped_coverage_floor_is_the_one_measured_on_the_stand():
-    """5%: the stand's `/c/elektronika` holds 46 of 52 in one category and
-    one listing in each of six others (1.9% apiece)."""
+def test_the_shipped_coverage_floor_is_most_of_the_page():
+    """0.6: a group has to describe MOST of what is on the page.
+
+    The measured 5% floor was the right shape and the wrong number. It
+    withheld the six 1.9% slivers of `/c/elektronika` and admitted anything
+    a twentieth of a page carried — which, on the unfiltered feed of a mixed
+    catalogue, is every axis of every minority in it.
+    """
     from stapel_search.conf import search_settings
 
-    assert search_settings.FACET_MIN_COVERAGE == 0.05
+    assert search_settings.FACET_MIN_COVERAGE == 0.6
     assert search_settings.FACET_EVIDENCE_CATEGORIES == 24
+
+
+# --------------------------------------------------------------------------
+# the unfiltered feed of a mixed catalogue
+# --------------------------------------------------------------------------
+#
+# Founder's case, 2026-09-04: `/query?type=listing` — no category, no `q` —
+# over 90 listings of everything offered `memory_size`, `ram_size`,
+# `camera_flaws` and `box_sealed` above a desk. Every one of those is a real
+# axis of the phones MINORITY, borrowed by the evidence plan and kept by a
+# 5% floor. The reader is looking at a page that is mostly not phones.
+
+MIXED = {
+    "mobile": [
+        _select("condition", "new", "used"),
+        _select("memory_size", "64", "128"),
+        _select("ram_size", "4", "8"),
+    ],
+    "desks": [
+        _select("condition", "new", "used"),
+        _select("material", "wood", "steel"),
+    ],
+}
+
+
+@pytest.fixture
+def mixed_catalogue():
+    """`categories.features` for two unrelated leaves under no shared branch."""
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    def provider(payload):
+        category_id = str(payload["category_id"])
+        return {
+            "category_id": category_id,
+            "revision": 1,
+            "features": MIXED.get(category_id, []),
+        }
+
+    register_function("categories.features", provider)
+    yield MIXED
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+@pytest.fixture
+def mixed_corpus(conformance):
+    """Ninety listings: twenty phones, seventy desks. The founder's ratio."""
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    conformance.backend.clear(DOC_TYPE)
+    SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+
+    docs = [
+        _document(
+            doc_key=f"m{index}",
+            title=f"Телефон {index}",
+            card={"title": f"Телефон {index}"},
+            category_id="mobile",
+            category_path=("mobile",),
+            features={
+                "condition": {"type": "select", "value": ["used"]},
+                "memory_size": {"type": "select", "value": ["128"]},
+                "ram_size": {"type": "select", "value": ["8"]},
+            },
+        )
+        for index in range(20)
+    ] + [
+        _document(
+            doc_key=f"d{index}",
+            title=f"Стол {index}",
+            card={"title": f"Стол {index}"},
+            category_id="desks",
+            category_path=("desks",),
+            features={
+                "condition": {"type": "select", "value": ["new"]},
+                "material": {"type": "select", "value": ["wood"]},
+            },
+        )
+        for index in range(70)
+    ]
+    index_documents(DOC_TYPE, docs)
+    return docs
+
+
+def test_the_unfiltered_feed_drops_the_minoritys_axes(mixed_catalogue, mixed_corpus):
+    """`memory_size` over 90 listings of everything is not a filter for them."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE})
+
+    assert answer["facet_meta"]["candidates"] == 90
+    assert set(answer["facet_meta"]["counted"]) == {"condition", "material"}
+    assert "memory_size" not in answer["facets"]
+    assert "ram_size" not in answer["facets"]
+    assert answer["facet_meta"]["withheld"] == [
+        {"slug": "memory_size", "coverage": 20, "candidates": 90},
+        {"slug": "ram_size", "coverage": 20, "candidates": 90},
+    ]
+
+
+def test_a_group_the_whole_page_carries_survives_the_floor(mixed_catalogue, mixed_corpus):
+    """`condition` is declared by both leaves and carried by all ninety rows;
+    `material` by the seventy that are most of the page. Neither is borrowed
+    from a minority, and the floor is not a rule against many groups."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE})
+
+    assert answer["facets"]["condition"] == {"new": 70, "used": 20}
+    assert answer["facets"]["material"] == {"wood": 70}
+
+
+def test_the_leaf_itself_keeps_every_one_of_them(mixed_catalogue, mixed_corpus):
+    """Scoped to the phones leaf, coverage is ~1 and nothing is withheld —
+    the drill-down `category_counts` offers for the uncategorised case."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "mobile"})
+
+    assert answer["count"] == 20
+    assert set(answer["facets"]) >= {"condition", "memory_size", "ram_size"}
+    assert answer["facet_meta"]["withheld"] == []
+
+
+def test_the_floor_is_configurable(mixed_catalogue, mixed_corpus):
+    """A catalogue whose minorities are worth offering lowers it and gets
+    exactly the 0.14.2 answer back."""
+    from stapel_search.services import search
+
+    with tuned(**{"FACET_MIN_COVERAGE": 0.1}):
+        answer = search({"type": DOC_TYPE})
+
+    assert "memory_size" in answer["facets"]
+    assert answer["facet_meta"]["withheld"] == []
+
+
+def test_a_capped_bucket_list_is_never_withheld(mixed_catalogue, mixed_corpus):
+    """Coverage is the sum of the buckets ANSWERED, so a group cut at
+    MAX_FACET_VALUES reports a floor and not a measurement — and a floor
+    cannot establish that a group describes too little."""
+    from stapel_search.services import search
+
+    with tuned(**{"MAX_FACET_VALUES": 1}):
+        answer = search({"type": DOC_TYPE})
+
+    assert "memory_size" in answer["facets"]
+    assert answer["facet_meta"]["withheld"] == []

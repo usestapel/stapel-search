@@ -89,13 +89,18 @@ DEFAULTS = {
     "FACET_EVIDENCE_CATEGORIES": 24,
     # A slug admitted by that aggregate must describe at least this
     # fraction of the candidate set, or it is withheld and SAID to be
-    # withheld. 5% is measured, not chosen: `/c/elektronika` on the stand
-    # holds 46 of 52 listings in one category and one listing in each of
-    # six others — 1.9% apiece, six axes that narrow to a single row.
+    # withheld (`facet_meta.withheld`). 0.6 means "most of what is on this
+    # page carries it": the unfiltered feed of a mixed catalogue — 90
+    # listings of everything, no category and no q — offered `memory_size`,
+    # `ram_size`, `camera_flaws` and `box_sealed` above a desk, axes of the
+    # phones MINORITY. 0.05 kept anything a twentieth of the page carried,
+    # which on a one-category page is every borrowed sliver.
     # A slug the reader has already filtered on is never withheld, and a
     # slug the queried category authored itself is not governed by this at
-    # all (a closed option set answers with its zeros on purpose).
-    "FACET_MIN_COVERAGE": 0.05,
+    # all (a closed option set answers with its zeros on purpose) — which is
+    # why a category page and a text query landing in one leaf keep every
+    # group: their coverage is ~1 and their plan is not borrowed.
+    "FACET_MIN_COVERAGE": 0.6,
     # --- text ------------------------------------------------------------
     "FTS_CONFIGS": {"ru": "russian", "en": "english", "de": "german"},
     "FTS_FALLBACK_CONFIG": "simple",
@@ -123,6 +128,14 @@ DEFAULTS = {
     # search.W006 says so (see CONFIG.MD).
     "CATEGORY_FEATURES_FUNCTION": "categories.features",
     "CATEGORY_PATH_FUNCTION": "categories.path",
+    # The same lookup keyed by SLUG, so `category=avtomobili` and
+    # `category=transport/avtomobili` address the node `141/151` does.
+    # Slugs are globally unique in stapel-categories (`slug unique=True`,
+    # the key behind `GET /categories/api/v1/categories/by-slug/{slug}/`),
+    # so one leaf slug is a whole address. No provider in the fleet yet:
+    # absent, a slug segment stands as it was with `degraded:
+    # ["category_rollup"]` — an outage never turns into a 400.
+    "CATEGORY_SLUG_FUNCTION": "categories.by_slug",
     # Category NAME matching for the type-ahead, by comm name. Same rule as
     # the two above: the tree's names, ancestry and retired state are
     # stapel-categories', asked for rather than mirrored. Unreachable, the

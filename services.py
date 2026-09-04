@@ -1218,46 +1218,125 @@ def _honest_bands(result, items) -> list[dict]:
     return out
 
 
-def _resolve_bare_category(q):
-    """``category=<id>`` means the node, not a root segment.
+def _resolve_one_segment(segment):
+    """One ``category=`` segment, looked up in BOTH namespaces.
 
-    ``category`` is a PATH and it filters by prefix, so a single segment is
-    read as a root: ``category=166`` matched documents whose ancestry STARTS
-    at 166, of which a leaf three levels down has none, and the answer was
-    ``count: 0`` with an empty panel at HTTP 200 — over a category that holds
-    listings and is reachable by its full ``141/151/166``. Every link that
-    carries a category id rather than a rendered path lands there, and
-    nothing in the answer said why.
+    Returns ``(id path, slug or None, outcome, detail)``. A segment is read
+    first as what it looks like — stapel-categories types an id as an
+    integer, so a numeric segment is an id and anything else is a slug — and
+    the other namespace is tried only when the first has no node. That order
+    is what keeps a numeric id's unknown-id **400** a 400 while
+    ``categories.by_slug`` still has no provider: the namespace the segment
+    belongs to owns the outcome, and the other one can only upgrade it to
+    ``ok``.
+    """
+    from .facets import lookup_path, lookup_slug
 
-    So a one-segment filter is resolved through the same
-    ``categories.path`` the INDEXER writes the document's ancestry with —
-    the one place that knows the tree — and the query filters on what the
-    index actually holds. A multi-segment path is untouched: it is already
-    the answer this lookup would give.
+    text = str(segment)
+    numeric = text.lstrip("-").isdigit()
+    primary, secondary = (
+        (lookup_path, lookup_slug) if numeric else (lookup_slug, lookup_path)
+    )
+    path, outcome, detail = primary(segment)
+    if outcome == "ok" and path:
+        return path, (None if numeric else text), "ok", ""
+    other, other_outcome, _ = secondary(segment)
+    if other_outcome == "ok" and other:
+        return other, (text if numeric else None), "ok", ""
+    return (), None, outcome, detail
 
-    The three outcomes are three different answers, and collapsing them is
-    how a 400 ends up printed over an unreachable provider:
 
-    - resolved -> filter on the full path;
-    - the provider knows no such node -> **400**, naming the id. A bare
+def _category_echo(path, known):
+    """``category_resolved`` — the same node in both addressable forms.
+
+    The filter runs on ids; a readable address is made of slugs; a client
+    holding either form has to be able to write the other, and this is the
+    only place that knows both. ``slugs`` is ``null`` rather than partial:
+    half a slug path builds a WRONG address, and a client cannot tell the
+    two apart by looking. Returns ``(payload, degraded)``.
+    """
+    from .facets import slugs_for_ids
+
+    ids = list(path)
+    unnamed = [ids[i] for i, slug in enumerate(known) if not slug]
+    named, unavailable = slugs_for_ids(unnamed) if unnamed else ({}, False)
+    slugs = [slug or named.get(ids[i]) for i, slug in enumerate(known)]
+    payload = {"path": "/".join(ids), "slugs": slugs if all(slugs) else None}
+    return payload, ("category_names",) if unavailable else ()
+
+
+def _resolve_category(q):
+    """``category=`` takes ids, slugs and any mix of them; the filter takes ids.
+
+    ``category`` is a PATH and it filters by PREFIX, so a single segment
+    used to be read as a root: ``category=166`` matched documents whose
+    ancestry STARTS at 166, of which a leaf three levels down has none, and
+    the answer was ``count: 0`` with an empty panel at HTTP 200 beside its
+    own working ``141/151/166``. 0.14.2 closed that by resolving a bare id
+    through the same ``categories.path`` the INDEXER writes ancestry with —
+    one place knows the tree — and this is the same resolution over the
+    other unique key.
+
+    A slug is a whole address on its own, because ``Category.slug`` is
+    globally unique: ``category=avtomobili``, ``category=transport/
+    avtomobili`` and ``category=141/avtomobili`` all resolve to the id path
+    ``141/151`` the prefix filter runs on, and the answer echoes both forms
+    back in ``category_resolved``.
+
+    Returns ``(query, echo, degraded)``. Three outcomes per segment, three
+    different answers, because collapsing them is how a 400 gets printed
+    over an unreachable provider:
+
+    - resolved -> filter on the id path;
+    - no catalogue has the segment -> **400**, naming it. A bare
       ``count: 0`` is indistinguishable from an empty category, and a reader
-      cannot tell a typo in a link from a catalogue that lost a branch;
-    - the provider is unreachable -> the segment stands as it was, and
-      ``degraded: ["category_rollup"]`` says the rollup could not be built.
-      An engine outage upstream does not make the caller's request invalid.
+      cannot tell a typo in a link from a branch the catalogue lost;
+    - nobody answered -> the segment stands as it was and ``degraded:
+      ["category_rollup"]`` says the rollup could not be built. An outage
+      upstream does not make the caller's request invalid.
     """
     from .errors import ERR_400_UNKNOWN_CATEGORY, SearchValidationError
-    from .facets import lookup_path, note_path_degradation
+    from .facets import note_path_degradation
 
-    if len(q.category_path) != 1:
-        return q
-    path, outcome, detail = lookup_path(q.category_path[0])
-    if outcome == "ok" and path:
-        return replace(q, category_path=path)
-    if outcome == "unknown":
-        raise SearchValidationError(ERR_400_UNKNOWN_CATEGORY, category=q.category_path[0])
-    note_path_degradation(detail)
-    return q
+    segments = q.category_path
+    if not segments:
+        return q, None, ()
+
+    if len(segments) == 1:
+        path, slug, outcome, detail = _resolve_one_segment(segments[0])
+        if outcome == "ok":
+            q = replace(q, category_path=path)
+            known = [None] * (len(path) - 1) + [slug]
+        elif outcome == "unknown":
+            raise SearchValidationError(ERR_400_UNKNOWN_CATEGORY, category=segments[0])
+        else:
+            note_path_degradation(detail)
+            known = [None]
+    else:
+        resolved: list[str] = []
+        known = []
+        for segment in segments:
+            if str(segment).lstrip("-").isdigit():
+                # A multi-segment ID path is already what the index holds:
+                # 0.14.2 left it untouched, and so does this. No lookup, so
+                # no new refusals on links that work today.
+                resolved.append(str(segment))
+                known.append(None)
+                continue
+            path, slug, outcome, detail = _resolve_one_segment(segment)
+            if outcome == "ok":
+                resolved.append(path[-1])
+                known.append(slug)
+            elif outcome == "unknown":
+                raise SearchValidationError(ERR_400_UNKNOWN_CATEGORY, category=segment)
+            else:
+                note_path_degradation(detail)
+                resolved.append(str(segment))
+                known.append(None)
+        q = replace(q, category_path=tuple(resolved))
+
+    echo, degraded = _category_echo(q.category_path, known)
+    return q, echo, degraded
 
 
 def search(params, *, accept_language: str = "", audience: str = "anonymous") -> dict:
@@ -1295,9 +1374,9 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     reset_path_degradation()
     q = parse_query(params, accept_language=accept_language, audience=audience)
     # Before anything reads `q.category_path`: the plan is drawn from its last
-    # segment and the engine filters on the whole of it, so a bare id has to
-    # BE the path by the time either looks.
-    q = _resolve_bare_category(q)
+    # segment and the engine filters on the whole of it, so a bare id or a
+    # slug has to BE the id path by the time either looks.
+    q, category_resolved, category_degraded = _resolve_category(q)
     backend = get_backend()
 
     # The plan is built BEFORE the engine sees the query, because it is what
@@ -1455,13 +1534,23 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     #  - everything, when FACET_MIN_COVERAGE is 0.
     withheld: list[dict] = []
     if facet_result and plan.evidence:
+        from .backends._shared import bucket_limit
+
         floor = float(search_settings.FACET_MIN_COVERAGE)
         denominator = facet_result.candidates
         if floor > 0 and denominator > 0:
             for slug in plan.evidence:
                 if slug in q.facets:
                     continue
-                coverage = sum((facet_result.counts.get(slug) or {}).values())
+                values = facet_result.counts.get(slug) or {}
+                if len(values) >= bucket_limit(plan, slug):
+                    # The bucket list hit its cap, so this sum is a FLOOR on
+                    # the group's coverage and not a measurement of it — and
+                    # a group is withheld for describing too little, which a
+                    # floor cannot establish. A long tail of makes is the
+                    # case: capped at 200 of 418, it reads as half a page.
+                    continue
+                coverage = sum(values.values())
                 if coverage < floor * denominator:
                     withheld.append(
                         {"slug": slug, "coverage": coverage, "candidates": denominator}
@@ -1532,6 +1621,13 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         facet_labels[slug].update({"translatable": False, "values": values})
     answer = {
         "items": items,
+        # The queried node in both addressable forms, or null when no
+        # category was asked for. `category=` accepts ids, slugs and any mix
+        # of them, so the caller's own string is not the address it landed
+        # on — this is, and a client rewrites its URL from it in either
+        # direction (`141/151` for the filter, `transport/avtomobili` for a
+        # readable path). `slugs` is null, never partial.
+        "category_resolved": category_resolved,
         "facets": counts,
         "facet_labels": facet_labels,
         "facet_meta": {
@@ -1590,6 +1686,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 + tuple(facet_result.degraded if facet_result else ())
                 + tuple(extraction.degraded if extraction is not None else ())
                 + plan_degraded
+                + category_degraded
             )
         ),
         "backend": getattr(backend, "name", "unknown"),

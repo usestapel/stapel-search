@@ -44,7 +44,7 @@ _QUERY_PARAMS = [
     OpenApiParameter("type", str, required=True, description="Registered doc_type. One type per query — federated search across types is not in v1."),
     OpenApiParameter("q", str, description="Free text. Dictionary-normalized here; morphology belongs to the engine."),
     OpenApiParameter("lang", str, description="Language of the query: selects the analyzer AND narrows the corpus. Omit it and only the analyzer is chosen (from Accept-Language) — a header must not hide a catalogue."),
-    OpenApiParameter("category", str, description="root/leaf path; a prefix filter, so a parent finds its descendants. A BARE node id is resolved to that node's full path first, so `166` and `141/151/166` answer the same page; an id no category has is a 400, never an empty answer."),
+    OpenApiParameter("category", str, description="root/leaf path; a prefix filter, so a parent finds its descendants. Segments are node IDS or SLUGS, in any mix: a bare node id is resolved to that node's full path (`166` == `141/151/166`), and a slug is a whole address on its own because slugs are globally unique (`avtomobili` == `transport/avtomobili` == `141/151`). The form that answered is echoed in `category_resolved`. A segment no category has is a 400, never an empty answer."),
     OpenApiParameter("owner", str, description="Opaque owner key — the seller's own listings."),
     OpenApiParameter("f.<slug>", str, description="Facet filter. Repeat for OR within a slug; different slugs AND together."),
     OpenApiParameter("r.<slug>", str, description="Range filter, `from..to`; either end may be omitted."),

@@ -64,6 +64,14 @@ def _path_key(category_id: Any) -> str:
     return f"{_CACHE_PREFIX}path:{category_id}"
 
 
+def _slug_path_key(slug: Any) -> str:
+    return f"{_CACHE_PREFIX}slugpath:{slug}"
+
+
+def _slug_key(category_id: Any) -> str:
+    return f"{_CACHE_PREFIX}slug:{category_id}"
+
+
 def _coerce_category_id(category_id: Any) -> Any:
     """The categories schema types the id as an integer; opaque ids are not."""
     text = str(category_id)
@@ -82,6 +90,7 @@ def note_changed(category_id: Any, revision: Any) -> None:
         if current is None or revision >= current:
             cache.set(_pointer_key(category_id), revision, ttl)
     cache.delete(_path_key(category_id))
+    cache.delete(_slug_key(category_id))
 
 
 def path_degradation() -> str:
@@ -117,7 +126,7 @@ def lookup_path(category_id: Any) -> tuple[tuple[str, ...], str, str]:
     fault. :func:`category_path` collapses both into the loud single-segment
     fallback, because an INDEXER cannot refuse a document over an unreachable
     provider; a READ that was handed a bare category id can, and does
-    (``services._resolve_bare_category``): a 400 that names the id beats a
+    (``services._resolve_category``): a 400 that names the id beats a
     silent ``count: 0`` over a catalogue that has the node.
     """
     if category_id in (None, ""):
@@ -137,18 +146,119 @@ def lookup_path(category_id: Any) -> tuple[tuple[str, ...], str, str]:
     except (CommError, LookupError, KeyError, TypeError) as exc:
         return (), "unavailable", f"{name} unavailable: {exc.__class__.__name__}"
 
-    raw = None
-    if isinstance(result, dict):
-        raw = result.get(str(category_id)) or result.get(_coerce_category_id(category_id))
-        if raw is None and isinstance(result.get("paths"), dict):
-            paths = result["paths"]
-            raw = paths.get(str(category_id)) or paths.get(_coerce_category_id(category_id))
+    raw = _answered_path(result, category_id)
     if not raw:
         return (), "unknown", f"{name} returned no path for {category_id!r}"
 
     path = tuple(str(segment) for segment in raw)
     cache.set(_path_key(category_id), list(path), search_settings.CATEGORY_CACHE_TIMEOUT)
     return path, "ok", ""
+
+
+def _answered_path(result: Any, key: Any) -> Any:
+    """The one ancestry a batch answer holds for *key* — flat, or under ``paths``."""
+    if not isinstance(result, dict):
+        return None
+    raw = result.get(str(key)) or result.get(_coerce_category_id(key))
+    if raw is None and isinstance(result.get("paths"), dict):
+        paths = result["paths"]
+        raw = paths.get(str(key)) or paths.get(_coerce_category_id(key))
+    return raw
+
+
+def lookup_slug(slug: Any) -> tuple[tuple[str, ...], str, str]:
+    """``(id path, outcome, detail)`` for a category SLUG.
+
+    :func:`lookup_path` over the other key stapel-categories guarantees is
+    unique — ``Category.slug`` (``unique=True``, the key behind ``GET
+    /categories/api/v1/categories/by-slug/{slug}/``). Uniqueness is GLOBAL,
+    so one leaf slug names one node and its whole ancestry comes back with
+    it: ``avtomobili`` alone is as complete an address as ``141/151``.
+
+    The three outcomes are :func:`lookup_path`'s, for the same reason — a
+    caller that was handed a slug can refuse an unknown one and may not
+    refuse an outage. ``CATEGORY_SLUG_FUNCTION`` has no provider in the
+    fleet yet (the ``stapel-shop/projections.py:23-35`` canon: name the
+    Function the owner does not have). Absent, every slug segment is
+    ``unavailable`` — the segment stands, ``degraded:
+    ["category_rollup"]`` says so, and nothing 400s.
+
+    The answer is ``{"<slug>": ["<root id>", ..., "<id>"]}``, the
+    ``categories.path`` shape keyed by slug; an absent key is "no such
+    slug". Cached for ``CATEGORY_CACHE_TIMEOUT`` and only that long:
+    ``category.changed`` carries an id and no slug, so a RENAME is invisible
+    to :func:`note_changed` and expires instead of being dropped.
+    """
+    if slug in (None, ""):
+        return (), "ok", ""
+    from stapel_core.comm import call
+    from stapel_core.comm.exceptions import CommError
+
+    from .conf import search_settings
+
+    cached = cache.get(_slug_path_key(slug))
+    if cached is not None:
+        return tuple(cached), "ok", ""
+
+    name = search_settings.CATEGORY_SLUG_FUNCTION
+    try:
+        result = call(name, {"slugs": [str(slug)]})
+    except (CommError, LookupError, KeyError, TypeError) as exc:
+        return (), "unavailable", f"{name} unavailable: {exc.__class__.__name__}"
+
+    raw = _answered_path(result, slug)
+    if not raw:
+        return (), "unknown", f"{name} returned no path for {slug!r}"
+
+    path = tuple(str(segment) for segment in raw)
+    ttl = search_settings.CATEGORY_CACHE_TIMEOUT
+    cache.set(_slug_path_key(slug), list(path), ttl)
+    # The reverse direction of the same fact, free: an echo that has to name
+    # this node's slug does not ask again.
+    cache.set(_slug_key(path[-1]), str(slug), ttl)
+    return path, "ok", ""
+
+
+def slugs_for_ids(ids) -> tuple[dict[str, str], bool]:
+    """``({id: slug}, unavailable)`` — the reverse of :func:`lookup_slug`.
+
+    What lets an answer echo the address in the OTHER form: a request that
+    arrived as ids is owed the slug path a client can rewrite to. One
+    batched ``categories.names`` call for the ids not already cached, and
+    fail-soft — an id nobody names simply has no slug, and the caller says
+    ``category_names`` rather than inventing one out of the id.
+    """
+    from stapel_core.comm import call
+    from stapel_core.comm.exceptions import CommError
+
+    from .conf import search_settings
+
+    wanted = [str(i) for i in ids if i not in (None, "")]
+    found = {i: cache.get(_slug_key(i)) for i in wanted}
+    missing = sorted(i for i, slug in found.items() if not slug)
+    resolved = {i: slug for i, slug in found.items() if slug}
+    if not missing:
+        return resolved, False
+
+    name = search_settings.CATEGORY_NAMES_FUNCTION
+    try:
+        answer = call(name, {"ids": missing})
+    except (CommError, LookupError, KeyError, TypeError) as exc:
+        logger.warning("%s unavailable: %s", name, exc)
+        return resolved, True
+
+    rows = (answer or {}).get("names") if isinstance(answer, dict) else None
+    if not isinstance(rows, dict):
+        logger.warning("%s answered a non-mapping; no slugs for %s", name, missing)
+        return resolved, True
+
+    ttl = search_settings.CATEGORY_CACHE_TIMEOUT
+    for category_id, row in rows.items():
+        slug = (row or {}).get("slug") if isinstance(row, dict) else None
+        if slug:
+            resolved[str(category_id)] = str(slug)
+            cache.set(_slug_key(category_id), str(slug), ttl)
+    return resolved, False
 
 
 def category_path(category_id: Any) -> tuple[str, ...]:
@@ -769,8 +879,10 @@ __all__ = [
     "facet_plan",
     "fill_zero_options",
     "lookup_path",
+    "lookup_slug",
     "note_changed",
     "note_path_degradation",
     "path_degradation",
     "reset_path_degradation",
+    "slugs_for_ids",
 ]

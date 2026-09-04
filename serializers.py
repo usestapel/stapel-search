@@ -234,10 +234,43 @@ class QueryUnderstandingSerializer(serializers.Serializer):
     degraded = serializers.ListField(child=serializers.CharField())
 
 
+class CategoryResolvedSerializer(serializers.Serializer):
+    """The queried category in both forms an address can carry."""
+
+    path = serializers.CharField(
+        help_text=(
+            "The slash-joined ID path this answer actually filtered on — "
+            "what to send back as `category`. `category=` accepts an id, an "
+            "id path, a slug, a slug path and any mix, so the string the "
+            "caller sent is not necessarily this one: `avtomobili` and "
+            "`141/avtomobili` both answer `141/151`."
+        )
+    )
+    slugs = serializers.ListField(
+        child=serializers.CharField(),
+        allow_null=True,
+        help_text=(
+            "The same node as slug segments, root->leaf — what a readable "
+            "URL is built from (`/c/avtomobili`). `null`, never partial, "
+            "when any segment has no slug: half a slug path builds a wrong "
+            "address and a client cannot see that by looking. `null` here "
+            "with `category_names` in `degraded[]` means the names provider "
+            "was unreachable, not that the node has no slug."
+        ),
+    )
+
+
 class SearchResponseSerializer(serializers.Serializer):
     """The query envelope: AnchorPagination's keys, plus what search owes."""
 
     items = SearchItemSerializer(many=True)
+    category_resolved = CategoryResolvedSerializer(
+        allow_null=True,
+        help_text=(
+            "The category this answer filtered on, in both addressable "
+            "forms. `null` when the query named no category."
+        ),
+    )
     bands = BandSummarySerializer(
         many=True,
         required=False,

@@ -24,7 +24,7 @@ pip install stapel-search
 
 | Fact | Value |
 |---|---|
-| Version | `0.14.2` |
+| Version | `0.14.3` |
 | Python | `>=3.11` (3.11, 3.12, 3.13) |
 | Django | `djangorestframework>=3.14` |
 | HTTP operations | 5 |

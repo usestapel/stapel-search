@@ -742,10 +742,14 @@ HTTP client of our own.
   mixin quantizes with `Decimal`'s default rounding (half-even) while the grid
   here rounds ties toward +infinity to match Postgres; one of the two has to
   give, and the grid's rule is the one two engines already agree on.
-- **`categories.path` has no provider in the fleet.** The canonical name is
-  declared here now (the `stapel-shop/projections.py:23-35` move). Until
-  something answers it, `category_path` degrades to a single segment:
-  exact-category filtering works, **rollup does not**, `search.W006` says so
-  at deploy time and every answer carries `degraded: ["category_rollup"]`.
+- **`categories.by_slug` has no provider in the fleet.** The canonical name
+  is declared here now (the `stapel-shop/projections.py:23-35` move), the way
+  `categories.path` was before stapel-categories 0.8 answered it. Until
+  something answers it, a `category=` segment that is not an id stands as the
+  caller wrote it and the answer carries `degraded: ["category_rollup"]` — an
+  outage never becomes a 400. The shape a provider owes is in CHANGELOG 0.14.3
+  under «Provider contract». Same fallback, and the same `search.W006`, when
+  `categories.path` itself is unanswered: `category_path` degrades to a single
+  segment, exact-category filtering works and **rollup does not**.
 - **No `-react` pair yet.** Result cards are a product slot; there is no
   `listings-react` in the fleet to render one.

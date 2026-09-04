@@ -4,6 +4,166 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.3] — 2026-09-04
+
+Patch. A category page whose address reads `/c/avtomobili` could not ask
+this API for its own feed — `category` took ids and only ids — and the
+unfiltered feed of a mixed catalogue offered the phones minority's axes
+above a desk.
+
+### `category=` takes ids, slugs, and any mix of them
+
+`Category.slug` is `unique=True` across the whole tree, which makes a single
+leaf slug a complete address: `avtomobili` names exactly one node. So all of
+these now answer the same page, and the last four are new:
+
+| sent | filtered on |
+|---|---|
+| `category=141/151` | `141/151` (unchanged) |
+| `category=151` | `141/151` (0.14.2) |
+| `category=avtomobili` | `141/151` |
+| `category=transport/avtomobili` | `141/151` |
+| `category=141/avtomobili` | `141/151` |
+| `category=transport/151` | `141/151` |
+
+It is 0.14.2's resolution over a second key, through the same provider
+abstraction and with the same three outcomes — resolved, **400**
+`error.400.search_unknown_category` naming the offending SEGMENT, and the
+segment left standing with `degraded: ["category_rollup"]` when nobody
+answered. An outage is never a 400.
+
+Which namespace a segment belongs to is decided by the segment: numeric is
+an id, anything else is a slug, and the other namespace is consulted only
+when the first has no such node — where it can turn the answer into a hit
+but never into a refusal. That ordering is load-bearing rather than tidy.
+`categories.by_slug` has no provider in the fleet yet, so reading every
+unknown id as a possible slug would have turned 0.14.2's unknown-id 400 into
+a degradation on every fleet, everywhere. It also means a catalogue whose
+slug is `2107` still answers, once no category has that id.
+
+A multi-segment path of ids is untouched, and deliberately not looked up:
+0.14.2 left it alone, so no link that works today acquires a new way to be
+refused. Prefix semantics are untouched too — `transport` finds everything
+under it, exactly as `141` does.
+
+### The answer says which node it is, in both forms
+
+New response field, present on every `/query` answer:
+
+```json
+"category_resolved": {"path": "141/151", "slugs": ["transport", "avtomobili"]}
+```
+
+- **`path`** — the slash-joined ID path this answer actually filtered on;
+  what to send back as `category`, and not necessarily what was sent in;
+- **`slugs`** — the same node as slug segments, root→leaf, which is what a
+  readable URL is built from;
+- **`null`** as the whole field when the query named no category. The key is
+  always present, so a client reads it without asking whether it is there.
+
+`slugs` is `null` rather than partial when any segment has no slug: half a
+slug path builds a WRONG address and a client cannot see that by looking.
+`null` there with `category_names` in `degraded[]` means the names provider
+was unreachable, not that the node has no slug. The slug half comes from
+`CATEGORY_NAMES_FUNCTION` (`categories.names`, already deployed), cached per
+id for `CATEGORY_CACHE_TIMEOUT`, so the steady state costs no extra call.
+
+This is what makes either address rewritable from the other: a storefront
+linked to by ids can put `/c/avtomobili` in the address bar, and a page
+addressed by slug can still hand ids to whatever speaks ids.
+
+### Provider contract — `categories.by_slug`
+
+The lookup is `CATEGORY_SLUG_FUNCTION`, default `categories.by_slug`, and
+**nothing in the fleet provides it yet** — the canonical name is declared
+here first (the `stapel-shop/projections.py:23-35` canon), the way
+`categories.path` was declared by this module before stapel-categories
+answered it. Until it exists, every slug segment degrades and no answer
+changes shape.
+
+It has to be stapel-categories that registers it, for the reason
+`categories.path` lives there: this module owns the tree, and any other
+answer re-derives the hierarchy from the outside. Nothing else in the fleet
+needs editing — `stapel_categories` and `stapel_search` sit in the same
+process (`stapel-classified/preset.py:32,37`), registration happens on
+import from `stapel_categories/apps.py:ready()`, so a categories release
+that adds the Function is picked up by a pin bump alone.
+
+The shape is `categories.path`'s, keyed by slug:
+
+```python
+@function("categories.by_slug", schema=_schema("categories.by_slug"))
+def by_slug_function(payload: dict) -> dict:
+    """{"slugs": ["transport", "avtomobili"]} ->
+       {"transport": ["141"], "avtomobili": ["141", "151"]}"""
+```
+
+- **payload** — `{"slugs": [<str>, ...]}`, capped in the schema the way
+  `categories.path` caps `category_ids` (`maxItems: 1000`);
+- **result** — a flat mapping, one entry per slug that names a row: the
+  node's root→leaf ancestry as ID strings, the node itself last. Ids as
+  strings on both sides, so a JSON round trip cannot change a key type;
+- **a slug with no row is simply ABSENT** (the `projections.read()`
+  convention `categories.path` and `categories.names` both follow). That
+  absence is what this module turns into the 400; it must not be an error,
+  an empty list, or a null;
+- **errors** — none of its own. An unknown slug is absence; a
+  `LookupError`/`CommError` (no provider, or one that cannot answer)
+  degrades here and is never reported to the caller as a bad request;
+- **inactive / soft-deleted** — answer for an inactive row the way
+  `categories.names` does (a listing may sit in a category retired after
+  publication) and omit a soft-deleted one.
+
+A rename is the one thing this module cannot be told about:
+`category.changed` carries `{category_id, revision}` and no slug, so the
+slug→path cache expires on `CATEGORY_CACHE_TIMEOUT` (300s) instead of being
+dropped. Adding a slug to that event would close it, and is not needed for
+this release.
+
+### A facet group must describe most of the page
+
+`FACET_MIN_COVERAGE` — the floor a group borrowed by the evidence plan has
+to clear, in place since 0.14.0 — moves from **0.05 to 0.6**. Founder's
+case: `/query?type=listing` with no category and no `q` over 90 listings of
+everything offered `memory_size`, `ram_size`, `camera_flaws` and
+`box_sealed`. Every one of those is a real axis of the phones MINORITY, kept
+by a floor that admitted anything a twentieth of the page carried. 5% was
+measured against the six 1.9% slivers of one branch page and it withheld
+those correctly; it says nothing about a feed that is mostly not phones.
+0.6 says the thing the reader needs it to say — most of what is on this page
+carries it.
+
+Nothing else about the mechanism changes, and the two exemptions are why a
+category page keeps every group it had: a slug the QUERIED CATEGORY authored
+is not governed by this at all, and a slug the reader has already filtered
+on is never taken away. A query scoped to a leaf, or a text query whose hits
+sit in one leaf, has coverage ≈ 1 anyway. Groups every leaf declares
+(condition, and the core ranges that are not counted at all) pass on their
+own. The withheld groups are named with their numbers in
+`facet_meta.withheld` — `{slug, coverage, candidates}`, unchanged, so a
+panel can say «3 filters apply to too few of these» rather than «no
+filters». `facet_meta.categories` remains the drill-down for the
+uncategorised case.
+
+One fix rides with the number, and it only becomes visible at a floor this
+high: a group whose bucket list hit `MAX_FACET_VALUES` is never withheld.
+Coverage is the sum of the buckets ANSWERED, so a truncated list reports a
+FLOOR on coverage rather than a measurement of it, and a group is withheld
+for describing too little — which a floor cannot establish. A make dictionary
+cut at 200 of 418 read as half a page.
+
+### Verified
+
+581 passed / 62 skipped against real PostgreSQL 16 (throwaway container on
+the stand, this module's exact dependency pins), 520 / 123 against the naive
+walk. Twenty-two new tests: every one of the six address forms answering the
+same page, both echo directions, `slugs: null` under a names outage, an
+unknown slug as a 400 at the service and over HTTP, a numeric slug found
+after the id lookup misses, an unknown id still a 400 while slugs have no
+provider; and, on a 20-phones/70-desks feed, the minority's axes dropped,
+the majority's kept, the leaf itself keeping all of them, the floor
+configurable, and a capped bucket list never withheld.
+
 ## [0.14.2] — 2026-09-04
 
 Patch, and all three parts of it are things the answer already knew and did
