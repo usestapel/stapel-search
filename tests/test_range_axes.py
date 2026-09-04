@@ -294,6 +294,20 @@ def test_the_backfill_recovers_the_numbers_of_an_old_index(conformance, cars_cat
     )["items"]} == {"c1", "c2"}
 
 
+def test_the_backfill_refuses_to_look_useful_on_an_engine_that_ignores_it(
+    conformance, cars_category, settings, capsys
+):
+    """A side table nothing reads is not a back-fill, it is a number."""
+    from django.core.management import call_command
+
+    settings.STAPEL_SEARCH = {
+        **settings.STAPEL_SEARCH,
+        "BACKEND": "stapel_search.backends.meili.MeilisearchBackend",
+    }
+    call_command("search_backfill_numbers", "--type", DOC_TYPE, "--dry-run")
+    assert "search_rebuild instead" in capsys.readouterr().out
+
+
 def test_the_backfill_writes_nothing_twice_and_can_be_asked_first(
     conformance, cars_category, capsys
 ):

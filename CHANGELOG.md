@@ -4,6 +4,18 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.8] — 2026-09-04
+
+Patch. The back-fill no longer looks useful on an engine that ignores it.
+
+`search_backfill_numbers` writes the `search_number` side table, which is
+what the naive walk and Postgres filter ranges on. Meilisearch does not: its
+numbers live in the engine document as `numeric.<slug>`, written at upsert.
+On that backend the pass would have reported a confident row count and
+changed nothing a query can see — a green number over an unfixed rail, which
+is the one failure mode a back-fill must not have. It now names the backend
+and points at `search_rebuild` instead. One test, on the same corpus.
+
 ## [0.14.7] — 2026-09-04
 
 Patch. `search_number` was empty on a corpus made of numbers.

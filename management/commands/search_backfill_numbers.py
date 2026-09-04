@@ -25,6 +25,11 @@ Two deliberate limits:
 A full re-index (``search_rebuild``) does the same thing and more, at the
 cost of re-pulling the whole corpus from its source. Reach for that one when
 the documents themselves are stale; reach for this one when they are not.
+
+Reach for the rebuild, too, on an engine that keeps its numbers in its OWN
+document rather than in this side table (Meilisearch's ``numeric.<slug>``),
+where this pass would write rows the engine never reads. The command says so
+instead of reporting a number that changes nothing.
 """
 from django.core.management.base import BaseCommand
 
@@ -50,8 +55,21 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        from stapel_search.backends import get_backend
         from stapel_search.models import SearchDocument, SearchNumber
         from stapel_search.services import _numeric_code
+
+        # The side table IS the corpus for these two. Any other engine
+        # filters on its own copy of the numbers, written at upsert.
+        engine = getattr(get_backend(), "name", "")
+        if engine not in ("naive", "postgres"):
+            self.stdout.write(
+                self.style.WARNING(
+                    f"backend {engine!r} filters ranges on its own document, not on "
+                    "search_number — run search_rebuild instead, or this pass writes "
+                    "rows nothing reads"
+                )
+            )
 
         rows = SearchDocument.objects.all()
         if options["doc_type"]:
