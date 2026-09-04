@@ -154,9 +154,16 @@ cut at 200 of 418 read as half a page.
 
 ### Verified
 
-581 passed / 62 skipped against real PostgreSQL 16 (throwaway container on
-the stand, this module's exact dependency pins), 520 / 123 against the naive
-walk. Twenty-two new tests: every one of the six address forms answering the
+581 passed / 62 skipped against real PostgreSQL 16, 520 / 123 against the
+naive walk, and CI green on the tagged commit — postgres, meilisearch,
+contract, e2e and three Python minors (run 33845661245). The Postgres number
+above was taken against a PostgreSQL 16 container that was already running on
+the development machine, NOT the throwaway one this release meant to use on
+the stand: that container was started and reachable only from the stand
+itself, the local forward to it never came up, and the suite silently used
+the port a previous release's container still held. Its numbers are real and
+its provenance was not what this file first said. CI's own PostgreSQL 16
+service is the gate that ran on the tagged commit. Twenty-two new tests: every one of the six address forms answering the
 same page, both echo directions, `slugs: null` under a names outage, an
 unknown slug as a 400 at the service and over HTTP, a numeric slug found
 after the id lookup misses, an unknown id still a 400 while slugs have no
