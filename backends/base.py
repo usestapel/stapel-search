@@ -79,11 +79,20 @@ VERBS = (
 #: Postgres implement it; the conformance scenario ``suggest_categories``
 #: skips engines without it and holds the rest to the naive reference.
 
-#: A THIRD optional verb, same rule: ``ranges(q, plan) -> {slug: (low,
-#: high)}`` — the bounds of every numeric axis over the candidate set, with
-#: the range filters removed. A bucket list answers "which values are left";
-#: a from/to picker has no values to enumerate and needs two ends, and a
-#: client that is told neither draws no picker or draws one over a guess.
+#: A THIRD optional verb, same rule: ``ranges(q, plan) -> {slug: (low, high,
+#: documents)}`` — the bounds of every numeric axis over the candidate set,
+#: with the range filters removed, and how many candidates carry a number on
+#: that axis at all. A bucket list answers "which values are left"; a from/to
+#: picker has no values to enumerate and needs two ends, and a client that is
+#: told neither draws no picker or draws one over a guess.
+#:
+#: The third value arrived in 0.16.0 and a two-value answer is still valid:
+#: it is the numerator of the coverage floor the service applies to a range
+#: the way it already applies it to a bucket list (``FACET_MIN_COVERAGE``),
+#: and an axis whose coverage cannot be measured is never withheld for it —
+#: the same exemption a capped bucket list already gets, for the same reason
+#: (a floor cannot establish that something describes too little).
+#:
 #: Optional for the same reason as ``category_counts``: an engine without it
 #: has not failed ``search.E002``. The service layer probes with ``getattr``
 #: and reports ``facet_ranges`` in ``degraded[]``. Naive and Postgres

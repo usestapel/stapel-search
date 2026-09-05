@@ -1,4 +1,4 @@
-# stapel-search 0.15.0
+# stapel-search 0.16.0
 
 A materialized search index with one swappable engine seam: full-text with per-language configs and a typo-tolerant second arm, drill-down facet counts with a benchmark-calibrated candidate cap and an approximate fallback, indexed range filters over a numeric side table, geo radius and bounding-box search including the antimeridian, five sorts with an opaque keyset cursor whose envelope matches AnchorPagination, a registry-generated P2B Art. 5 ranking disclosure with a mandatory promoted marker on every result, and an event-to-pull indexer carrying the four Projection guarantees (idempotency, ordering, rebuild, drift_check). Ships three engines behind the same conformance suite: Postgres FTS (default, zero new infrastructure), Meilisearch (the [meili] extra) and a declared naive backend for SQLite demos.
 

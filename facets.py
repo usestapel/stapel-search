@@ -701,6 +701,12 @@ class _Fold:
         #: ONE declarer so a name can never be paired with another
         #: declaration's opinion about whether it is a translation key.
         self.group_labels: dict[str, tuple[str, bool]] = {}
+        #: ``{slug: unit}`` — the unit the catalogue stamps on a MEASUREMENT,
+        #: which is the second half of a range's caption. «Пробег» over a
+        #: slider from 40000 to 120000 is «40 000 … 120 000» of nothing;
+        #: «Пробег, км» is a filter. Taken from the first declarer like every
+        #: other overlay here.
+        self.units: dict[str, str] = {}
         #: Slugs whose declaring categories disagree about a caption's
         #: nature or a vocabulary's address. The reader cannot tell `b.apple`
         #: from `Б/у` by looking, and neither can this: on a disagreement the
@@ -750,6 +756,41 @@ def _group_label(feature: dict) -> tuple[str, bool] | None:
     return name, mode in ("all", "title")
 
 
+def _feature_unit(config: dict) -> str | None:
+    """The unit a numeric axis is measured in, or ``None``.
+
+    ``postfix`` is where a unit lives on an ``int`` / ``float`` / ``string``
+    feature — the same field
+    ``stapel_listings.services.features._card_unit`` reads to write a card,
+    so a slider and a card print one unit for one feature. ``postfix1000`` is
+    deliberately NOT consulted: it abbreviates the VALUE («тыс. км» for
+    150000 км), and using it without rescaling ``min``/``max`` would label a
+    slider over ones in thousands.
+
+    ``convertible_unit`` is the one type whose unit is not written down: the
+    config offers a metric and an imperial code for INPUT, and the value is
+    stored — and therefore bounded — in the family's canonical base unit. So
+    the base unit is what a bound is in, and it is what this reports; naming
+    ``unit_m`` here would label metres as kilometres, which is the one thing
+    a from/to picker must not do. An unknown family yields nothing rather
+    than a guess.
+    """
+    if str(config.get("type") or "") == "convertible_unit":
+        family = config.get("unitType")
+        if not family:
+            return None
+        try:
+            from stapel_attributes.types.convertible_unit.constants import UNIT_FAMILIES
+
+            base = (UNIT_FAMILIES.get(str(family)) or {}).get("base_unit")
+        except Exception:  # noqa: BLE001 — an unknown family is not a crash
+            return None
+        return f"feature.unit.{base}.name" if base else None
+    postfix = config.get("postfix")
+    text = str(postfix).strip() if postfix else ""
+    return text or None
+
+
 def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
     """Fold one category's resolved features into *fold*, weighted by *weight*."""
     from .registry import get_facet_mapping
@@ -795,6 +836,9 @@ def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
         label = _group_label(feature)
         if label is not None:
             fold.group_labels.setdefault(slug, label)
+        unit = _feature_unit(config)
+        if unit is not None:
+            fold.units.setdefault(slug, unit)
         if config.get("optionsRef"):
             # A vocabulary-backed field (ref_select, and any host type that
             # points at a vocabulary the same way) has no closed option set to
@@ -868,6 +912,7 @@ def _shape(
 
     max_fields = int(search_settings.MAX_FACET_FIELDS)
     kinds = fold.kinds
+    core = tuple(CORE_RANGE_FIELDS)
 
     if requested is not None:
         wanted = [slug for slug in requested if slug and slug not in fold.excluded]
@@ -908,15 +953,33 @@ def _shape(
             for slug in selected
             if slug in fold.group_labels
         },
+        units={slug: fold.units[slug] for slug in selected if slug in fold.units},
         # Not conditioned on the category: a core range addresses a column
         # every document in every corpus has. Announcing it here is what
         # lets a panel offer «Цена от … до …» without the frontend keeping
         # its own list of which slugs are core.
-        core_ranges=tuple(CORE_RANGE_FIELDS),
-        # UNCAPPED on purpose — see FacetPlan.range_candidates. The budget
-        # decides what is COUNTED; a bound is one aggregate for every axis
-        # at once, and the numeric axes are the ones the budget drops.
-        range_candidates=tuple(ordered),
+        core_ranges=core,
+        # CAPPED with the groups since 0.16.0 — one budget over one ordered
+        # list. It used to be `tuple(ordered)`, on the reasoning that a bound
+        # costs one grouped aggregate for every axis at once, so the budget
+        # that governs counting need not govern it. That is true of the
+        # SERVER's cost and false of the PANEL's: a phones leaf shipped six
+        # wholesale measurements — «Вес (Для Доставки)», «Количество в
+        # фасовке» — to a client that had asked for at most twelve axes, and
+        # the axes it did not ask for are the ones a reader has to scroll
+        # past. `MAX_FACET_FIELDS` is a statement about how wide a panel may
+        # be, and a from/to picker is exactly as wide as a bucket list.
+        range_candidates=tuple(selected),
+        #: Where each axis sits in ONE panel, groups and ranges together —
+        #: see FacetPlan.order.
+        order={
+            **{slug: position for position, slug in enumerate(core)},
+            **{
+                slug: position + len(core)
+                for position, slug in enumerate(selected)
+                if slug not in core
+            },
+        },
         evidence=tuple(slug for slug in selected if slug in evidence),
     )
 

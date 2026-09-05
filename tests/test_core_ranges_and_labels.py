@@ -342,6 +342,9 @@ def test_a_vocabulary_backed_facet_ships_captions_for_what_it_counted(
         "values": {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"},
         "vocabulary": "phones",
         "level": "Vendor",
+        # Where the group sits in the ONE panel it shares with the ranges
+        # (0.16.0). `price` is the core range and takes position 0.
+        "order": 1,
     }
 
 
@@ -432,6 +435,9 @@ def test_the_answer_ships_the_captions_beside_the_counts(
         "translatable": False,
         "values": {"novoe": "Новое", "b-u": "Б/у"},
         "vocabulary": None,
+        # Position in the one panel the groups share with the ranges
+        # (0.16.0); `price` is the core range and takes 0.
+        "order": 1,
     }
     assert answer["facet_labels"]["brand"]["translatable"] is True
 

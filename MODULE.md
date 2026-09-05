@@ -500,18 +500,68 @@ codes are numbers (`year` on an imported leaf, `floor`, `doors`) is a term
 a from/to. Never a `bool` (`False == 0`), never a multi-value axis (no one
 number to bound), never a path (an address is not a magnitude).
 
-**The report.** `facet_meta.ranges` is `{slug: {min, max}}` for every axis
-that has a number on this page, core columns and attributes alike. A bucket
-list answers "which values are left"; a from/to picker has nothing to
-enumerate and needs two ends, and a client told neither draws no picker or
-draws one over a guess. Bounds are measured with the range filters
-**removed**, so a slider reports the domain it can be widened back to rather
-than the ends of its own selection. Uncapped by `MAX_FACET_FIELDS`: that
-budget governs counting — and it ranks a choice above a measurement, so the
-numeric axes are exactly the ones it drops — while a bound is one grouped
-aggregate for all of them together. `ranges(q, plan)` is an OPTIONAL backend
-verb beside `category_counts`; an engine without it degrades loudly
-(`facet_ranges`) instead of answering an empty rail.
+**The report.** `facet_meta.ranges` is `{slug: {min, max, label,
+label_translatable, unit?, order}}` for every axis that has a number on this
+page, core columns and attributes alike. A bucket list answers "which values
+are left"; a from/to picker has nothing to enumerate and needs two ends, and
+a client told neither draws no picker or draws one over a guess. Bounds are
+measured with the range filters **removed**, so a slider reports the domain
+it can be widened back to rather than the ends of its own selection.
+`ranges(q, plan)` is an OPTIONAL backend verb beside `category_counts`; an
+engine without it degrades loudly (`facet_ranges`) instead of answering an
+empty rail.
+
+### A range is an axis a reader can name, on the same budget (0.16.0)
+
+Three properties the numeric half of a panel did not have, each one a live
+symptom on a classified stand.
+
+**It is NAMED, from the same source the group heading comes from.** An entry
+used to be two numbers, so a client with no leaf schema in hand — every
+client on a branch page or a text query — printed the storage slug above the
+picker, and the chip row read `doors`, `kilometrage`, `engine_volume`. The
+caption is now resolved from `plan.group_labels`, the category's own
+`FeatureDef.name`, because a group and a range are two ways of narrowing one
+authored feature and nothing about the axis being numeric changes who named
+it. `unit` rides beside it (`postfix`, or the family's BASE unit for a
+`convertible_unit` — the stored value is in the base unit, so naming the
+input unit would mislabel the numbers), absent rather than empty when the
+definition names none. A core range has no definition to read and takes
+`index_schema.CORE_RANGE_LABELS`, which is this library's, because the axis
+is this library's. **An axis with no resolvable caption is withheld** —
+`facet_meta.withheld`, reason `unlabelled` — because a control whose meaning
+has to be guessed from the numbers inside it is not a filter.
+
+**The coverage floor applies to it.** `FACET_MIN_COVERAGE` has hidden sparse
+facet groups since 0.14.3 and ranges walked past it, so a phones leaf shipped
+six wholesale measurements — «Вес (Для Доставки), кг», «Количество в фасовке»
+— over a handful of the fifty-two listings on the page. The measure is the
+documents that carry a number on the axis, which is why the `ranges` verb now
+answers `(low, high, documents)` and why a backend that answers two values is
+never withheld for coverage (a floor cannot establish "describes too little"
+from a number it does not have — the same exemption a capped bucket list
+already has). Two exemptions carry over verbatim: an axis the reader has
+already filtered on is never withheld, and nothing is withheld at a floor of
+0. **One does not**: a group the queried category authored is exempt, because
+a closed option set answering with its zeros is a shipped decision — a range
+has no zeros to answer with and no option set to have decided about, so
+authorship says nothing about whether the axis describes this page.
+
+**It is on the budget, and in the schema's order.** `range_candidates` was
+uncapped, on the reasoning that a bound costs one grouped aggregate for every
+axis at once. That is the SERVER's cost; `MAX_FACET_FIELDS` is how wide a
+PANEL may be, and a from/to picker is exactly as wide as a bucket list. One
+budget over one ordered list now cuts both halves, and `order` — an integer
+shared by `facet_labels[slug]` and `facet_meta.ranges[slug]` — says where each
+axis sits in that one panel, so a client can interleave «Цена» and «Год» where
+the schema puts them instead of drawing every choice and then every
+measurement. Core ranges take the first positions: they address a column every
+document in every corpus has.
+
+Every row of `facet_meta.withheld` now carries `axis` (`group` / `range`) and
+`reason` (`coverage` / `unlabelled`). One slug can appear as both: an imported
+`year` is a choice AND a measurement, decided by different quantities over the
+same page, so a withheld `group` row does not mean the slider is gone.
 
 Documents indexed before this are back-filled from their own stored facets by
 `manage.py search_backfill_numbers` — no source pull, no engine, one pass

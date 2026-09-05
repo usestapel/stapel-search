@@ -4,6 +4,138 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] — 2026-09-05
+
+Minor. A numeric axis is an axis a reader can NAME, on the same budget as
+every other axis.
+
+`facet_meta.ranges` shipped two numbers per axis and nothing else. A client
+holding the category schema could write a heading over them; every client
+that does not — a branch page, a text query, any host rendering a panel from
+this answer alone — printed the storage slug, and a live chip row read
+`doors`, `kilometrage`, `engine_volume` at buyers. The same page carried six
+wholesale measurements («Вес (Для Доставки), кг», «Количество в фасовке» …)
+that the facet-group coverage rule would have removed on sight, because that
+rule had never been applied to the other half of the panel.
+
+### An entry says what it is, in what, and where
+
+```json
+"ranges": {
+  "price":    {"min": 9000, "max": 18000, "label": "search.range.price",
+               "label_translatable": true, "order": 0},
+  "year":     {"min": 2015, "max": 2020, "label": "Год выпуска",
+               "label_translatable": false, "order": 2},
+  "mileage":  {"min": 40000, "max": 120000, "label": "Пробег",
+               "label_translatable": false, "unit": "км", "order": 3}
+}
+```
+
+`label` is resolved from the SAME source a facet group's heading comes from —
+`plan.group_labels`, the category's own `FeatureDef.name` — because a group
+and a range are two ways of narrowing one authored feature and nothing about
+the axis being numeric changes who named it. `label_translatable` says
+whether that is a key or literal text, exactly as it does one level up.
+
+`unit` is `postfix` off the definition, and for a `convertible_unit` the
+family's BASE unit (`feature.unit.<code>.name`): the stored value is in the
+base unit, so naming the input unit would label a number in one unit as
+another, which is the one thing a from/to picker must not do. `postfix1000`
+is deliberately not consulted — it abbreviates the VALUE, and using it
+without rescaling the bounds labels a slider over ones in thousands. ABSENT,
+never `""`, for an axis whose definition names no unit — `price` among them,
+because a price's unit is the corpus's base currency and a property of each
+document rather than of the axis.
+
+A core range has no feature definition to read its name off, so it takes
+`index_schema.CORE_RANGE_LABELS` — this library's own key, because the axis is
+this library's. It is emitted to `docs/index.json` as `core_range_labels`
+beside `core_range_fields`.
+
+**An axis with no resolvable caption is WITHHELD**, not shipped bare:
+`facet_meta.withheld` gains a row with `reason: "unlabelled"`. A control whose
+meaning a reader has to guess from the numbers inside it is not a filter, and
+`_group_label` refuses to fabricate a caption out of a slug precisely so this
+case is detectable.
+
+### The coverage floor covers both halves of the panel
+
+`FACET_MIN_COVERAGE` has withheld sparse facet GROUPS since 0.14.3 and ranges
+walked past it. They no longer do: a range whose documents cover less than the
+floor of the candidate set is withheld with `reason: "coverage"`, carrying the
+same two numbers a group's row carries.
+
+The numerator has to come from the engine, so the optional `ranges(q, plan)`
+verb now answers `(low, high, documents)` — the third value is how many
+candidates carry a number on that axis. It rides inside the aggregate that was
+already being taken (`count(DISTINCT n.document_id)` in the same `GROUP BY`),
+so the verb still costs two round trips whatever the panel is made of. **Two
+values remain valid**: a backend answering the old shape keeps working and its
+axes are simply never withheld for coverage, which is the same exemption a
+bucket list capped at `MAX_FACET_VALUES` already has and for the same reason —
+a floor cannot establish that something describes too little.
+
+Two exemptions carry over from the group rule verbatim: an axis the reader has
+already filtered on is never withheld (that would leave the filter applied with
+no control to undo it), and nothing is withheld at a floor of 0. One
+deliberately does not. A group the QUERIED CATEGORY authored is exempt there,
+because a closed option set answering with its zeros is a shipped decision; a
+range has no zeros to answer with and no option set to have decided about, so
+authorship says nothing about whether the axis describes this page. What
+decides that is the count, and the count is the same number either way.
+
+Every `withheld` row now names `axis` (`group` / `range`) as well as `reason`.
+One slug can appear as both — an imported `year` is a choice AND a measurement,
+and the two are decided by different quantities over the same page — so a
+withheld `group` row does not mean the slider is gone, or the other way round.
+
+### `MAX_FACET_FIELDS` counts ranges, and `order` puts them back in place
+
+`FacetPlan.range_candidates` was uncapped, on the reasoning that a bound costs
+one grouped aggregate for every axis at once so the budget that governs
+counting need not govern it. That is a statement about the server's cost. The
+budget is not about the server's cost: it is how wide a panel may be, and a
+from/to picker takes exactly as much of a rail as a bucket list. Uncapped, a
+phones leaf shipped six measurements past a `MAX_FACET_FIELDS` of twelve, and
+the axes a client did not ask for are the ones somebody has to scroll past. One
+budget over one ordered list now cuts both halves; a range past the cap is in
+`facet_meta.skipped` like any other axis.
+
+Because the cut is made in the plan's own order — mandatory first and then as
+authored, for a category's own schema — a measurement the schema puts second is
+not pushed below every choice. `order` is the integer that lets a client put it
+back: it is shared by `facet_labels[<slug>].order` and
+`facet_meta.ranges[<slug>].order`, so drawing both halves sorted by one key
+gives «Цена» and «Год» the places the category authored for them instead of
+every choice followed by every measurement. Core ranges take the first
+positions — they address a column every document in every corpus has, so they
+precede anything a category authored.
+
+### Compatibility
+
+Additive on the wire: `min` and `max` keep their names, their types and their
+meaning, and no key was renamed or removed. Three things a client may notice:
+
+- a range with no resolvable label, or one describing less than
+  `FACET_MIN_COVERAGE` of the page, is now absent from `ranges` and named in
+  `withheld` instead. That is the fix, and the answer says so rather than
+  going quiet;
+- a range past `MAX_FACET_FIELDS` is now in `skipped` rather than in `ranges`.
+  Raise the budget to get the old panel back;
+- `withheld` rows carry two new keys. A client reading `slug` / `coverage` /
+  `candidates` is unaffected; one COUNTING the list should filter by `axis`,
+  because a slug that is both a choice and a measurement can now contribute
+  two rows.
+
+**No reindex.** Nothing in the stored document changed — every number here is
+measured at query time out of the same tables and the same aggregate.
+
+### Sibling caps
+
+`stapel-classified` caps `stapel-search<0.16` (as of composite 0.10.9), so a
+fleet resolving that composite cannot install this release until the cap moves.
+Nothing else in the fleet caps this package.
+
 ## [0.15.0] — 2026-09-05
 
 Minor. A result row now says which seller it belongs to.

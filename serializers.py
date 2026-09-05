@@ -88,6 +88,87 @@ class SearchItemSerializer(serializers.Serializer):
     )
 
 
+class RangeAxisSerializer(serializers.Serializer):
+    """One numeric axis a from/to picker is drawn from, with its caption."""
+
+    min = serializers.FloatField(
+        help_text="The low end of the axis over this candidate set, measured "
+        "with the range filters removed. A number, not a string: a slider end "
+        "is arithmetic the client does immediately. Integral values render "
+        "integral, so a year is `2015` and an engine volume is `1.4`."
+    )
+    max = serializers.FloatField(help_text="The high end, same rule as `min`.")
+    label = serializers.CharField(
+        help_text=(
+            "What to write above the picker. Resolved from the SAME source a "
+            "facet group's heading comes from — the category's own feature "
+            "definition — because a group and a range are two ways of "
+            "narrowing one authored feature. A core range (`price`) has no "
+            "definition to read and takes this library's own key. Never "
+            "null: an axis with no resolvable caption is withheld instead "
+            "(`withheld`, reason `unlabelled`), because a chip row printing "
+            "`doors` and `kilometrage` at a reader is an axis that was there "
+            "and unreadable."
+        )
+    )
+    label_translatable = serializers.BooleanField(
+        help_text="True when `label` is a translation KEY, false when it is "
+        "literal text the catalogue wrote. The reader cannot tell by looking."
+    )
+    unit = serializers.CharField(
+        required=False,
+        help_text=(
+            "What the numbers are measured in — `postfix` off the feature "
+            "definition, or the family's BASE unit for a `convertible_unit` "
+            "(the stored value is in the base unit, so naming the input unit "
+            "would label metres as kilometres). A translation key or literal "
+            "text, exactly as the catalogue wrote it; this module never "
+            "translates. ABSENT, not empty, for an axis whose definition "
+            "names no unit — `price` among them, because a price's unit is "
+            "the corpus's base currency and a property of each document "
+            "rather than of the axis."
+        ),
+    )
+    order = serializers.IntegerField(
+        allow_null=True,
+        help_text="Where this axis sits in ONE panel, numbered together with "
+        "the groups in `facet_labels`. Same field, same sequence: draw both "
+        "halves sorted by it and the picker lands where the schema put it.",
+    )
+
+
+class WithheldAxisSerializer(serializers.Serializer):
+    """One axis that was planned and then not offered, and why."""
+
+    slug = serializers.CharField()
+    axis = serializers.ChoiceField(
+        choices=["group", "range"],
+        help_text=(
+            "Which half of the panel this row is about — the bucket list or "
+            "the from/to picker. One slug can be both (an imported `year` is "
+            "a choice AND a measurement) and the two are decided by different "
+            "quantities over the same page, so a withheld `group` row does "
+            "not mean the slider is gone, or the other way round."
+        ),
+    )
+    reason = serializers.ChoiceField(
+        choices=["coverage", "unlabelled"],
+        help_text="`coverage` — it describes too little of this result set "
+        "(FACET_MIN_COVERAGE). `unlabelled` — no caption could be resolved, "
+        "so a client could only print the storage slug at a reader. A closed "
+        "set: an unknown value means the client is older than the server.",
+    )
+    coverage = serializers.IntegerField(
+        required=False,
+        help_text="How many documents the axis describes. Present on "
+        "`coverage` only — it is the measurement that decided.",
+    )
+    candidates = serializers.IntegerField(
+        required=False,
+        help_text="What it was a share OF. Present on `coverage` only.",
+    )
+
+
 class FacetMetaSerializer(serializers.Serializer):
     approximate = serializers.BooleanField(
         help_text="True when counts came from a sample because the candidate set "
@@ -120,22 +201,25 @@ class FacetMetaSerializer(serializers.Serializer):
         ),
     )
     ranges = serializers.DictField(
+        child=RangeAxisSerializer(),
         help_text=(
-            "`{slug: {min, max}}` — the low and high bound of every numeric "
-            "axis that HAS a number on this page, core columns (`price`) and "
-            "attributes (`year`, `mileage`, `engine_volume`) alike. What a "
-            "from/to picker is drawn from: a range axis has no values to "
-            "enumerate, so `facets` says nothing about it and a client "
-            "without these two numbers either draws no picker or draws one "
-            "over a guess. Measured with the range filters REMOVED, so the "
-            "ends are the domain the picker can be widened back to and not "
-            "the ends of its own selection. An axis absent here has no "
-            "numbers behind it in this candidate set — which is a different "
-            "fact from a bound of zero. Not capped by MAX_FACET_FIELDS: the "
-            "budget governs counting, and every bound is one aggregate. "
-            "Empty, with `facet_ranges` in `degraded[]`, on an engine that "
-            "does not implement the optional `ranges` verb."
-        )
+            "`{slug: {min, max, label, label_translatable, unit?, order}}` — "
+            "every numeric axis that HAS a number on this page, core columns "
+            "(`price`) and attributes (`year`, `mileage`, `engine_volume`) "
+            "alike, with everything needed to DRAW it. What a from/to picker "
+            "is made of: a range axis has no values to enumerate, so `facets` "
+            "says nothing about it and a client without these two numbers "
+            "either draws no picker or draws one over a guess. Measured with "
+            "the range filters REMOVED, so the ends are the domain the picker "
+            "can be widened back to and not the ends of its own selection. An "
+            "axis absent here either has no numbers behind it in this "
+            "candidate set — a different fact from a bound of zero — or was "
+            "WITHHELD, and then it is named in `withheld` with the reason. "
+            "Capped by MAX_FACET_FIELDS since 0.16.0: the budget is how wide "
+            "a panel may be, and a from/to picker is as wide as a bucket "
+            "list. Empty, with `facet_ranges` in `degraded[]`, on an engine "
+            "that does not implement the optional `ranges` verb."
+        ),
     )
     plan = serializers.CharField(
         help_text=(
@@ -148,15 +232,27 @@ class FacetMetaSerializer(serializers.Serializer):
         )
     )
     withheld = serializers.ListField(
-        child=serializers.DictField(),
+        child=WithheldAxisSerializer(),
         help_text=(
-            "`{slug, coverage, candidates}` for groups that were counted and "
-            "then withheld because they describe too little of the result "
-            "set (FACET_MIN_COVERAGE). Present so a panel can say «3 filters "
-            "apply to too few of these» instead of «no filters» — the second "
-            "is false whenever this list is not empty. Only slugs the "
-            "evidence plan borrowed from another category are ever here, and "
-            "never one the reader has already filtered on."
+            "Axes this answer planned and then did not offer, each naming "
+            "which half of the panel it is about (`axis`) and why (`reason`). Present so a panel can say «3 filters apply to too "
+            "few of these» instead of «no filters» — the second is false "
+            "whenever this list is not empty.\n\n"
+            "`coverage` — counted, then withheld for describing too little "
+            "of the result set (FACET_MIN_COVERAGE), with the two numbers. "
+            "For a GROUP only slugs the evidence plan borrowed from another "
+            "category are ever measured, because a group the queried "
+            "category authored answers with its zeros on purpose; for a "
+            "RANGE every non-core axis is, because a range has no zeros to "
+            "answer with and a slider over three of fifty-two documents "
+            "narrows nothing whoever authored it.\n\n"
+            "`unlabelled` (0.16.0, ranges) — no caption could be resolved "
+            "from any source, so a client could only print the storage slug "
+            "above the picker. `doors` and `kilometrage` in a chip row is an "
+            "axis that was there and unreadable.\n\n"
+            "An axis the reader has already filtered on is never withheld "
+            "for any reason: that would leave the filter applied with no "
+            "control to undo it."
         ),
     )
     categories = serializers.ListField(
@@ -228,6 +324,20 @@ class FacetLabelsSerializer(serializers.Serializer):
         required=False,
         help_text="The vocabulary level `vocabulary` resolves against. Present only "
         "alongside a non-null `vocabulary`.",
+    )
+    order = serializers.IntegerField(
+        allow_null=True,
+        help_text=(
+            "Where this group sits in ONE panel, numbered together with the "
+            "numeric axes in `facet_meta.ranges` — draw both halves sorted by "
+            "it and price and year land where the category's schema puts "
+            "them, among the makes and models rather than below all of them. "
+            "Core ranges take the first positions (they exist for every "
+            "document in every category); the rest follow the plan's own "
+            "order, which for a category's own schema is mandatory first and "
+            "then as authored. `null` when the plan has no position for the "
+            "group, which a client sorts last."
+        ),
     )
 
 

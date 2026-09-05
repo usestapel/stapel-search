@@ -493,18 +493,46 @@ class FacetPlan:
     #: definition is simply absent: the answer says ``label: null`` for it
     #: rather than inventing a heading out of the slug.
     group_labels: dict[str, tuple[str, bool]] = field(default_factory=dict)
+    #: ``{slug: unit}`` — the unit a MEASUREMENT is written in, read off the
+    #: feature config the same way the group's name is (``postfix``; the base
+    #: unit of the family for ``convertible_unit``, which is what the stored
+    #: number is in). A range answers with two numbers and nothing else, so
+    #: without this a panel draws «40 000 … 120 000» and the reader has to
+    #: guess whether that is kilometres, miles or hours. Absent for an axis
+    #: whose definition names no unit — which is a different fact from an
+    #: empty one, and the answer omits the key rather than sending "".
+    units: dict[str, str] = field(default_factory=dict)
     #: Reserved range slugs that address a core document column
     #: (``index_schema.CORE_RANGE_FIELDS``). Not part of ``slugs``: there is
     #: nothing to count, only an axis to offer.
     core_ranges: tuple[str, ...] = ()
-    #: Every slug the category admitted, UNCAPPED — the axes a range report
-    #: may put bounds on. Deliberately not ``slugs``: the facet budget ranks
-    #: a choice above a measurement (``facets._facet_rank``), so `mileage`
-    #: and `engine_volume` are routinely past ``MAX_FACET_FIELDS`` while
-    #: being exactly the axes a from/to picker is drawn for. A bound costs
-    #: one grouped aggregate for all of them together, not one pass each,
-    #: so the budget that governs counting does not govern this.
+    #: The axes a range report may put bounds on — the plan's own slugs, on
+    #: the plan's own budget since 0.16.0.
+    #:
+    #: It was uncapped until then, because a bound costs one grouped
+    #: aggregate for every axis at once and the budget that governs counting
+    #: need not govern a free measurement. That reasoning is about the
+    #: SERVER's cost, and the budget is not about the server's cost: it is
+    #: how wide a panel may be. Uncapped, a phones leaf shipped six wholesale
+    #: measurements past a ``MAX_FACET_FIELDS`` of twelve, and a from/to
+    #: picker takes exactly as much of a rail as a bucket list does.
+    #:
+    #: Still not the same list as ``slugs``: a TERM axis can carry numbers
+    #: too (an imported leaf's ``year`` is a ``ref_select`` of numeric codes),
+    #: so every admitted slug in the budget is offered to the bounder and the
+    #: side table decides which of them has a number behind it.
     range_candidates: tuple[str, ...] = ()
+    #: ``{slug: position}`` — where each axis sits in ONE panel, groups and
+    #: ranges numbered together. The client needs it because the two halves
+    #: arrive in different keys (``facets`` / ``facet_meta.ranges``) and a
+    #: panel that draws all the choices and then all the measurements is not
+    #: the page the category authored: on a cars leaf the schema puts «Цена»
+    #: and «Год» among the makes and models, not below them. Core ranges take
+    #: the first positions — they address a column every document in every
+    #: corpus has, so they precede anything a category authored — and the
+    #: rest follow in the plan's own order (mandatory first, then as
+    #: authored, for a category's own schema).
+    order: dict[str, int] = field(default_factory=dict)
     #: The subset of ``slugs`` admitted by the CANDIDATE SET's categories
     #: rather than by the queried category's own schema (``evidence_plan``).
     #: Empty for an authored plan. Only these are governed by

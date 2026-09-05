@@ -81,6 +81,27 @@ SERVICE_READ_PATH_PREFIXES = ("result.",)
 #: rather than inside one backend.
 CORE_RANGE_FIELDS: dict[str, str] = {"price": "price_base"}
 
+#: The caption a core range axis carries, as ``{slug: (label, translatable)}``
+#: — the same pair a facet group's ``label`` ships as.
+#:
+#: Every other axis reads its name off the category's own feature definition,
+#: because the category authored it. A core range has no definition to read:
+#: it addresses a column of the document, is offered in every category and in
+#: none, and so the caption is this library's to own. It is a translation KEY
+#: rather than a word, for the same reason a feature's ``translate`` mode
+#: exists — «Цена» is not a fact about the index.
+#:
+#: This matters more than it looks: since 0.16.0 a range with no resolvable
+#: label is WITHHELD (``facet_meta.withheld``, reason ``unlabelled``), because
+#: a chip row printing `doors` and `kilometrage` at a reader is an axis that
+#: was there and unreadable. Without an entry here, price — the one axis every
+#: corpus has — would be the first thing that rule removed.
+#:
+#: No unit: a price's unit is its CURRENCY, which is a property of each
+#: document rather than of the axis, and the bounds are in the corpus's base
+#: currency (``price_base``). A client already knows that and formats it.
+CORE_RANGE_LABELS: dict[str, tuple[str, bool]] = {"price": ("search.range.price", True)}
+
 
 @dataclass(frozen=True)
 class IndexField:
@@ -439,6 +460,10 @@ def index_schema() -> dict:
         "query_read_path_prefixes": list(QUERY_READ_PATH_PREFIXES),
         "service_read_path_prefixes": list(SERVICE_READ_PATH_PREFIXES),
         "core_range_fields": dict(CORE_RANGE_FIELDS),
+        "core_range_labels": {
+            slug: {"label": label, "label_translatable": translatable}
+            for slug, (label, translatable) in CORE_RANGE_LABELS.items()
+        },
         "model_columns": INDEX_MODEL_COLUMNS,
         "fields": [asdict(f) for f in INDEX_FIELDS],
     }
@@ -489,6 +514,7 @@ def _collect(attribute: str) -> tuple[str, ...]:
 
 __all__ = [
     "CORE_RANGE_FIELDS",
+    "CORE_RANGE_LABELS",
     "INDEX_FIELDS",
     "INDEX_MODEL_COLUMNS",
     "KINDS",

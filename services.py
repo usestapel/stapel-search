@@ -886,22 +886,168 @@ def _honest_count(result, *, offset: int, shown: int) -> tuple[int | None, bool]
     return total, bool(getattr(result, "total_is_lower_bound", False))
 
 
-def _range_payload(bounds) -> dict[str, dict]:
-    """``{slug: (low, high)}`` -> ``{slug: {"min": n, "max": n}}``.
+def _range_payload(bounds) -> tuple[dict[str, dict], dict[str, int]]:
+    """``{slug: (low, high[, documents])}`` -> the payload and the coverages.
 
     Numbers, not strings. A price crosses the wire as a string on the CARD
     because a written price must not be rounded on its way to a human; a
     slider END is arithmetic the client does immediately, and handing it
     `"2015"` to parse buys nothing. Integral values render integral, so a
     year is `2015` and an engine volume is `1.4`.
+
+    The second half of the answer is ``{slug: documents}`` — how many
+    candidates carry a number on that axis — and it is separate from the
+    payload because it is not something a client is owed: it is what
+    :func:`_withheld_ranges` measures the coverage floor with, and a slug
+    withheld by it never reaches the payload at all. A backend still
+    answering two values simply contributes no entry here, and an axis whose
+    coverage cannot be measured is never withheld for it.
     """
     payload: dict[str, dict] = {}
-    for slug, pair in (bounds or {}).items():
-        low, high = pair
+    coverage: dict[str, int] = {}
+    for slug, entry in (bounds or {}).items():
+        low, high = entry[0], entry[1]
         if low is None or high is None:
             continue
         payload[str(slug)] = {"min": _number(low), "max": _number(high)}
-    return payload
+        if len(entry) > 2 and entry[2] is not None:
+            coverage[str(slug)] = int(entry[2])
+    return payload, coverage
+
+
+#: Why an axis the plan admitted did not reach the panel. A closed set: a
+#: client that branches on it has these three and nothing else, and an
+#: unknown value means it is older than the server.
+WITHHELD_COVERAGE = "coverage"
+WITHHELD_UNLABELLED = "unlabelled"
+WITHHELD_REASONS = (WITHHELD_COVERAGE, WITHHELD_UNLABELLED)
+
+#: Which half of the panel a withheld row is about. One slug can be both: an
+#: imported `year` is a bucket list AND a from/to, and the two are measured
+#: by different quantities over the same page (the sum of the buckets against
+#: the documents carrying a number). So a row names its half rather than
+#: leaving a reader to assume that a withheld slug means the axis is gone.
+AXIS_GROUP = "group"
+AXIS_RANGE = "range"
+
+
+def _range_label(slug: str, plan) -> tuple[str | None, bool, str | None]:
+    """``(label, translatable, unit)`` for one range axis.
+
+    The SAME source a facet group's heading comes from — the plan's
+    ``group_labels``, folded out of the category's own feature definitions —
+    because a group and a range are two ways of narrowing one authored
+    feature and nothing about the axis being numeric changes who named it. A
+    core range has no definition to read and takes its caption from
+    :data:`~stapel_search.index_schema.CORE_RANGE_LABELS`, which is this
+    library's, because the axis is this library's.
+
+    ``None`` for the label means the definition carries no name — which is
+    what made a live chip row read `doors`, `kilometrage`, `engine_volume`:
+    the answer shipped the bounds and nothing to write above them, and every
+    client that had no category schema in hand printed the storage slug at a
+    reader. It is now the condition for withholding the axis, and the
+    difference between "no name" and "a name this module invented out of the
+    slug" is the whole reason the fold refuses to fabricate one.
+    """
+    from .index_schema import CORE_RANGE_LABELS
+
+    if slug in CORE_RANGE_LABELS:
+        label, translatable = CORE_RANGE_LABELS[slug]
+        return label, bool(translatable), None
+    name, translatable = plan.group_labels.get(slug, (None, False))
+    return name, bool(translatable), plan.units.get(slug)
+
+
+def _withheld_ranges(payload, coverage, plan, q, candidates: int) -> list[dict]:
+    """The range axes that were bounded and must not be offered anyway.
+
+    Two rules, and the first one is new in 0.16.0 while the second is the
+    facet groups' own rule finally applied to the other half of the panel.
+
+    ``unlabelled`` — the axis has no caption from any source, so a client can
+    only print the slug above it. An axis a reader cannot name is not a
+    filter; it is a control whose meaning the reader has to infer from the
+    numbers in it.
+
+    ``coverage`` — fewer than ``FACET_MIN_COVERAGE`` of the candidates carry
+    a number on the axis. This is the measure ``facet_meta.withheld`` has
+    used for bucket lists since 0.14.9, applied to the measurement half:
+    a phones leaf shipped «Вес (Для Доставки), кг», «Количество в фасовке»
+    and four more wholesale axes over a handful of the fifty-two listings on
+    the page, and a from/to picker over three documents narrows nothing while
+    taking exactly as much of the rail as a real one.
+
+    Two exemptions carry over from the group rule verbatim — an axis the
+    reader has already FILTERED on is never withheld (that would leave the
+    filter applied with no control to undo it), and nothing is withheld when
+    the floor is 0 — and one does not. A group the QUERIED CATEGORY authored
+    is exempt there, because a closed option set answering with its zeros is
+    a shipped decision; a range has no zeros to answer with and no option set
+    to have decided about, so authorship says nothing about whether the axis
+    describes this page. What decides that is the count, and the count is the
+    same number either way.
+
+    An axis whose engine did not report a count is not withheld for coverage:
+    the floor cannot establish "describes too little" from a number it does
+    not have, which is the same exemption a bucket list capped at its bucket
+    limit already gets.
+    """
+    from .conf import search_settings
+
+    floor = float(search_settings.FACET_MIN_COVERAGE)
+    filtered = {spec.slug for spec in (q.ranges or ())}
+    core = set(plan.core_ranges)
+    withheld: list[dict] = []
+    for slug in payload:
+        if slug in filtered:
+            continue
+        label, _translatable, _unit = _range_label(slug, plan)
+        if not label:
+            withheld.append(
+                {"slug": slug, "axis": AXIS_RANGE, "reason": WITHHELD_UNLABELLED}
+            )
+            continue
+        # A core range addresses a column every document in every corpus has
+        # and is announced unconditionally (`core_ranges`); measuring its
+        # share of the page and then removing it would contradict the
+        # announcement in the same answer.
+        if slug in core or floor <= 0 or candidates <= 0 or slug not in coverage:
+            continue
+        documents = coverage[slug]
+        if documents < floor * candidates:
+            withheld.append(
+                {
+                    "slug": slug,
+                    "axis": AXIS_RANGE,
+                    "reason": WITHHELD_COVERAGE,
+                    "coverage": documents,
+                    "candidates": candidates,
+                }
+            )
+    return withheld
+
+
+def _range_meta(payload, plan) -> dict[str, dict]:
+    """The payload with every entry's caption, unit and panel position on it.
+
+    Called after the withholding pass, so every entry left here has a label
+    by construction — the answer never carries a range a client would have to
+    print a slug above.
+    """
+    out: dict[str, dict] = {}
+    for slug, bounds in payload.items():
+        label, translatable, unit = _range_label(slug, plan)
+        entry = {
+            **bounds,
+            "label": label,
+            "label_translatable": bool(translatable),
+            "order": plan.order.get(slug),
+        }
+        if unit:
+            entry["unit"] = unit
+        out[slug] = entry
+    return out
 
 
 def _number(value):
@@ -1565,13 +1711,14 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     # never fatal: a panel without bounds is worse than one with them, and
     # both are better than a 503 over a slider.
     range_bounds: dict[str, dict] = {}
+    range_coverage: dict[str, int] = {}
     range_degraded: tuple[str, ...] = ()
     bounder = getattr(backend, "ranges", None)
     if bounder is None:
         range_degraded = ("facet_ranges",)
     elif plan.range_candidates or plan.core_ranges:
         try:
-            range_bounds = _range_payload(bounder(q, plan))
+            range_bounds, range_coverage = _range_payload(bounder(q, plan))
         except Exception as exc:  # noqa: BLE001 — a bound is never fatal
             logger.warning("ranges failed on %s: %s", backend.name, exc)
             range_degraded = ("facet_ranges",)
@@ -1653,6 +1800,13 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     #    leaves the filter applied with no control to undo it;
     #  - everything, when FACET_MIN_COVERAGE is 0.
     withheld: list[dict] = []
+    # The plan BEFORE the group prune below, kept because the range half of
+    # the panel is labelled from it. A group withheld for describing too few
+    # documents and a range over the same slug are two measurements of two
+    # different things (a bucket sum against documents carrying a number),
+    # and letting the first one delete the second's caption would report the
+    # range as `unlabelled`, which would be a reason that is not true.
+    label_plan = plan
     if facet_result and plan.evidence:
         from .backends._shared import bucket_limit
 
@@ -1673,7 +1827,19 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 coverage = sum(values.values())
                 if coverage < floor * denominator:
                     withheld.append(
-                        {"slug": slug, "coverage": coverage, "candidates": denominator}
+                        {
+                            "slug": slug,
+                            # `axis` and `reason` are named since 0.16.0.
+                            # `withheld` used to hold one kind of thing, so
+                            # both were the list's identity; it now holds
+                            # ranges too, and a panel saying «3 filters apply
+                            # to too few of these» about an axis withheld for
+                            # having no name is a sentence that is not true.
+                            "axis": AXIS_GROUP,
+                            "reason": WITHHELD_COVERAGE,
+                            "coverage": coverage,
+                            "candidates": denominator,
+                        }
                     )
     withheld_slugs = {row["slug"] for row in withheld}
     if withheld_slugs:
@@ -1710,6 +1876,29 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             },
         )
 
+    # The measurement half of the panel, held to the same two rules: an axis
+    # nobody can name is not offered, and an axis that describes too little
+    # of this page is not offered. Both say so in `withheld` rather than
+    # vanishing, so a panel can tell "no filters here" from "these filters
+    # apply to too few of these", which are different pages.
+    #
+    # Run over the FULL bound set and after the group prune, because the two
+    # halves are independent: withholding «Вес (Для Доставки)» as a slider
+    # says nothing about the same slug's bucket list, and vice versa.
+    # No facet pass means no candidate total to take a share OF, so the
+    # coverage rule stands down and the naming rule still applies.
+    range_candidates_total = facet_result.candidates if facet_result else 0
+    withheld_range_rows = _withheld_ranges(
+        range_bounds, range_coverage, label_plan, q, range_candidates_total
+    )
+    if withheld_range_rows:
+        gone = {row["slug"] for row in withheld_range_rows}
+        range_bounds = {
+            slug: bounds for slug, bounds in range_bounds.items() if slug not in gone
+        }
+        withheld = withheld + withheld_range_rows
+    range_bounds = _range_meta(range_bounds, label_plan)
+
     counts = fill_zero_options(facet_result.counts, plan) if facet_result else {}
     count, count_is_lower_bound = _honest_count(result, offset=offset, shown=len(items))
     exact_total = bool(result.exact_total and count is not None and not count_is_lower_bound)
@@ -1744,6 +1933,13 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             "url_key": scope_keys.get(slug, slug),
             "translatable": bool(plan.translatable_labels.get(slug, True)),
             "values": dict(plan.option_labels.get(slug) or {}),
+            # Where this group sits in ONE panel, numbered with the RANGES —
+            # see FacetPlan.order. The two halves of a panel arrive in two
+            # keys (`facets` and `facet_meta.ranges`), and a client that draws
+            # every choice and then every measurement is not drawing the page
+            # the category authored: a cars schema puts «Год» among the makes
+            # and models, not below them.
+            "order": label_plan.order.get(slug),
         }
         # The vocabulary a client can't otherwise learn: a branch page has no
         # leaf schema of its own, and the plan's feature definition is the
@@ -1762,6 +1958,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             "label_translatable": False,
             "url_key": scope_keys.get(slug, slug),
             "vocabulary": ref[0] if ref else None,
+            "order": label_plan.order.get(slug),
         }
         if ref:
             default["level"] = ref[1]

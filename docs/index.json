@@ -25,6 +25,12 @@
   "core_range_fields": {
     "price": "price_base"
   },
+  "core_range_labels": {
+    "price": {
+      "label": "search.range.price",
+      "label_translatable": true
+    }
+  },
   "model_columns": {
     "SearchDocument": {
       "id": null,

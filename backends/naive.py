@@ -331,12 +331,22 @@ class NaiveSearchBackend:
         Pure Python over the same candidate walk the rest of this backend
         uses, so this is the reference semantics the conformance scenario
         holds Postgres to.
+
+        **Three values per axis since 0.16.0**: ``(low, high, documents)``.
+        The third is how many candidates carry a number on that axis at all,
+        and it is what lets the service apply the coverage floor to a range
+        the way it already applies it to a bucket list — six wholesale
+        measurements over three listings of fifty-two is not a filter. It
+        rides along with the aggregate that was already being taken, so it
+        costs nothing. A backend still answering two values keeps working:
+        the service reads the third only if it is there, and an axis whose
+        coverage cannot be measured is never withheld for it.
         """
         from ..index_schema import CORE_RANGE_FIELDS
         from ..models import SearchNumber
 
         rows = [row for _key, _value, _hit, row in self._rows(replace(q, ranges=()))]
-        out: dict[str, tuple[Decimal, Decimal]] = {}
+        out: dict[str, tuple[Decimal, Decimal, int]] = {}
         for slug in plan.core_ranges:
             column = CORE_RANGE_FIELDS.get(slug)
             if column is None:
@@ -345,20 +355,28 @@ class NaiveSearchBackend:
                 getattr(row, column) for row in rows if getattr(row, column) is not None
             ]
             if values:
-                out[slug] = (min(values), max(values))
+                out[slug] = (min(values), max(values), len(values))
         wanted = [slug for slug in plan.range_candidates if slug not in plan.hidden]
         if rows and wanted:
-            from django.db.models import Max, Min
+            from django.db.models import Count, Max, Min
 
             grouped = (
                 SearchNumber.objects.filter(
                     document_id__in=[row.id for row in rows], slug__in=wanted
                 )
                 .values("slug")
-                .annotate(low=Min("value"), high=Max("value"))
+                .annotate(
+                    low=Min("value"),
+                    high=Max("value"),
+                    # DISTINCT: a document with two numbers on one slug is one
+                    # document the axis describes, not two. Coverage is a share
+                    # of the candidate set, so its numerator has to count the
+                    # same things the denominator does.
+                    documents=Count("document_id", distinct=True),
+                )
             )
             for entry in grouped:
-                out[entry["slug"]] = (entry["low"], entry["high"])
+                out[entry["slug"]] = (entry["low"], entry["high"], int(entry["documents"]))
         return out
 
     def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:

@@ -1053,13 +1053,20 @@ class PostgresSearchBackend:
         The range filters are removed from the query first (all of them, in
         one pass), so a picker reports the domain it can still be widened
         to rather than the ends of its own current selection.
+
+        **Three values per axis since 0.16.0**: ``(low, high, documents)``.
+        The third is how many candidates carry a number on that axis, which
+        is what the service measures a range's coverage with — the same floor
+        it already applies to a bucket list. It is one more aggregate inside
+        the two that were already being taken, so the verb still costs two
+        round trips whatever the panel is made of.
         """
         self._require_postgres()
         from ..index_schema import CORE_RANGE_FIELDS
 
         unbounded = replace(q, ranges=())
         where_sql, where_params = self._where(unbounded, trigram=self._widened_arm(q))
-        out: dict[str, tuple[Decimal, Decimal]] = {}
+        out: dict[str, tuple[Decimal, Decimal, int]] = {}
 
         columns = [
             (slug, CORE_RANGE_FIELDS[slug])
@@ -1068,7 +1075,8 @@ class PostgresSearchBackend:
         ]
         if columns:
             projection = ", ".join(
-                f"min(d.{column}), max(d.{column})" for _slug, column in columns
+                f"min(d.{column}), max(d.{column}), count(d.{column})"
+                for _slug, column in columns
             )
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -1077,14 +1085,21 @@ class PostgresSearchBackend:
                 )
                 row = cursor.fetchone() or ()
             for position, (slug, _column) in enumerate(columns):
-                low, high = row[position * 2], row[position * 2 + 1]
+                low, high = row[position * 3], row[position * 3 + 1]
                 if low is not None and high is not None:
-                    out[slug] = (Decimal(str(low)), Decimal(str(high)))
+                    out[slug] = (
+                        Decimal(str(low)),
+                        Decimal(str(high)),
+                        int(row[position * 3 + 2] or 0),
+                    )
 
         wanted = [slug for slug in plan.range_candidates if slug not in plan.hidden]
         if wanted:
+            # count(DISTINCT n.document_id), not count(*): a document holding
+            # two numbers on one slug is one document the axis describes, and
+            # coverage is a share of the candidate set.
             sql = f"""
-                SELECT n.slug, min(n.value), max(n.value)
+                SELECT n.slug, min(n.value), max(n.value), count(DISTINCT n.document_id)
                   FROM {_TABLE} d
                   JOIN search_number n ON n.document_id = d.id
                  WHERE {where_sql} AND n.slug = ANY(%s::text[])
@@ -1092,8 +1107,8 @@ class PostgresSearchBackend:
             """
             with connection.cursor() as cursor:
                 cursor.execute(sql, list(where_params) + [wanted])
-                for slug, low, high in cursor.fetchall():
-                    out[slug] = (Decimal(str(low)), Decimal(str(high)))
+                for slug, low, high, documents in cursor.fetchall():
+                    out[slug] = (Decimal(str(low)), Decimal(str(high)), int(documents or 0))
         return out
 
     def category_counts(self, q: SearchQuery, *, limit: int) -> list[tuple[tuple[str, ...], int]]:

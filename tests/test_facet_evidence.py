@@ -234,11 +234,22 @@ def test_a_slug_only_a_handful_of_documents_carry_is_withheld(catalogue, branch_
         answer = search({"type": DOC_TYPE, "category": "branch"})
 
     assert set(answer["facet_meta"]["counted"]) == {"vendor", "memory"}
-    assert answer["facet_meta"]["withheld"] == [
-        {"slug": "cpu", "coverage": 1, "candidates": 9},
-        {"slug": "screen", "coverage": 1, "candidates": 9},
+    assert [
+        row for row in answer["facet_meta"]["withheld"] if row["axis"] == "group"
+    ] == [
+        {"slug": "cpu", "axis": "group", "reason": "coverage", "coverage": 1, "candidates": 9},
+        {"slug": "screen", "axis": "group", "reason": "coverage", "coverage": 1, "candidates": 9},
     ]
     assert "cpu" not in answer["facets"]
+    # `screen` is a number too, so the same page withholds its FROM/TO for
+    # the same reason and says so separately (0.16.0): one slug, two
+    # controls, two measurements over the same nine documents.
+    assert [
+        row for row in answer["facet_meta"]["withheld"] if row["axis"] == "range"
+    ] == [
+        {"slug": "screen", "axis": "range", "reason": "coverage", "coverage": 1, "candidates": 9},
+    ]
+    assert "screen" not in answer["facet_meta"]["ranges"]
 
 
 def test_a_withheld_slug_the_reader_has_already_chosen_is_never_taken_away(
@@ -251,7 +262,9 @@ def test_a_withheld_slug_the_reader_has_already_chosen_is_never_taken_away(
         answer = search({"type": DOC_TYPE, "category": "branch", "f.cpu": "intel"})
 
     assert "cpu" in answer["facets"]
-    assert [row["slug"] for row in answer["facet_meta"]["withheld"]] == ["screen"]
+    assert [
+        (row["slug"], row["axis"]) for row in answer["facet_meta"]["withheld"]
+    ] == [("screen", "group"), ("screen", "range")]
 
 
 def test_evidence_ranks_by_coverage_and_the_budget_goes_to_the_covered(
@@ -677,9 +690,13 @@ def test_the_unfiltered_feed_drops_the_minoritys_axes(mixed_catalogue, mixed_cor
     assert set(answer["facet_meta"]["counted"]) == {"condition", "material"}
     assert "memory_size" not in answer["facets"]
     assert "ram_size" not in answer["facets"]
-    assert answer["facet_meta"]["withheld"] == [
-        {"slug": "memory_size", "coverage": 20, "candidates": 90},
-        {"slug": "ram_size", "coverage": 20, "candidates": 90},
+    assert [
+        row for row in answer["facet_meta"]["withheld"] if row["axis"] == "group"
+    ] == [
+        {"slug": "memory_size", "axis": "group", "reason": "coverage",
+         "coverage": 20, "candidates": 90},
+        {"slug": "ram_size", "axis": "group", "reason": "coverage",
+         "coverage": 20, "candidates": 90},
     ]
 
 
@@ -729,7 +746,18 @@ def test_a_capped_bucket_list_is_never_withheld(mixed_catalogue, mixed_corpus):
         answer = search({"type": DOC_TYPE})
 
     assert "memory_size" in answer["facets"]
-    assert answer["facet_meta"]["withheld"] == []
+    assert [
+        row for row in answer["facet_meta"]["withheld"] if row["axis"] == "group"
+    ] == []
+    # The RANGE over the same slug is a different measurement and keeps its
+    # own answer: the count of documents carrying a number is exact whatever
+    # the bucket list was cut at, so the floor can establish what a capped
+    # sum cannot (0.16.0).
+    assert [
+        (row["slug"], row["reason"])
+        for row in answer["facet_meta"]["withheld"]
+        if row["axis"] == "range"
+    ] == [("memory_size", "coverage"), ("ram_size", "coverage")]
 
 
 # --------------------------------------------------------------------------
@@ -825,10 +853,9 @@ def test_a_borrowed_axis_is_still_governed_by_the_floor(mixed_catalogue, mixed_c
 
     answer = search({"type": DOC_TYPE})
 
-    assert [row["slug"] for row in answer["facet_meta"]["withheld"]] == [
-        "memory_size",
-        "ram_size",
-    ]
+    assert [
+        row["slug"] for row in answer["facet_meta"]["withheld"] if row["axis"] == "group"
+    ] == ["memory_size", "ram_size"]
 
 
 # --------------------------------------------------------------------------

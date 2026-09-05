@@ -421,6 +421,14 @@ def _s_range_bounds(ctx: Context) -> None:
 
     The corpus years are 2015, 2014 and 2020, and the prices 500, 300 and
     10 with one document carrying none.
+
+    Since 0.16.0 an entry is ``(low, high, documents)``. The third value is
+    the coverage numerator the service withholds a sparse range by, and it
+    has to come from the engine because only the engine knows how many
+    candidates carry a number on the axis at all — the unpriced document in
+    this corpus is the case that makes the count differ from the candidate
+    total. Two values are still accepted at the service layer; a shipped
+    engine answers three, and this is where that is held.
     """
     from .dto import FacetPlan, RangeFilter
 
@@ -431,9 +439,10 @@ def _s_range_bounds(ctx: Context) -> None:
     plan = FacetPlan(slugs=("year",), kinds={"year": "range"}, range_candidates=("year",),
                      core_ranges=("price",))
     bounds = fn(ctx.query(), plan)
-    assert bounds["year"] == (Decimal(2014), Decimal(2020))
-    # The unpriced document contributes no bound, and does not become a zero.
-    assert bounds["price"] == (Decimal("10.00"), Decimal("500.00"))
+    assert bounds["year"] == (Decimal(2014), Decimal(2020), 3)
+    # The unpriced document contributes no bound, does not become a zero, and
+    # is not counted as a document the price axis describes.
+    assert bounds["price"] == (Decimal("10.00"), Decimal("500.00"), 3)
 
     # Narrowed by everything EXCEPT the ranges: the category cuts the set,
     # the year filter does not cut its own axis.
@@ -442,7 +451,7 @@ def _s_range_bounds(ctx: Context) -> None:
         ranges=(RangeFilter(slug="year", lower=Decimal(2015), upper=Decimal(2015)),),
     )
     scoped_bounds = fn(scoped, plan)
-    assert scoped_bounds["year"] == (Decimal(2014), Decimal(2015)), (
+    assert scoped_bounds["year"][:2] == (Decimal(2014), Decimal(2015)), (
         "a bound narrowed by its own filter is a slider that can only narrow"
     )
 
