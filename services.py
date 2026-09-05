@@ -764,11 +764,31 @@ def rebuild(
       (:func:`prune_documents`) — the fix for orphans a soft tombstone left
       sitting in the table indefinitely;
     * *dry_run* (only meaningful with *prune*) reports the count that would
-      be deleted without deleting it.
+      be deleted without deleting it, and is the SAME query the apply runs
+      — one function, one flag, so the two can never disagree about which
+      keys are stale.
+
+    A live signal (``listing.created``/``.updated``) can land a row in the
+    table while this function is still paging the snapshot — a key the
+    export never names because it was created after the page that would
+    have carried it. ``seen`` alone cannot tell that row apart from a true
+    orphan: neither was returned by the snapshot. The guard is time, not
+    membership — ``run_started_at``, captured before the first page is
+    read: a row touched (``indexed_at``) at or after that moment was
+    written by THIS pass's own upserts or by a concurrent live write, and
+    either way it is fresher than the snapshot this run is diffing against,
+    so it is never a candidate. Only a row untouched since before the run
+    began, and absent from ``seen``, is a stale key — the one case where
+    "not in the snapshot" actually means "the source doesn't have it
+    anymore" rather than "arrived after we looked." Worst case this defers
+    pruning a genuine orphan that happened to be touched by an unrelated
+    concurrent write to the next run; it never deletes a document that is
+    live at the moment of deletion.
     """
     spec = get_source(doc_type)
     report = IndexReport()
     seen: set[str] = set()
+    run_started_at = timezone.now()
 
     for rows, _total in _snapshot_pages(spec, batch_size):
         inputs: list[SearchDocumentInput] = []
@@ -787,19 +807,17 @@ def rebuild(
 
     from .models import SearchDocument
 
+    untouched_since_start = SearchDocument.objects.filter(
+        doc_type=doc_type, indexed_at__lt=run_started_at
+    ).exclude(doc_key__in=seen)
+
     if prune:
-        stale_keys = list(
-            SearchDocument.objects.filter(doc_type=doc_type)
-            .exclude(doc_key__in=seen)
-            .values_list("doc_key", flat=True)
-        )
+        stale_keys = list(untouched_since_start.values_list("doc_key", flat=True))
         if stale_keys:
             report = report.merge(prune_documents(doc_type, stale_keys, dry_run=dry_run))
     else:
         stale_keys = list(
-            SearchDocument.objects.filter(doc_type=doc_type, visible=True)
-            .exclude(doc_key__in=seen)
-            .values_list("doc_key", flat=True)
+            untouched_since_start.filter(visible=True).values_list("doc_key", flat=True)
         )
         if stale_keys:
             report = report.merge(remove_documents(doc_type, stale_keys))

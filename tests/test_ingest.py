@@ -240,6 +240,69 @@ def test_rebuild_prune_dry_run_deletes_nothing(wired):
     assert SearchDocument.objects.filter(doc_key="2").exists()
 
 
+def test_rebuild_prune_dry_run_and_apply_agree_and_spare_every_live_row(wired):
+    """dry-run and apply are the same query behind one flag: on an unchanged
+    source they must report the same count, and apply must not touch a live
+    row's identity — checked by surviving primary key, not just by count."""
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import rebuild
+
+    for key in ("1", "2", "3", "4", "5"):
+        wired[key] = {"key": key, "status": "published", "title": f"Doc {key}", "seq": int(key)}
+    rebuild(DOC_TYPE)
+    live_ids = set(
+        SearchDocument.objects.filter(doc_key__in=("1", "2", "3")).values_list("id", flat=True)
+    )
+
+    del wired["4"]
+    del wired["5"]
+
+    dry = rebuild(DOC_TYPE, prune=True, dry_run=True)
+    assert dry.removed == 2
+    assert SearchDocument.objects.filter(doc_key__in=("4", "5")).count() == 2
+
+    applied = rebuild(DOC_TYPE, prune=True, dry_run=False)
+    assert applied.removed == dry.removed == 2
+    assert not SearchDocument.objects.filter(doc_key__in=("4", "5")).exists()
+
+    survivors = set(
+        SearchDocument.objects.filter(doc_key__in=("1", "2", "3")).values_list("id", flat=True)
+    )
+    assert survivors == live_ids, "a live row must survive --prune with its original identity"
+
+
+def test_rebuild_prune_never_deletes_a_row_written_during_the_run(wired, monkeypatch):
+    """A live signal can land a brand-new row while the snapshot is still
+    being paged: the export already answered without it, so its key is in
+    neither the old table state nor `seen`. That row is fresher than the
+    run diffing against, not an orphan, and --prune must not delete it."""
+    import stapel_search.services as services_module
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import ingest, rebuild
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    rebuild(DOC_TYPE)
+
+    original_pages = services_module._snapshot_pages
+
+    def racing_pages(spec, batch_size):
+        for rows, total in original_pages(spec, batch_size):
+            # A listing.created signal lands mid-scan, after the export
+            # already computed the page it is yielding.
+            wired["9"] = {"key": "9", "status": "published", "title": "Late arrival", "seq": 9}
+            ingest(DOC_TYPE, ["9"])
+            yield rows, total
+
+    monkeypatch.setattr(services_module, "_snapshot_pages", racing_pages)
+
+    report = rebuild(DOC_TYPE, prune=True)
+
+    assert SearchDocument.objects.filter(doc_key="9").exists(), (
+        "a row written during the run must survive --prune"
+    )
+    assert report.removed == 0
+
+
 def test_search_rebuild_command_prunes(wired, capsys):
     from django.core.management import call_command
 

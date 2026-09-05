@@ -4,6 +4,24 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.2] — 2026-09-05
+
+Patch. `rebuild()`'s `--prune` (and its tombstone path) could delete a row
+that was live at the moment of deletion: a `listing.created`/`.updated`
+signal landing while the multi-page snapshot was still being read produced
+a row absent from both the old table state and `seen`, which the stale-key
+query then treated as an orphan. Both paths now also require
+`indexed_at__lt=run_started_at`, a timestamp captured before the first
+snapshot page is read, so a row touched during or after this run — by its
+own upserts or by a concurrent live write — is never a deletion candidate
+regardless of `seen`.
+
+- `rebuild()` / `prune_documents()`: `run_started_at` gates every stale-key
+  query alongside `exclude(doc_key__in=seen)`.
+- New tests: dry-run and apply now provably agree and spare every live row
+  (checked by surviving primary key, not just by count), and a row written
+  mid-run by a racing signal is proven to survive `--prune`.
+
 ## [0.16.1] — 2026-09-05
 
 Patch. Orphaned index rows stop accumulating forever, and a drift report
