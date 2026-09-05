@@ -271,6 +271,32 @@ def test_rebuild_prune_dry_run_and_apply_agree_and_spare_every_live_row(wired):
     assert survivors == live_ids, "a live row must survive --prune with its original identity"
 
 
+def test_prune_documents_reports_documents_not_the_cascade_total(wired):
+    """`SearchNumber.document` cascades off `SearchDocument`: deleting one
+    orphaned document with several `SearchNumber` rows makes
+    `QuerySet.delete()`'s total larger than the document count. `removed`
+    must report documents in both branches, so dry-run and apply agree."""
+    from decimal import Decimal
+
+    from stapel_search.models import SearchDocument, SearchNumber
+    from stapel_search.services import prune_documents
+
+    doc = SearchDocument.objects.create(doc_type=DOC_TYPE, doc_key="orphan")
+    for slug, value in (("mileage", "1"), ("year", "2"), ("power", "3")):
+        SearchNumber.objects.create(document=doc, slug=slug, value=Decimal(value))
+
+    dry = prune_documents(DOC_TYPE, ["orphan"], dry_run=True)
+    assert dry.removed == 1
+    assert SearchDocument.objects.filter(doc_key="orphan").exists()
+
+    applied = prune_documents(DOC_TYPE, ["orphan"])
+    assert applied.removed == dry.removed == 1, (
+        "removed must count the document, not the cascaded SearchNumber rows"
+    )
+    assert not SearchDocument.objects.filter(doc_key="orphan").exists()
+    assert not SearchNumber.objects.filter(slug="mileage").exists()
+
+
 def test_rebuild_prune_never_deletes_a_row_written_during_the_run(wired, monkeypatch):
     """A live signal can land a brand-new row while the snapshot is still
     being paged: the export already answered without it, so its key is in

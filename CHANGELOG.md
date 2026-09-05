@@ -4,6 +4,21 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.3] — 2026-09-05
+
+Patch. `prune_documents()`'s dry-run and apply branches reported two
+different units under the same `IndexReport.removed` field: the dry run
+counted documents, but apply reported `QuerySet.delete()`'s cascade total,
+which also counts every `SearchNumber` row deleted along with its document.
+An operator running `--prune --dry-run` then `--prune` on the same
+unchanged catalogue could see "would prune 3" followed by "removed 25".
+
+- `prune_documents()` now takes the document count from `delete()`'s
+  per-model breakdown in both branches, so `removed` always means
+  documents. `IndexReport.removed` is documented as such.
+- New test: an orphaned document with several `SearchNumber` rows makes
+  dry-run and apply report the same count.
+
 ## [0.16.2] — 2026-09-05
 
 Patch. `rebuild()`'s `--prune` (and its tombstone path) could delete a row

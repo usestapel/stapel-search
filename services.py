@@ -42,6 +42,10 @@ class IndexReport:
     """What one indexing pass did — logged and returned, never invisible."""
 
     indexed: int = 0
+    #: Documents removed from the index — never a cascade total. A deleted
+    #: ``SearchDocument`` takes its ``SearchNumber`` rows with it, but those
+    #: are not what this field counts, and dry-run vs. apply must always
+    #: agree on this number.
     removed: int = 0
     skipped_stale: int = 0
     skipped_duplicate: int = 0
@@ -455,6 +459,14 @@ def prune_documents(doc_type: str, keys: Iterable[str], *, dry_run: bool = False
     ``dry_run`` reports the count that would be deleted and deletes nothing,
     so an operator can see the blast radius of a first ``--prune`` run on a
     catalogue nobody has pruned before.
+
+    ``IndexReport.removed`` counts **documents** in both branches.
+    ``QuerySet.delete()`` returns a total that includes every row CASCADEd
+    off a deleted document (``SearchNumber.document`` is one such FK) — that
+    total is a different, larger unit than the dry-run count, and reporting
+    it as ``removed`` made a dry run and its apply disagree on the same
+    catalogue for no real reason (an operator told "would prune 3" then
+    seeing "removed 25" reasonably assumes the release is broken).
     """
     from .models import SearchDocument
 
@@ -469,12 +481,13 @@ def prune_documents(doc_type: str, keys: Iterable[str], *, dry_run: bool = False
     from .backends import get_backend
 
     get_backend().delete(doc_type, listed)
-    deleted, _ = qs.delete()
-    if deleted:
+    _, by_label = qs.delete()
+    removed = by_label.get(SearchDocument._meta.label, 0)
+    if removed:
         from .suggest import invalidate_counts
 
         invalidate_counts(doc_type)
-    return IndexReport(removed=deleted)
+    return IndexReport(removed=removed)
 
 
 @transaction.atomic
