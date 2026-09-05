@@ -30,7 +30,8 @@ class Command(BaseCommand):
 
         line = (
             f"{report.name}: local={report.local} source={report.source} "
-            f"stale={report.stale} missing={len(report.missing_keys)}"
+            f"stale={report.stale} missing={len(report.missing_keys)} "
+            f"orphaned={len(report.orphaned_keys)}"
         )
         if report.in_sync:
             self.stdout.write(self.style.SUCCESS(line + " IN SYNC"))
@@ -40,5 +41,12 @@ class Command(BaseCommand):
             self.stdout.write(f"  missing: {key}")
         if len(report.missing_keys) > 20:
             self.stdout.write(f"  ... and {len(report.missing_keys) - 20} more")
+        # A missing key needs a re-pull; an orphaned one needs `rebuild
+        # --prune` — printed under its own label so the two are never read
+        # as the same problem.
+        for key in report.orphaned_keys[:20]:
+            self.stdout.write(f"  orphaned: {key}")
+        if len(report.orphaned_keys) > 20:
+            self.stdout.write(f"  ... and {len(report.orphaned_keys) - 20} more")
         if options["strict"]:
             raise CommandError("search index is not in sync with its source")

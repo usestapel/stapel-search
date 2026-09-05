@@ -4,6 +4,39 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] — 2026-09-05
+
+Patch. Orphaned index rows stop accumulating forever, and a drift report
+says which problem it found.
+
+`search_rebuild`'s stale-row handling only ever tombstoned (`visible=False`)
+what it found — left for `purge_tombstones`'s retention beat to delete
+later, which may run late or not be scheduled at all. A row whose source has
+been gone for a long time sat in the table indefinitely either way, and
+`search_drift_check` counted it toward `local` with no way to say why
+`local != source`: a source row this index has not pulled yet
+(`missing_keys`) and a row this index still shows after its source row is
+gone (now `orphaned_keys`) were folded into one unreadable delta.
+
+- **`search_rebuild --prune`** hard-deletes every row of the type whose key
+  is absent from the source's full snapshot — visible or already
+  tombstoned by an earlier run — instead of leaving it for the beat.
+  `--dry-run` (only meaningful with `--prune`) reports the count that would
+  be deleted without touching the table. Indexing itself is unaffected:
+  only the stale-row tail changes shape, and without `--prune` the original
+  tombstone-only behaviour is unchanged.
+- **`DriftReport.orphaned_keys`** — index-only keys, computed the same way
+  `missing_keys` is but in the other direction. `search_drift_check` now
+  prints `orphaned=N` alongside `missing=N` and lists sample keys under
+  their own `orphaned:` label, so a non-zero `local != source` reads as a
+  diagnosis instead of a number to stare at.
+- New `stapel_search.services.prune_documents(doc_type, keys, dry_run=...)`
+  — the hard-delete counterpart to `remove_documents`'s tombstone, on the
+  usage surface with its own intent line.
+
+`search_reconcile` is unchanged: it re-pulls only currently visible rows and
+never holds the source's full key set, so it has nothing to prune from.
+
 ## [0.16.0] — 2026-09-05
 
 Minor. A numeric axis is an axis a reader can NAME, on the same budget as

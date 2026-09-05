@@ -66,6 +66,13 @@ class DriftReport:
     Shape and property names are ``stapel_core.comm.projections.DriftReport``
     verbatim — a drift report that reads differently from every other
     module's is a report nobody's tooling can consume.
+
+    ``missing_keys`` and ``orphaned_keys`` are the two directions a count
+    mismatch can come from, and they are not the same problem: a missing key
+    is a source row this index has not pulled yet; an orphaned one is a row
+    this index still SHOWS after the source row it came from is gone. Only
+    ``rebuild --prune`` acts on the latter — telling the two apart is what
+    makes ``local != source`` a diagnosis instead of a number to stare at.
     """
 
     name: str
@@ -73,6 +80,7 @@ class DriftReport:
     source: int
     stale: int = 0
     missing_keys: tuple[str, ...] = field(default_factory=tuple)
+    orphaned_keys: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def in_sync(self) -> bool:
@@ -433,6 +441,43 @@ def remove_documents(doc_type: str, keys: Iterable[str]) -> IndexReport:
 
 
 @transaction.atomic
+def prune_documents(doc_type: str, keys: Iterable[str], *, dry_run: bool = False) -> IndexReport:
+    """Hard-delete index rows outright, instead of tombstoning them.
+
+    :func:`remove_documents` marks a row invisible and leaves it for
+    ``purge_tombstones`` — a beat job on its own retention window
+    (``TOMBSTONE_RETENTION_DAYS``), which may run late or not be scheduled
+    on a given deployment. Called from ``rebuild --prune`` against keys the
+    source's FULL snapshot no longer names — visible or already tombstoned
+    — this removes the row right away, which is the difference between
+    "orphans get cleaned up eventually" and "orphans accumulate forever".
+
+    ``dry_run`` reports the count that would be deleted and deletes nothing,
+    so an operator can see the blast radius of a first ``--prune`` run on a
+    catalogue nobody has pruned before.
+    """
+    from .models import SearchDocument
+
+    listed = [str(k) for k in keys]
+    if not listed:
+        return IndexReport()
+
+    qs = SearchDocument.objects.filter(doc_type=doc_type, doc_key__in=listed)
+    if dry_run:
+        return IndexReport(removed=qs.count())
+
+    from .backends import get_backend
+
+    get_backend().delete(doc_type, listed)
+    deleted, _ = qs.delete()
+    if deleted:
+        from .suggest import invalidate_counts
+
+        invalidate_counts(doc_type)
+    return IndexReport(removed=deleted)
+
+
+@transaction.atomic
 def reassign_owner(from_key, into_key) -> int:
     """Re-point every indexed document from one owner onto another.
 
@@ -702,8 +747,25 @@ def _snapshot_pages(spec: SourceSpec, batch_size: int):
             return
 
 
-def rebuild(doc_type: str, *, batch_size: int = 500) -> IndexReport:
-    """Rebuild the whole index for *doc_type* from the source of truth."""
+def rebuild(
+    doc_type: str, *, batch_size: int = 500, prune: bool = False, dry_run: bool = False
+) -> IndexReport:
+    """Rebuild the whole index for *doc_type* from the source of truth.
+
+    Indexing (the loop below) always runs for real — it is an idempotent
+    upsert either way. *prune* and *dry_run* only change how the STALE tail
+    is handled once the source's full key set for this run is known:
+
+    * without *prune* — the original behaviour: only currently VISIBLE rows
+      absent from the snapshot are tombstoned (:func:`remove_documents`),
+      left for ``purge_tombstones`` to delete later;
+    * with *prune* — every row of this type absent from the snapshot,
+      visible or already tombstoned, is hard-deleted
+      (:func:`prune_documents`) — the fix for orphans a soft tombstone left
+      sitting in the table indefinitely;
+    * *dry_run* (only meaningful with *prune*) reports the count that would
+      be deleted without deleting it.
+    """
     spec = get_source(doc_type)
     report = IndexReport()
     seen: set[str] = set()
@@ -725,13 +787,22 @@ def rebuild(doc_type: str, *, batch_size: int = 500) -> IndexReport:
 
     from .models import SearchDocument
 
-    stale_keys = list(
-        SearchDocument.objects.filter(doc_type=doc_type, visible=True)
-        .exclude(doc_key__in=seen)
-        .values_list("doc_key", flat=True)
-    )
-    if stale_keys:
-        report = report.merge(remove_documents(doc_type, stale_keys))
+    if prune:
+        stale_keys = list(
+            SearchDocument.objects.filter(doc_type=doc_type)
+            .exclude(doc_key__in=seen)
+            .values_list("doc_key", flat=True)
+        )
+        if stale_keys:
+            report = report.merge(prune_documents(doc_type, stale_keys, dry_run=dry_run))
+    else:
+        stale_keys = list(
+            SearchDocument.objects.filter(doc_type=doc_type, visible=True)
+            .exclude(doc_key__in=seen)
+            .values_list("doc_key", flat=True)
+        )
+        if stale_keys:
+            report = report.merge(remove_documents(doc_type, stale_keys))
     logger.info("search rebuild %s: %s", doc_type, report)
     return report
 
@@ -757,6 +828,7 @@ def drift_check(doc_type: str, *, batch_size: int = 500) -> DriftReport:
         SearchDocument.objects.filter(doc_type=doc_type).values_list("doc_key", "source_seq")
     )
     missing = tuple(sorted(set(source_rows) - set(local_rows)))
+    orphaned = tuple(sorted(set(local_rows) - set(source_rows)))
     stale = sum(1 for key, seq in source_rows.items() if local_rows.get(key, -1) < seq)
     return DriftReport(
         name=doc_type,
@@ -764,6 +836,7 @@ def drift_check(doc_type: str, *, batch_size: int = 500) -> DriftReport:
         source=total,
         stale=stale,
         missing_keys=missing,
+        orphaned_keys=orphaned,
     )
 
 

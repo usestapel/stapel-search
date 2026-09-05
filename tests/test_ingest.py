@@ -168,6 +168,122 @@ def test_drift_check_reports_without_repairing(wired):
     assert SearchDocument.objects.count() == 1, "drift_check must not repair silently"
 
 
+def test_drift_check_names_an_orphan_apart_from_a_missing_key(wired):
+    """A row the index still shows after its source row is gone, and a row
+    the source has that the index has not pulled yet, are not the same
+    problem — the report must say which is which."""
+    from stapel_search.services import drift_check, rebuild
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    wired["2"] = {"key": "2", "status": "published", "title": "Two", "seq": 2}
+    rebuild(DOC_TYPE)
+
+    del wired["2"]  # the source row is gone; the index still has it
+    rebuild(DOC_TYPE)  # default rebuild only TOMBSTONES it — still in the table
+
+    report = drift_check(DOC_TYPE)
+    assert report.orphaned_keys == ("2",)
+    assert report.missing_keys == ()
+    assert report.in_sync is False
+
+
+def test_rebuild_without_prune_leaves_the_orphan_row_in_the_table(wired):
+    """The behaviour this patch must not change: without --prune, a stale
+    row is tombstoned, not deleted — the pre-existing contract."""
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import rebuild
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    wired["2"] = {"key": "2", "status": "published", "title": "Two", "seq": 2}
+    rebuild(DOC_TYPE)
+
+    del wired["2"]
+    report = rebuild(DOC_TYPE)
+
+    assert report.removed == 1
+    row = SearchDocument.objects.get(doc_key="2")
+    assert row.visible is False, "still tombstoned, not gone"
+
+
+def test_rebuild_prune_deletes_the_orphan_row_outright(wired):
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import drift_check, rebuild
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    wired["2"] = {"key": "2", "status": "published", "title": "Two", "seq": 2}
+    rebuild(DOC_TYPE)
+
+    del wired["2"]
+    rebuild(DOC_TYPE)  # tombstone it first, as a live deployment already has
+    assert SearchDocument.objects.filter(doc_key="2").exists()
+
+    report = rebuild(DOC_TYPE, prune=True)
+
+    assert report.removed == 1
+    assert not SearchDocument.objects.filter(doc_key="2").exists()
+    assert drift_check(DOC_TYPE).in_sync is True
+
+
+def test_rebuild_prune_dry_run_deletes_nothing(wired):
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import rebuild
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    wired["2"] = {"key": "2", "status": "published", "title": "Two", "seq": 2}
+    rebuild(DOC_TYPE)
+
+    del wired["2"]
+
+    report = rebuild(DOC_TYPE, prune=True, dry_run=True)
+
+    assert report.removed == 1
+    assert SearchDocument.objects.filter(doc_key="2").exists()
+
+
+def test_search_rebuild_command_prunes(wired, capsys):
+    from django.core.management import call_command
+
+    from stapel_search.models import SearchDocument
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    wired["2"] = {"key": "2", "status": "published", "title": "Two", "seq": 2}
+    call_command("search_rebuild", "--type", DOC_TYPE)
+
+    del wired["2"]
+    call_command("search_rebuild", "--type", DOC_TYPE)  # tombstone
+
+    call_command("search_rebuild", "--type", DOC_TYPE, "--prune")
+
+    assert not SearchDocument.objects.filter(doc_key="2").exists()
+
+
+def test_search_rebuild_command_refuses_dry_run_without_prune(wired):
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+
+    with pytest.raises(CommandError):
+        call_command("search_rebuild", "--type", DOC_TYPE, "--dry-run")
+
+
+def test_search_drift_check_command_reports_orphaned(wired, capsys):
+    from django.core.management import call_command
+
+    wired["1"] = {"key": "1", "status": "published", "title": "One", "seq": 1}
+    wired["2"] = {"key": "2", "status": "published", "title": "Two", "seq": 2}
+    call_command("search_rebuild", "--type", DOC_TYPE)
+
+    del wired["2"]
+    call_command("search_rebuild", "--type", DOC_TYPE)  # tombstone, not delete
+
+    call_command("search_drift_check", "--type", DOC_TYPE)
+
+    out = capsys.readouterr().out
+    assert "orphaned=1" in out
+    assert "orphaned: 2" in out
+
+
 def test_signal_writes_an_audit_row_and_is_idempotent(wired):
     from stapel_search.models import SearchSignal
     from stapel_search.services import apply_signal

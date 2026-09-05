@@ -216,6 +216,13 @@
         "SearchDocument.objects.delete"
       ]
     },
+    "prune_documents": {
+      "kind": "factory",
+      "intent": "Hard-delete index rows outright instead of tombstoning them — what `rebuild --prune` calls on keys the source's full snapshot no longer names, so an orphan is gone immediately rather than waiting on the tombstone retention beat (or a deployment where it never runs).",
+      "instead_of": [
+        "SearchDocument.objects.filter(...).delete()"
+      ]
+    },
     "reassign_owner": {
       "kind": "factory",
       "intent": "Re-index every document from one owner_key onto another — table and engine both. What the user.merged handler calls when an account is folded into another; not a re-pull, because the source may not have processed the same merge yet and a missing document there means delete.",
