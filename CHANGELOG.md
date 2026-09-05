@@ -4,6 +4,65 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] — 2026-09-05
+
+Minor. A result row now says which seller it belongs to.
+
+### The wire contract: `items[].owner_key`
+
+A storefront drawing a seller panel per card had the id nowhere in the
+answer. It could FILTER by owner (`owner=<id>`, the read path `owner_key`
+has always had) but could not read the owner off a row, so a card either
+went without a seller line or the page paid one search per card to get the
+id back — a panel that costs N queries is a panel nobody ships.
+
+Every item now carries it:
+
+```json
+{
+  "key": "1",
+  "score": 1.4,
+  "promoted": false,
+  "owner_key": "u1",
+  "distance_km": null,
+  "card": {"title": "Apple iPhone 13 Pro"}
+}
+```
+
+The value is the opaque id the source indexed, which is the whole point:
+it is the same key `owner=` filters on, so a page collects the ids off its
+own result set and reads the profiles in ONE batched call by id. `""` when
+the source indexed no owner — never a missing key, so a client branches on
+the value and not on the shape.
+
+**No reindex.** `SearchDocumentInput.owner_key` is already part of the
+host's projection: `build_index_document` copies it onto every
+`IndexDocument` and the indexer writes it to `SearchDocument.owner_key`
+(`services.py`, the `row.owner_key = index_doc.owner_key` assignment), for
+the owner filter and for `user.merged`/`user.deleted` — this release reads
+a column that is already populated on every existing row. It costs no
+second query either: the response builder already holds the row it reads
+`promoted` and `card` from.
+
+Nothing else about the seller is exposed, and the id is neither a facet nor
+a scorer: it is not on the facet plan, not counted, not offered as a group,
+and no ranking rule reads it. This module stores an opaque key and knows
+nothing about a profile behind it.
+
+`index_schema.py` gains the second read path on the field it describes —
+`owner_key` is now `filter:owner` **and** `result.owner_key`, so the index
+contract says the id is readable off a hit instead of only filterable.
+
+### Verified
+
+Four tests: the id is on every item over the HTTP surface and matches the
+corpus owner per key; a row whose indexed owner is blank answers `""` with
+the key still present; the `search.query` comm Function serves the same
+field, not a thinner item; and the id appears in neither the facet meta nor
+the ranking disclosure. The exact item key set pinned by the bands suite is
+updated. `make contract` regenerated `docs/schema.json` (the new
+`SearchItem` property) and `docs/index.json` (the new read path).
+
 ## [0.14.9] — 2026-09-05
 
 Patch. A branch page had no way to tell a vocabulary-backed axis from an

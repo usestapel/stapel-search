@@ -172,9 +172,9 @@ INDEX_FIELDS: tuple[IndexField, ...] = (
         field="owner_key",
         kind="filter",
         source="listings.search_documents.owner_id",
-        read_paths=("filter:owner",),
+        read_paths=("filter:owner", "result.owner_key"),
         test=_T + "test_owner_key_filters_to_one_seller",
-        proves="the seller's own listings, and only those",
+        proves="the seller's own listings, and only those; the id rides on the hit",
     ),
     IndexField(
         field="category_path",

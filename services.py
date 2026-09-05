@@ -1598,6 +1598,13 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             # DSA Art. 26: present on EVERY item, under every sort,
             # including when it is false. The serializer cannot omit it.
             "promoted": bool(row.promoted) if row is not None else False,
+            # The seller this row belongs to, as the source named them. Read
+            # off the row already in hand, so a seller panel per card costs
+            # no second query here and one batched profile read at the
+            # client. Empty when the source indexed no owner — an absent
+            # value is "" and never a missing key, so a client branches on
+            # the value rather than on the shape.
+            "owner_key": str(row.owner_key or "") if row is not None else "",
             "distance_km": hit.distance_km,
             "card": _public_card(row, q.audience),
         }

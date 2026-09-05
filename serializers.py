@@ -23,6 +23,18 @@ class SearchItemSerializer(serializers.Serializer):
             "an optional field."
         )
     )
+    owner_key = serializers.CharField(
+        allow_blank=True,
+        help_text=(
+            "The seller this row belongs to, as the source named them — the "
+            "same opaque key `owner=` filters on. Present on every item so a "
+            "result page can draw a seller panel per card and read the "
+            "profiles in one batched call by id; `\"\"` when the source "
+            "indexed no owner, never a missing key. It is not a facet and "
+            "not a ranking input: this module stores the id and nothing "
+            "else about the seller."
+        ),
+    )
     distance_km = serializers.FloatField(
         allow_null=True,
         help_text=(

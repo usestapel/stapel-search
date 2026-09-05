@@ -170,7 +170,14 @@ def test_the_flag_off_answers_exactly_what_it_answered_before(api_client, corpus
     assert "bands" not in body
     assert {item["key"] for item in body["items"]} == ALL_KEYS
     for item in body["items"]:
-        assert set(item) == {"key", "score", "promoted", "distance_km", "card"}
+        assert set(item) == {
+            "key",
+            "score",
+            "promoted",
+            "owner_key",
+            "distance_km",
+            "card",
+        }
         assert set(item["card"]) <= {"title"}
 
 

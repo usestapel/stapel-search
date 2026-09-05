@@ -31,6 +31,43 @@ def test_every_item_carries_the_promoted_marker(api_client, conformance):
     assert all(item["promoted"] is False for item in body["items"])
 
 
+def test_every_item_carries_the_owner_key(api_client, conformance):
+    """A storefront draws a seller panel per card without a second search.
+
+    The value is the one the source indexed (`SearchDocumentInput.owner_key`,
+    stored on the row by the indexer), so it is the same opaque id `owner=`
+    filters on — which is what makes a batched profile read by id possible.
+    """
+    body = api_client.get(QUERY, {"type": DOC_TYPE}).json()
+    assert body["items"]
+    assert all("owner_key" in item for item in body["items"])
+    owners = {item["key"]: item["owner_key"] for item in body["items"]}
+    assert owners == {"1": "u1", "2": "u1", "3": "u1", "4": "u2"}
+
+
+def test_an_item_with_no_indexed_owner_answers_an_empty_string(api_client, conformance):
+    """Unknown is `""`, never a missing key: a client branches on the value."""
+    from stapel_search.models import SearchDocument
+
+    SearchDocument.objects.filter(doc_type=DOC_TYPE, doc_key="3").update(owner_key="")
+
+    body = api_client.get(QUERY, {"type": DOC_TYPE}).json()
+    orphan = next(item for item in body["items"] if item["key"] == "3")
+    assert orphan["owner_key"] == ""
+    assert all("owner_key" in item for item in body["items"])
+
+
+def test_the_owner_key_is_neither_a_facet_nor_a_scorer(api_client, conformance):
+    """It rides on the row and stays out of the panel and the ranking."""
+    body = api_client.get(QUERY, {"type": DOC_TYPE}).json()
+    assert "owner_key" not in body.get("facets", {})
+    assert "owner_key" not in body["facet_meta"]["counted"]
+    assert "owner_key" not in body["facet_meta"]["skipped"]
+
+    ranking = api_client.get(RANKING, {"type": DOC_TYPE}).json()
+    assert all("owner" not in entry["slug"] for entry in ranking["scorers"])
+
+
 def test_a_bad_request_answers_with_an_error_key(api_client, conformance):
     response = api_client.get(QUERY, {"type": "nope"})
     assert response.status_code == 400
@@ -138,6 +175,10 @@ def test_the_comm_function_serves_the_same_contract(conformance):
     body = call("search.query", {"type": DOC_TYPE, "limit": 2})
     assert len(body["items"]) == 2
     assert "degraded" in body and "facet_meta" in body
+    # Same rows, same fields: a caller assembling a strip server-side gets
+    # the seller id the HTTP surface serves, not a thinner item.
+    owners = {"1": "u1", "2": "u1", "3": "u1", "4": "u2"}
+    assert all(item["owner_key"] == owners[item["key"]] for item in body["items"])
 
 
 def test_the_reindex_function_targets_keys(conformance, monkeypatch):

@@ -110,10 +110,11 @@
       "kind": "filter",
       "source": "listings.search_documents.owner_id",
       "read_paths": [
-        "filter:owner"
+        "filter:owner",
+        "result.owner_key"
       ],
       "test": "tests/test_index_contract.py::test_owner_key_filters_to_one_seller",
-      "proves": "the seller's own listings, and only those"
+      "proves": "the seller's own listings, and only those; the id rides on the hit"
     },
     {
       "field": "category_path",
