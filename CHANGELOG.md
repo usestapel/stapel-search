@@ -434,7 +434,7 @@ Patch. A drawn area no longer erases the centre it was drawn around.
 
 ### Д262: `distance_km: null` on 15 of 15, and a distance on 24 of 24
 
-Live, on `ruberi.ru`, from ONE centre (55.7558, 37.6176):
+Live, on a client storefront, from ONE centre (55.7558, 37.6176):
 
 ```
 GET /query?type=listing&lat=…&lon=…&radius_km=25
