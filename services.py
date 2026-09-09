@@ -1199,6 +1199,29 @@ def _degradations(capabilities, q, facet_result, path_degraded: str, exact_total
     return tuple(dict.fromkeys(degraded))
 
 
+def _category_counts(backend, q) -> tuple[list[tuple[tuple[str, ...], int]], tuple[str, ...]]:
+    """Which categories *q*'s candidate set is made of, or why nobody knows.
+
+    Two readers, one aggregate: the facet PLAN is drawn from it when the
+    queried category's schema leaves the budget unfilled, and the answer
+    reports it as ``facet_meta.categories`` whatever the plan turned out to
+    be. Never silent — an empty rollup a client cannot tell from a missing
+    one is read as "zero in every category", which is how «Новые 0 · С
+    пробегом 0» was printed over three visible cars.
+    """
+    from .conf import search_settings
+
+    aggregate = getattr(backend, "category_counts", None)
+    if aggregate is None:
+        return [], ("facet_plan_evidence",)
+    limit = int(search_settings.FACET_EVIDENCE_CATEGORIES)
+    try:
+        return list(aggregate(q, limit=limit)), ()
+    except Exception as exc:  # noqa: BLE001 — a rollup is never fatal
+        logger.warning("category_counts failed on %s: %s", backend.name, exc)
+        return [], ("facet_plan_evidence",)
+
+
 def _drop_hidden_filters(q, plan) -> tuple[Any, tuple[str, ...]]:
     """Strip ``f.<slug>``/``r.<slug>`` filters on slugs the category hides.
 
@@ -1713,63 +1736,50 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     plan_source = "category"
     evidence_categories: list[tuple[tuple[str, ...], int]] = []
     plan_degraded: tuple[str, ...] = ()
+    counted_over = None
     if requested is None and int(search_settings.FACET_EVIDENCE_CATEGORIES) > 0:
-        # The trigger is "the queried category's own schema did not fill the
-        # budget", not "the category is a branch" — the second needs a tree
-        # walk this module has no business doing, and the first is the thing
-        # that actually matters. A wide leaf therefore pays NOTHING: its 19
-        # authored slugs are already over MAX_FACET_FIELDS and the aggregate
-        # is never run. A branch, a root and a text query all have an empty
-        # plan and land here.
+        # The trigger for WIDENING is "the queried category's own schema did
+        # not fill the budget", not "the category is a branch" — the second
+        # needs a tree walk this module has no business doing, and the first
+        # is the thing that actually matters. A wide leaf is not widened: its
+        # 19 authored slugs are already over MAX_FACET_FIELDS. A branch, a
+        # root and a text query all have an empty plan and land here.
         #
         # A thin leaf pays one aggregate and gets its own plan back, because
         # the only category its candidate set contains is itself.
         if len(plan.slugs) < int(search_settings.MAX_FACET_FIELDS):
-            aggregate = getattr(backend, "category_counts", None)
-            if aggregate is None:
-                # Never silent. An empty panel that cannot say why is
-                # indistinguishable from a corpus with no axes, which is the
-                # lie D175 was: «Для этого поиска фильтров нет» over 46
-                # phones that all carry a manufacturer.
-                plan_degraded = ("facet_plan_evidence",)
-            else:
-                try:
-                    evidence_categories = list(
-                        aggregate(q, limit=int(search_settings.FACET_EVIDENCE_CATEGORIES))
+            evidence_categories, plan_degraded = _category_counts(backend, q)
+            counted_over = q
+            if evidence_categories:
+                widened = evidence_plan(
+                    [(path[-1], count) for path, count in evidence_categories],
+                    requested=requested,
+                    # The queried category's own plan is already in the
+                    # order the client draws it (schema order, mandatory
+                    # first). Widening adds axes BELOW it; it does not get
+                    # to reshuffle a page that has a schema — a thin leaf
+                    # widened from itself must come back identical.
+                    authored=plan.slugs + plan.skipped,
+                )
+                if widened.slugs:
+                    # The queried category AUTHORED these, so they are not
+                    # borrowed and the coverage floor does not govern them —
+                    # the exemption 0.14.3 states. Widening used to erase
+                    # it: `evidence_plan` marks everything it ranked, and a
+                    # thin leaf (fewer axes than the budget) is widened from
+                    # ITSELF, so its own mandatory axes then faced a 0.6
+                    # floor. A make filled by a third of a small leaf's
+                    # listings vanished from the panel with real buckets
+                    # behind it, and a vocabulary-backed group the client
+                    # cannot enumerate on its own is gone for good.
+                    authored = set(plan.slugs)
+                    plan = replace(
+                        widened,
+                        evidence=tuple(
+                            slug for slug in widened.evidence if slug not in authored
+                        ),
                     )
-                except Exception as exc:  # noqa: BLE001 — a plan is never fatal
-                    logger.warning("category_counts failed on %s: %s", backend.name, exc)
-                    plan_degraded = ("facet_plan_evidence",)
-                if evidence_categories:
-                    widened = evidence_plan(
-                        [(path[-1], count) for path, count in evidence_categories],
-                        requested=requested,
-                        # The queried category's own plan is already in the
-                        # order the client draws it (schema order, mandatory
-                        # first). Widening adds axes BELOW it; it does not get
-                        # to reshuffle a page that has a schema — a thin leaf
-                        # widened from itself must come back identical.
-                        authored=plan.slugs + plan.skipped,
-                    )
-                    if widened.slugs:
-                        # The queried category AUTHORED these, so they are not
-                        # borrowed and the coverage floor does not govern them —
-                        # the exemption 0.14.3 states. Widening used to erase
-                        # it: `evidence_plan` marks everything it ranked, and a
-                        # thin leaf (fewer axes than the budget) is widened from
-                        # ITSELF, so its own mandatory axes then faced a 0.6
-                        # floor. A make filled by a third of a small leaf's
-                        # listings vanished from the panel with real buckets
-                        # behind it, and a vocabulary-backed group the client
-                        # cannot enumerate on its own is gone for good.
-                        authored = set(plan.slugs)
-                        plan = replace(
-                            widened,
-                            evidence=tuple(
-                                slug for slug in widened.evidence if slug not in authored
-                            ),
-                        )
-                        plan_source = "evidence"
+                    plan_source = "evidence"
     # Extraction runs AFTER the plan (it needs an option space to resolve
     # against) and BEFORE the hidden-filter sweep, so a word that resolves
     # to a non-public slug is dropped by the same guard an explicit
@@ -1808,6 +1818,20 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     facet_result = None
     if plan.slugs and capabilities.facet_counts:
         facet_result = backend.facets(q, plan)
+
+    # The rollup the answer reports, measured beside `facets()` and
+    # `ranges()` over the SAME settled query they are — the plan's own
+    # aggregate ran before extraction and before the hidden-filter sweep, so
+    # it describes a candidate set the reader may never see. Reused when the
+    # query has not moved since, so a widened page still pays one aggregate.
+    rollup_degraded: tuple[str, ...] = ()
+    if int(search_settings.FACET_EVIDENCE_CATEGORIES) <= 0:
+        rollup: list[tuple[tuple[str, ...], int]] = []
+    elif counted_over == q:
+        # `plan_degraded` already says if that aggregate failed.
+        rollup = evidence_categories
+    else:
+        rollup, rollup_degraded = _category_counts(backend, q)
 
     # The BOUNDS of the numeric axes, which the counting verb cannot give:
     # a from/to picker has nothing to enumerate. Asked for whether or not
@@ -2107,12 +2131,13 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             # too few of these" instead of "no filters".
             "withheld": withheld,
             # The categories the candidate set is made of, busiest first —
-            # the evidence the plan was drawn from, and the material a panel
-            # needs to offer the CATEGORY as the first filter on a text
-            # search. Empty when the plan is the queried category's own.
+            # the evidence a widened plan was drawn from, and the material a
+            # panel needs to offer the CATEGORY itself as a filter. Reported
+            # under EVERY plan since 0.16.4: a client that draws partition
+            # chips from it reads an empty rollup as "zero in every
+            # category", which was «Новые 0 · С пробегом 0» over three cars.
             "categories": [
-                {"category": "/".join(path), "count": count}
-                for path, count in evidence_categories
+                {"category": "/".join(path), "count": count} for path, count in rollup
             ],
         },
         "next_anchor": next_anchor,
@@ -2141,6 +2166,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 + tuple(facet_result.degraded if facet_result else ())
                 + tuple(extraction.degraded if extraction is not None else ())
                 + plan_degraded
+                + rollup_degraded
                 + category_degraded
                 + range_degraded
             )

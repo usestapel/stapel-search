@@ -4,6 +4,33 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.4] — 2026-09-10
+
+Patch. A search answer reported `facet_meta.categories` only when the facet
+plan had been WIDENED from it. Any answer whose plan came from the queried
+category's own schema — a category that fills `MAX_FACET_FIELDS`, or a
+caller that named its own `facets=` — carried `plan: "category"` with
+`categories: []` while holding results in its children. A client drawing
+partition chips from that rollup cannot tell an empty one from a missing
+one, so a car category with three listings printed «Новые 0 · С пробегом 0»
+above a button reading «Показать 3 объявления».
+
+- `facet_meta.categories` is now reported under every plan, from the same
+  `category_counts` aggregate the evidence plan uses. Empty only when the
+  candidate set is, when `FACET_EVIDENCE_CATEGORIES` is 0, or when the
+  engine has no `category_counts` — and the last is `facet_plan_evidence`
+  in `degraded[]`, never a silent `[]`.
+- The rollup is measured over the SETTLED query, beside `facets()` and
+  `ranges()`: the plan's own aggregate runs before extraction and before
+  the hidden-filter sweep, so a page widened by a dropped `f.vin=` used to
+  be described by a candidate set the reader never saw. Reused, not
+  re-run, when the query has not moved since the plan was built.
+- No wire-shape change: same field, same type, same key.
+- New tests: a `plan: "category"` answer names its categories; one
+  parametrised test over every way a plan is chosen (budget filled,
+  caller-named axes, both, widened) asserting a non-empty rollup that sums
+  to `count`; the rollup after a hidden filter is dropped.
+
 ## [0.16.3] — 2026-09-05
 
 Patch. `prune_documents()`'s dry-run and apply branches reported two

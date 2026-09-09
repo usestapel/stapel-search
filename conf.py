@@ -86,6 +86,12 @@ DEFAULTS = {
     # set, not from the catalogue subtree: on the reference stand the
     # subtree of `elektronika` is 210 categories declaring 439 feature
     # definitions, and SEVEN of them hold a listing.
+    #
+    # The same aggregate is also the answer's `facet_meta.categories`, under
+    # every plan and not only a widened one (0.16.4) — a client draws its
+    # partition chips from it, and an empty rollup it cannot tell from a
+    # missing one reads as zero in every category. So 0 costs more than the
+    # widened plan: it also takes the rollup away.
     "FACET_EVIDENCE_CATEGORIES": 24,
     # A slug admitted by that aggregate must describe at least this
     # fraction of the candidate set, or it is withheld and SAID to be

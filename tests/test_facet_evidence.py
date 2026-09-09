@@ -80,6 +80,13 @@ CATALOGUE = {
         _select("memory", "64", "128"),
     ],
     "laptops": [_select("cpu", "intel", "amd"), _select("screen", "13", "15")],
+    # A parent that authors a schema INCLUDING a non-public slug, over two
+    # children that hold the listings: the partition shape with a filter the
+    # server has to drop before it counts anything.
+    "fleet": [
+        _select("colour", "red", "blue"),
+        {**_select("vin", "a", "b"), "visibility": "owner"},
+    ],
 }
 
 
@@ -462,8 +469,8 @@ def test_a_query_whose_strict_arm_answers_is_not_widened(catalogue, branch_corpu
 # --------------------------------------------------------------------------
 
 
-def test_a_leaf_whose_own_schema_fills_the_budget_pays_nothing(catalogue, branch_corpus):
-    """The authored plan stays authored, and costs no extra aggregate."""
+def test_a_leaf_whose_own_schema_fills_the_budget_is_not_widened(catalogue, branch_corpus):
+    """The authored plan stays authored — nothing is borrowed below it."""
     from stapel_search.services import search
 
     with tuned(**{"MAX_FACET_FIELDS": 2}):
@@ -1004,3 +1011,127 @@ def test_a_category_with_no_schema_of_its_own_ranks_by_evidence_alone(catalogue)
     assert plan.slugs == ("vendor", "memory", "cpu", "screen")
     assert plan.slugs == evidence_plan([("phones", 8), ("laptops", 1)], authored=()).slugs
     assert plan.evidence == plan.slugs, "every slug of it is borrowed"
+
+
+# --------------------------------------------------------------------------
+# 0.16.4 — an answer with results always names the categories behind them
+# --------------------------------------------------------------------------
+#
+# Measured on a client stand (2026-09-09): `/c/transport-avtomobili` shows
+# three cars, and the partition chips above them read «Все | Новые 0 | С
+# пробегом 0» over a button that reads «Показать 3 объявления». The chips are
+# drawn from `facet_meta.categories`, and the answer carried `plan:
+# "category"` with `categories: []` — no rollup at all, which a client can
+# only read as "every partition is zero".
+#
+# The rollup used to be a BYPRODUCT of widening the plan: the aggregate ran
+# only when the queried category's own schema left the budget unfilled. A
+# category with a full schema (cars authors 19 axes over a budget of 12), or
+# a caller that named its own `facets=`, got no aggregate and therefore no
+# rollup — while still holding results in its children.
+
+
+@pytest.fixture
+def fleet_corpus(conformance):
+    """Three listings under two children of a parent that authors a schema."""
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    conformance.backend.clear(DOC_TYPE)
+    SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(
+                doc_key=f"f{index}",
+                title=f"Машина {index}",
+                card={"title": f"Машина {index}"},
+                category_id="new" if index < 2 else "used",
+                category_path=("fleet", "new" if index < 2 else "used"),
+                features={"colour": {"type": "select", "value": ["red"]}},
+            )
+            for index in range(3)
+        ],
+    )
+    return None
+
+
+def _rollup(answer):
+    return {row["category"]: row["count"] for row in answer["facet_meta"]["categories"]}
+
+
+def test_a_category_plan_still_names_the_categories_behind_its_results(chips_parent):
+    """The stand's defect, in one assertion.
+
+    `MAX_FACET_FIELDS: 2` is the stand's cars category in miniature — an
+    authored schema that fills the budget, so nothing is widened and the
+    plan stays the category's own. Four listings, two children, and the
+    answer used to describe none of them.
+    """
+    from stapel_search.services import search
+
+    with tuned(**{"MAX_FACET_FIELDS": 2}):
+        answer = search({"type": DOC_TYPE, "category": "cars"})
+
+    assert answer["count"] == 4
+    assert answer["facet_meta"]["plan"] == "category"
+    assert _rollup(answer) == {"cars/new": 2, "cars/used": 2}
+
+
+@pytest.mark.parametrize(
+    "params, tuning, plan",
+    [
+        pytest.param({}, {"MAX_FACET_FIELDS": 2}, "category", id="schema-fills-budget"),
+        pytest.param({"facets": "year_int"}, {}, "category", id="caller-named-axes"),
+        pytest.param(
+            {"facets": "year_int"},
+            {"MAX_FACET_FIELDS": 2},
+            "category",
+            id="both",
+        ),
+        pytest.param({}, {}, "evidence", id="widened-from-evidence"),
+    ],
+)
+def test_every_plan_names_the_categories_behind_its_results(
+    chips_parent, params, tuning, plan
+):
+    """No plan may skip the rollup: an empty one reads as "all zero"."""
+    from stapel_search.services import search
+
+    with tuned(**tuning):
+        answer = search({"type": DOC_TYPE, "category": "cars", **params})
+
+    assert answer["count"] == 4
+    assert answer["facet_meta"]["plan"] == plan
+    rollup = _rollup(answer)
+    assert rollup, "results with no rollup are read as zero in every partition"
+    assert sum(rollup.values()) == answer["count"]
+
+
+def test_the_rollup_is_measured_over_the_page_it_describes(chips_parent):
+    """A filtered page's chips have to sum to the filtered count."""
+    from stapel_search.services import search
+
+    answer = search(
+        {"type": DOC_TYPE, "category": "cars", "f.make_ref_select": "lada"}
+    )
+
+    assert answer["count"] == 2
+    assert _rollup(answer) == {"cars/used": 2}
+
+
+def test_the_rollup_is_taken_after_a_hidden_filter_is_dropped(catalogue, fleet_corpus):
+    """The page widens when `f.vin=` is dropped; the rollup widens with it.
+
+    The plan's own aggregate runs BEFORE that sweep, so a rollup reused from
+    it counts a candidate set the reader never sees — zero chips over three
+    visible cards, the defect again through a second door.
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "fleet", "f.vin": "a"})
+
+    assert answer["facet_meta"]["dropped_filters"] == ["vin"]
+    assert answer["count"] == 3
+    assert _rollup(answer) == {"fleet/new": 2, "fleet/used": 1}

@@ -261,9 +261,16 @@ class FacetMetaSerializer(serializers.Serializer):
             "`{category, count}` — the categories this answer's candidate "
             "set is made of, busiest first, `category` being the same "
             "slash-joined id path the `category` filter takes. The evidence "
-            "the plan was drawn from, and what a panel needs to offer the "
-            "CATEGORY itself as the first filter on a text search. Empty "
-            "when the plan is the queried category's own."
+            "a widened plan was drawn from, and what a panel needs to offer "
+            "the CATEGORY itself as a filter — a partition chip row above a "
+            "category page is drawn from exactly this. Reported under EVERY "
+            "`plan` since 0.16.4, measured over the same candidate set "
+            "`count` and `facets` are, so the rows sum to the page. Empty "
+            "only when the candidate set is, when FACET_EVIDENCE_CATEGORIES "
+            "is 0, or when the engine cannot aggregate categories — and the "
+            "last is `facet_plan_evidence` in `degraded[]`, because an empty "
+            "rollup a client cannot tell from a missing one reads as «zero "
+            "in every category»."
         ),
     )
 
