@@ -1698,6 +1698,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         path_degradation,
         reset_path_degradation,
         url_keys,
+        vocabulary_extras,
         vocabulary_labels,
     )
     from .models import SearchDocument
@@ -2092,6 +2093,15 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             default["level"] = ref[1]
         facet_labels.setdefault(slug, default)
         facet_labels[slug].update({"translatable": False, "values": values})
+    # What the catalogue knows about a code besides its name — a colour's
+    # hue, today. Only for codes whose term carries a non-empty bag, and only
+    # from a resolver that offers the wider read; everything else keeps the
+    # answer it had. The key is absent rather than empty when nothing is
+    # carried, so a client can tell "this deployment has no bags" from "this
+    # axis has none", and draws its old fallback in both cases.
+    for slug, extras in vocabulary_extras(plan, counts).items():
+        if slug in facet_labels:
+            facet_labels[slug]["extras"] = extras
     answer = {
         "items": items,
         # The queried node in both addressable forms, or null when no

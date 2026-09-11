@@ -4,6 +4,35 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.5] — 2026-09-11
+
+Patch. A vocabulary-backed facet shipped a caption per counted code and
+nothing else, so a colour axis could name «Чёрный» and not draw it. The
+colour is not derivable on the client: the code is a transliteration
+(`chernyy`), not a CSS keyword, and the hue lives in the catalogue term's
+own `extra` bag alongside the label the panel already reads.
+
+- `facet_labels[<slug>].extras` — `{code: {…}}`, the vocabulary term's own
+  bag for the codes that carry a non-empty one. Present only where
+  something is carried: absent for a group whose counted codes carry
+  nothing, and absent entirely from a deployment whose resolver does not
+  serve bags, so a client cannot mistake "no bag here" for "bags are off".
+  The captions, the counts and every other key are untouched.
+- Read through the SAME resolver the captions come from, over the optional
+  `terms_with_extra(vocabulary, level)` (stapel-vocabularies 0.4.1),
+  duck-typed the way stapel-categories reads `terms`: a resolver without
+  the method yields no `extras` and raises nothing. One read per
+  (vocabulary, level) per answer — the method lists a LEVEL, so asking it
+  per bucket would read the catalogue once per value drawn — and two slugs
+  over the same level share the one read. A failing read is logged and the
+  group keeps the answer it had.
+- Wire: `docs/schema.json` gains the optional `extras` key on
+  `FacetLabels`. Additive — no existing key changes type, name or meaning.
+- New tests: the bag reaches the panel for exactly the codes that carry a
+  non-empty one (an empty bag and an unknown code both stay out); the
+  level is read once per answer, not once per value; a resolver offering
+  only `labels` ships no `extras` key and the captions still arrive.
+
 ## [0.16.4] — 2026-09-10
 
 Patch. A search answer reported `facet_meta.categories` only when the facet

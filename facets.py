@@ -446,6 +446,82 @@ def vocabulary_labels(
     return out
 
 
+def vocabulary_extras(
+    plan: FacetPlan, counts: dict[str, dict[str, int]]
+) -> dict[str, dict[str, dict]]:
+    """The source catalogue's own bag per counted code, where it carries one.
+
+    A caption says what a code is called; this says what the catalogue KNOWS
+    about it beyond its name — the case in hand is a colour term carrying
+    ``{"hue": "#1a1a1a"}``, which is the difference between a facet that
+    prints «Чёрный» and one that prints a black square beside it. A client
+    cannot derive the hue: ``chernyy`` is a transliteration, not a colour
+    keyword, and no amount of guessing turns it into ``#1a1a1a``.
+
+    Read through ``terms_with_extra(vocabulary, level)`` when the registered
+    resolver offers it, duck-typed exactly as stapel-categories reads
+    ``terms``: a resolver without the method yields nothing and the answer
+    simply has no ``extras`` key. The bag is an OVERLAY on a panel that was
+    already complete, never a precondition for one.
+
+    One call per (vocabulary, level) per answer — the reader lists a LEVEL,
+    not a code, so asking it per value would be one full level read per
+    bucket. Two slugs pointing at the same level share the one read.
+    """
+    if not plan.vocabulary_refs:
+        return {}
+    try:
+        from stapel_attributes.vocabularies import get_vocabulary_resolver
+    except ImportError:  # pragma: no cover - stapel-attributes is a hard dep
+        return {}
+
+    resolver = get_vocabulary_resolver()
+    if resolver is None:
+        return {}
+    reader = getattr(resolver, "terms_with_extra", None)
+    if reader is None:
+        return {}
+
+    by_level: dict[tuple[str, str], dict[str, dict]] = {}
+    out: dict[str, dict[str, dict]] = {}
+    for slug, (vocabulary, level) in plan.vocabulary_refs.items():
+        codes = [code for code in (counts.get(slug) or {}) if code]
+        if not codes:
+            continue
+        key = (vocabulary, level)
+        if key not in by_level:
+            by_level[key] = _level_extras(reader, vocabulary, level, slug)
+        bags = by_level[key]
+        extras = {code: dict(bags[code]) for code in codes if bags.get(code)}
+        if extras:
+            out[slug] = extras
+    return out
+
+
+def _level_extras(reader: Any, vocabulary: str, level: str, slug: str) -> dict:
+    """``{code: extra}`` for one vocabulary level, empty for anything unread."""
+    try:
+        rows = reader(vocabulary, level) or []
+    except Exception as exc:  # noqa: BLE001 — an overlay is never fatal
+        logger.warning(
+            "vocabulary extras unavailable for facet %r (%s/%s): %s",
+            slug,
+            vocabulary,
+            level,
+            exc,
+        )
+        return {}
+    bags: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, (tuple, list)) or len(row) < 3:
+            continue
+        code, extra = row[0], row[2]
+        if code in (None, "") or not isinstance(extra, dict) or not extra:
+            continue
+        bags[str(code)] = extra
+    return bags
+
+
 def _feature_defs(category_id: Any) -> tuple[list[dict], Any]:
     """``categories.features`` for *category_id*, revision-cached."""
     from stapel_core.comm import call

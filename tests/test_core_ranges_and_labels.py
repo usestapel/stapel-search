@@ -421,6 +421,101 @@ def test_no_resolver_registered_still_answers_and_still_names_the_group(
     assert answer["facets"]["vendor"]["apple"] == 1
 
 
+@pytest.fixture
+def swatch_resolver():
+    """A resolver that also offers the WIDER read — `terms_with_extra`.
+
+    Same three terms as `vendor_resolver`, two of them carrying the source
+    catalogue's own bag. `hue` is the case this exists for: a term's colour
+    cannot be derived from its code, because the code is a transliteration
+    and not a colour keyword.
+    """
+    from stapel_attributes.vocabularies import register_vocabulary_resolver
+
+    TERMS = {"apple": "Apple", "xiaomi": "Xiaomi", "realme": "realme"}
+    EXTRA = {"apple": {"hue": "#1a1a1a"}, "xiaomi": {"hue": "#ff6900"}, "realme": {}}
+
+    class _Resolver:
+        levels: list[tuple] = []
+
+        def describe(self, vocabulary):
+            return None
+
+        def exists(self, vocabulary, level, code):
+            return code in TERMS
+
+        def is_child(self, vocabulary, level, code, parent_level, parent_code):
+            return False
+
+        def labels(self, vocabulary, level, codes):
+            return {code: TERMS[code] for code in codes if code in TERMS}
+
+        def terms_with_extra(self, vocabulary, level, parent=None, limit=None):
+            _Resolver.levels.append((vocabulary, level))
+            return [(code, label, EXTRA[code]) for code, label in TERMS.items()]
+
+    resolver = _Resolver()
+    register_vocabulary_resolver(resolver)
+    yield resolver
+    register_vocabulary_resolver(None)
+    _Resolver.levels.clear()
+
+
+def test_a_terms_bag_reaches_the_panel_for_the_codes_that_carry_one(
+    conformance, labelled_category, swatch_resolver
+):
+    """The overlay a caption cannot carry.
+
+    A panel drawing a swatch needs `#1a1a1a`, and `chernyy` is not a colour
+    keyword — nothing on the client can turn one into the other. The bag is
+    the catalogue's own, shipped beside the captions it already ships.
+    """
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
+    group = answer["facet_labels"]["vendor"]
+    assert group["extras"] == {
+        "apple": {"hue": "#1a1a1a"},
+        "xiaomi": {"hue": "#ff6900"},
+    }
+    # `realme` carries an EMPTY bag and `ghost-vendor` is not in the
+    # catalogue at all: neither gets a key, so a client cannot tell them
+    # apart from a code it simply has no bag for — which is the truth.
+    assert "realme" not in group["extras"]
+    assert "ghost-vendor" not in group["extras"]
+    # The captions the panel already had are untouched by the wider read.
+    assert group["values"]["realme"] == "realme"
+
+
+def test_the_bag_is_read_once_per_level_not_once_per_value(
+    conformance, labelled_category, swatch_resolver
+):
+    """`terms_with_extra` lists a LEVEL, so asking it per bucket would read
+    the whole catalogue once per value drawn."""
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
+    assert len(answer["facets"]["vendor"]) > 1, "more than one bucket counted"
+    assert swatch_resolver.levels == [("phones", "Vendor")]
+
+
+def test_a_resolver_without_the_wider_read_ships_no_extras_key(
+    conformance, labelled_category, vendor_resolver
+):
+    """`vendor_resolver` offers `labels` and nothing else — the shape every
+    deployment had before the bag existed. The key is ABSENT, not empty, and
+    nothing is raised: a panel is exactly what it was."""
+    from stapel_search.services import search
+
+    _index_vendor_docs()
+    answer = search({"type": DOC_TYPE, "category": "c1", "facets": "vendor"})
+    group = answer["facet_labels"]["vendor"]
+    assert "extras" not in group
+    assert group["values"]["apple"] == "Apple", "captions unaffected"
+
+
 def test_the_answer_ships_the_captions_beside_the_counts(
     conformance, labelled_category
 ):

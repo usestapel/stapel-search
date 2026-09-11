@@ -315,6 +315,22 @@ class FacetLabelsSerializer(serializers.Serializer):
         )
     )
     values = serializers.DictField(child=serializers.CharField())
+    extras = serializers.DictField(
+        child=serializers.DictField(),
+        required=False,
+        help_text=(
+            "{value: {…}} — what the vocabulary term carries BESIDES its "
+            "caption, for the codes that carry anything. A colour level's "
+            "terms carry `hue` (`{\"hue\": \"#1a1a1a\"}`), which is how a "
+            "facet draws the swatch beside «Чёрный»: the code is a "
+            "transliteration (`chernyy`), so no client can derive the colour "
+            "from it. Absent entirely when no counted code of this group "
+            "carries a bag, or when the deployment's vocabulary resolver "
+            "does not serve them — a client keeps whatever fallback it drew "
+            "before. Keys inside a bag are the source catalogue's own; read "
+            "the ones you know and ignore the rest."
+        ),
+    )
     vocabulary = serializers.CharField(
         allow_null=True,
         help_text=(
@@ -480,7 +496,9 @@ class SearchResponseSerializer(serializers.Serializer):
             "definition has no name; `values` is empty for a slug whose "
             "options are not inline in the category schema and whose "
             "vocabulary resolved nothing, because this module will not "
-            "invent a caption it has not read. `vocabulary` names the "
+            "invent a caption it has not read. `extras` carries what a term "
+            "holds besides its caption (a colour's `hue`) and is present "
+            "only for the codes that hold anything. `vocabulary` names the "
             "vocabulary a `ref_select` axis reads its options from and is "
             "null for an inline `select` — the only way a client with no "
             "leaf schema of its own can tell the two apart."
