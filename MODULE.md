@@ -554,9 +554,18 @@ computed as `_Fold.weight` — separates them:
 
 | `declared_for` vs candidates | the sentence | the floor |
 | --- | --- | --- |
-| equal | every candidate's category has this axis, so a low count means **most sellers left it blank** — still a filter for the ones who did not | `coverage >= 0.15 * declared_for` and at least 2 documents |
-| less | the axis belongs to SOME children only — **this filter applies to few of these listings** | `FACET_MIN_COVERAGE`, unchanged |
+| `>= 0.85 x` | effectively every candidate's category has this axis, so a low count means **most sellers left it blank** — still a filter for the ones who did not | `coverage >= 0.15 * declared_for` and at least 2 documents |
+| below it | the axis belongs to SOME children only — **this filter applies to few of these listings** | `FACET_MIN_COVERAGE`, unchanged |
 | unknown | a plan that recorded no weight | unchanged — exactly the rule that stood before |
+
+`FACET_LEAF_DECLARED_SHARE` is 0.85 and it is a SHARE rather than an equality
+because 0.17.0 shipped the equality and it did not fire. The live flats
+parent's candidates span four leaves and the smallest declares neither the
+bathroom axis nor the kitchen-area one: 30 of 34 fell into the union branch
+and stayed hidden. 0.88 and 1.00 are the same sentence. 0.85 is where the
+measured stand splits — the two 0.88 axes return, and the sale-method axis at
+0.62 does not, which is correct, since only the selling side of the catalogue
+has sale options at all.
 
 Unknown means unchanged deliberately. Defaulting it to the candidate count
 would disable the floor wherever the number happened to be missing, which is

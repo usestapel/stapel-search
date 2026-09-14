@@ -730,34 +730,53 @@ def test_a_group_the_whole_page_carries_survives_the_floor(mixed_catalogue, mixe
 #: that matters — `plan.evidence` EXCLUDES the queried category's own slugs
 #: (the 0.14.3 exemption), so on a leaf the floor never governs its own axes
 #: and no fixture built on one can go red. `kvartiry` has four children.
-_FLATS_AXES = [
-    # Declared FIRST and filled by seven; `condition` is declared second and
-    # filled by all thirty-four. Both children declare both, so the planner's
-    # PREDICTION (documents whose category declares the slug) ties at 34 and
-    # falls through to schema position — putting the sparse axis on top. The
-    # measured coverage says the opposite. The disagreement is the point: an
-    # ordering test on a fixture where prediction and measurement agree
-    # cannot fail.
-    #
-    # Non-numeric on purpose: `ram_size` in the fixture above is a select
-    # whose VALUES are numbers, and the answer withholds its RANGE rather
-    # than its group — a different code path from the one the live flats
-    # page exercises. A bathroom is a word, so this axis can only ever be
-    # a group.
-    _select("bathroom", "combined", "separate"),
-    _select("condition", "new", "used"),
-]
+#: THE LIVE `/c/kvartiry` SHAPE, LEAF FOR LEAF.
+#:
+#: A PARENT that authors nothing over four children that hold the listings.
+#: The parent is the part that matters — `plan.evidence` EXCLUDES the queried
+#: category's own slugs (the 0.14.3 exemption), so on a leaf the floor never
+#: governs its own axes and no fixture built on one can go red.
+#:
+#: The document counts and the declaring sets are the measured ones, read off
+#: the stand's categories API on 2026-09-14:
+#:
+#:   leaf        docs   condition  bathroom  kitchen_space  sale_options
+#:   L1 (177)      14       y          y          y              y
+#:   L2 (174)       9       y          y          y              .
+#:   L3 (176)       7       y          y          y              y
+#:   L4 (1046)      4       y          .          .              .
+#:
+#: which makes `declared_for` 34 / 30 / 30 / 21 against 34 candidates — the
+#: three ratios the amended policy has to tell apart (1.00, 0.88, 0.62).
+_FLATS_CONDITION = _select("condition", "new", "used")
+#: Non-numeric on purpose: `ram_size` in the fixture above is a select whose
+#: VALUES are numbers, and the answer withholds its RANGE rather than its
+#: group — a different code path from the one the live flats page exercises.
+#: A bathroom is a word, so this axis can only ever be a group.
+#:
+#: Declared FIRST so the planner's prediction and the measured coverage
+#: DISAGREE: both are declared by 30 documents, so the prediction ties and
+#: falls through to schema position, putting the sparse axis on top. An
+#: ordering test on a fixture where the two agree cannot fail.
+_FLATS_BATHROOM = _select("bathroom", "combined", "separate")
+_FLATS_KITCHEN = _select("kitchen_space", "small", "large")
+_FLATS_SALE = _select("sale_options", "mortgage", "cash")
 
 FLATS_LIKE = {
     "flatslike": [],
-    "flats-prodam": list(_FLATS_AXES),
-    "flats-sdam": list(_FLATS_AXES),
+    "flats-l1": [_FLATS_BATHROOM, _FLATS_KITCHEN, _FLATS_SALE, _FLATS_CONDITION],
+    "flats-l2": [_FLATS_BATHROOM, _FLATS_KITCHEN, _FLATS_CONDITION],
+    "flats-l3": [_FLATS_BATHROOM, _FLATS_KITCHEN, _FLATS_SALE, _FLATS_CONDITION],
+    "flats-l4": [_FLATS_CONDITION],
 }
+
+#: `(leaf, documents)`, busiest first — the aggregate the planner folds.
+_FLATS_LEAVES = (("flats-l1", 14), ("flats-l2", 9), ("flats-l3", 7), ("flats-l4", 4))
 
 
 @pytest.fixture()
 def flats_like_catalogue():
-    """A parent over two children that declare the same two word-valued axes."""
+    """A parent over the four children the live flats parent has."""
     from stapel_core.comm import register_function
     from stapel_core.comm.registry import function_registry
 
@@ -777,12 +796,10 @@ def flats_like_catalogue():
 
 @pytest.fixture()
 def flats_like_corpus(conformance):
-    """Thirty-four rows split over the two children; bathroom filled by seven.
+    """Thirty-four rows over four children, filled at the measured ratios.
 
-    Both children declare both axes, so every candidate's category declares
-    `bathroom` — `declared_for` equals the candidate count, which is the
-    "most sellers left it blank" case. The live flats ratio: `kitchen_space`
-    was 7 of 34 and withheld.
+    `bathroom` on 18, `sale_options` on 12, `kitchen_space` on 7, `condition`
+    on all 34 — the live coverages, against the live declaring sets.
     """
     from stapel_search.models import SearchDocument
     from stapel_search.services import index_documents
@@ -792,89 +809,120 @@ def flats_like_corpus(conformance):
     SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
 
     docs = []
-    for index in range(34):
-        child = "flats-prodam" if index % 2 == 0 else "flats-sdam"
-        features = {"condition": {"type": "select", "value": ["used"]}}
-        if index < 7:
-            features["bathroom"] = {"type": "select", "value": ["combined"]}
-        docs.append(
-            _document(
-                doc_key=f"f{index}",
-                title=f"Квартира {index}",
-                card={"title": f"Квартира {index}"},
-                category_id=child,
-                category_path=("flatslike", child),
-                features=features,
+    index = 0
+    for leaf, documents in _FLATS_LEAVES:
+        declared = {feature["slug"] for feature in FLATS_LIKE[leaf]}
+        for _ in range(documents):
+            features = {"condition": {"type": "select", "value": ["used"]}}
+            # Filled in document order, so the counts land on exactly the
+            # leaves that DECLARE the axis: 18, 12 and 7 of the first rows.
+            if index < 18 and "bathroom" in declared:
+                features["bathroom"] = {"type": "select", "value": ["combined"]}
+            if index < 12 and "sale_options" in declared:
+                features["sale_options"] = {"type": "select", "value": ["cash"]}
+            if index < 7 and "kitchen_space" in declared:
+                features["kitchen_space"] = {"type": "select", "value": ["small"]}
+            docs.append(
+                _document(
+                    doc_key=f"f{index}",
+                    title=f"Flat {index}",
+                    card={"title": f"Flat {index}"},
+                    category_id=leaf,
+                    category_path=("flatslike", leaf),
+                    features=features,
+                )
             )
-        )
+            index += 1
     index_documents(DOC_TYPE, docs)
     return docs
 
 
-def test_a_leaf_axis_most_sellers_left_blank_is_still_a_filter(
+def test_an_axis_almost_every_child_declares_is_still_a_filter(
     flats_like_catalogue, flats_like_corpus
 ):
-    """The flats shape, owner 2026-09-14.
+    """The flats shape, owner 2026-09-14, at the measured ratios.
 
-    On one leaf every candidate's category declares every axis, so a low count
-    means "most sellers left it blank", not "this filter applies to few of
-    these listings". Those are different sentences and only the second is
-    worth hiding.
+    A low count is two different sentences and the floor could only read one.
+    "Most sellers left it blank" is a filter that still works for the ones who
+    did not; "this filter applies to few of these listings" is the union case
+    the floor was written for. `declared_for` separates them.
 
-    Measured live before this rule: the flats bathroom axis (18 of 34), the
-    sale-method axis (12) and the kitchen-area axis (7) were all withheld, and
-    a rail the reference draws at 26 sections stood at 18. This axis is 7 of
-    34 — the kitchen axis' own ratio — and word-valued, so it can only be a
-    GROUP, which is the path the live leaf exercises.
+    0.17.0 asked for EQUALITY — every candidate's category declares the axis —
+    and the live parent does not have that shape. One small sibling (`l4`,
+    four documents, the «Сниму» leaf) declares neither `bathroom` nor
+    `kitchen_space`, which put both back in the union branch at 30 of 34 and
+    hid them again. 0.88 and 1.00 are the same sentence; equality cannot say
+    so and a SHARE can.
 
-    The guard is NOT gone: a laptops `cpu` filled by one of nine is 0.11 and
-    still loses (`test_a_slug_only_a_handful_of_documents_carry_is_withheld`,
-    unchanged).
+    The split this pins, at a 0.6 floor over 34 candidates (20.4):
 
-    RED FIRST against the pre-change floor, in a throwaway copy of the module:
-    `AssertionError: assert 'bathroom' not in ['bathroom']` — 7 < 0.5 x 34
-    withheld it outright.
+      - `bathroom`      30/34 = 0.88 declared, filled by 18 — kept
+      - `kitchen_space` 30/34 = 0.88 declared, filled by 7  — kept
+      - `sale_options`  21/34 = 0.62 declared, filled by 12 — WITHHELD, and
+        rightly: only the selling side of the catalogue has sale options,
+        which is the union case, not a blank column.
+
+    The guard is narrowed, not deleted: a laptops `cpu` filled by one of nine
+    is 0.11 and still loses
+    (`test_a_slug_only_a_handful_of_documents_carry_is_withheld`, unchanged).
+
+    RED FIRST against 0.17.0's equality test:
+    `AssertionError: assert 'bathroom' not in ['bathroom', 'kitchen_space']`.
     """
     from stapel_search.services import search
 
-    with tuned(**{"FACET_MIN_COVERAGE": 0.5}):
+    with tuned(**{"FACET_MIN_COVERAGE": 0.6}):
         answer = search({"type": DOC_TYPE, "category": "flatslike"})
 
     assert answer["count"] == 34
+    assert answer["facet_meta"]["candidates"] == 34
     withheld = [
         row["slug"]
         for row in answer["facet_meta"]["withheld"]
         if row["axis"] == "group"
     ]
+
     assert "bathroom" not in withheld, withheld
-    assert answer["facets"]["bathroom"] == {"combined": 7}
+    assert "kitchen_space" not in withheld, withheld
+    assert answer["facets"]["bathroom"] == {"combined": 18}
+    assert answer["facets"]["kitchen_space"] == {"small": 7}
+
+    # The other side of the split, asserted beside it: a rule that kept the
+    # first two by widening far enough to admit this one would pass a test
+    # that only looked at what came back.
+    assert "sale_options" in withheld, withheld
+    assert "sale_options" not in answer["facets"]
 
 
 def test_a_sparse_axis_sits_below_a_dense_one(flats_like_catalogue, flats_like_corpus):
     """Admitted by the narrowed floor is not promoted to the top of the rail.
 
-    `bathroom` is declared FIRST by both children and carried by 7 of 34;
-    `condition` is declared second and carried by all 34. The plan is ranked
-    before anything is counted, from a PREDICTION — documents whose category
-    declares the slug — which ties at 34 for both and falls through to schema
-    position, so the sparse axis led the panel. Once the counts exist the
-    same quantity is available measured, and the borrowed tier is ordered by
-    it: the sparse axis sits low, where the phone's tail-fold takes it first.
+    `bathroom` and `kitchen_space` are declared by the same 30 documents, so
+    the plan — ranked BEFORE anything is counted, from a prediction — ties
+    them and falls through to schema position, which declares `bathroom`
+    first and `kitchen_space` second. Both sit above `condition`, which every
+    leaf declares and every row carries.
 
-    The parent authors nothing, so both axes are borrowed and the tier is the
+    Once the counts exist the same quantity is available measured, and the
+    borrowed tier is ordered by it: `condition` (34) then `bathroom` (18)
+    then `kitchen_space` (7), so the sparse axis sits low, where the phone's
+    tail-fold takes it first.
+
+    The parent authors nothing, so every axis is borrowed and the tier is the
     whole panel. The authored tier is NOT reordered — a page with a schema is
     drawn in that schema (`test_the_widened_plan_keeps_the_pages_own_schema_
     order_on_top`, unchanged).
 
-    RED before the reorder: `assert ['bathroom', 'condition'] == ['condition',
-    'bathroom']` — the predicted order stood.
+    RED before the reorder: the predicted order stood, `bathroom` first.
     """
     from stapel_search.services import search
 
-    answer = search({"type": DOC_TYPE, "category": "flatslike"})
+    with tuned(**{"FACET_MIN_COVERAGE": 0.6}):
+        answer = search({"type": DOC_TYPE, "category": "flatslike"})
 
     assert answer["facet_meta"]["plan"] == "evidence"
-    assert list(answer["facets"]) == ["condition", "bathroom"]
+    assert list(answer["facets"]) == ["condition", "bathroom", "kitchen_space"]
+
 
 
 def test_the_leaf_itself_keeps_every_one_of_them(mixed_catalogue, mixed_corpus):

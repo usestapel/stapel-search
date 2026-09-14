@@ -1035,6 +1035,23 @@ WITHHELD_COVERAGE = "coverage"
 #: what stops a two-document corpus making every axis "100% covered".
 FACET_LEAF_MIN_SHARE = 0.15
 FACET_LEAF_MIN_DOCUMENTS = 2
+
+#: How much of the candidate set has to have the axis in its category schema
+#: before a low count reads as "most sellers left it blank" rather than "this
+#: filter applies to few of these listings".
+#:
+#: 0.17.0 asked for equality — EVERY candidate's category — and the live flats
+#: parent does not have that shape. Its 34 candidates span four leaves, and
+#: the smallest (4 documents) declares neither the bathroom axis nor the
+#: kitchen-area one, which put both back in the union branch at 30 of 34 and
+#: hid them again. 0.88 and 1.00 are the same sentence about a catalogue;
+#: equality cannot say so.
+#:
+#: 0.85 is where the measured stand splits: the bathroom and kitchen axes
+#: (0.88) come back, and the sale-method axis (21 of 34, 0.62) does not — and
+#: that one is genuinely the union case, since only the selling side of the
+#: catalogue has sale options at all.
+FACET_LEAF_DECLARED_SHARE = 0.85
 WITHHELD_UNLABELLED = "unlabelled"
 WITHHELD_REASONS = (WITHHELD_COVERAGE, WITHHELD_UNLABELLED)
 
@@ -1970,13 +1987,14 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 # WHICH SENTENCE IS THIS AXIS?
                 #
                 # `declared_for` is the documents whose category declares the
-                # slug. Equal to the candidate count means every candidate's
-                # category has this axis — a leaf, or a parent whose children
-                # all share it — and a low count then means "most sellers left
-                # it blank", which is a filter that still works for the ones
-                # who did not. Less than the candidate count means the axis
-                # belongs to SOME children only, which is the union case the
-                # floor was written for and keeps its original threshold.
+                # slug. At or above `FACET_LEAF_DECLARED_SHARE` of the
+                # candidate count, effectively every candidate's category has
+                # this axis — a leaf, or a parent whose children share it —
+                # and a low count then means "most sellers left it blank",
+                # which is a filter that still works for the ones who did not.
+                # Below that share the axis belongs to SOME children only,
+                # which is the union case the floor was written for and keeps
+                # its original threshold.
                 #
                 # Unknown means unchanged: a plan that never recorded the
                 # weight falls through to exactly the rule that stood before.
@@ -1984,7 +2002,10 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 # silently disable the floor wherever the number is missing,
                 # which is what the first attempt at this did.
                 applies_to = plan.declared_for.get(slug)
-                if applies_to is not None and applies_to >= denominator:
+                if (
+                    applies_to is not None
+                    and applies_to >= FACET_LEAF_DECLARED_SHARE * denominator
+                ):
                     if (
                         coverage >= FACET_LEAF_MIN_DOCUMENTS
                         and coverage >= FACET_LEAF_MIN_SHARE * applies_to

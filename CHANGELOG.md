@@ -4,6 +4,40 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.1] — 2026-09-14
+
+Patch: "every candidate's category declares it" is a SHARE, not an equality.
+
+0.17.0 gave a leaf-declared axis its own floor when `declared_for` equalled
+the candidate count. Deployed against the reference stand, that test was too
+strict to fire on the page it was written for. The flats parent's 34
+candidates span FOUR leaves, and the smallest — 4 documents, the "rent from"
+leaf — declares neither the bathroom axis nor the kitchen-area one. At 30 of
+34 both fell back into the union branch and were hidden again, exactly as
+before the change.
+
+0.88 and 1.00 are the same sentence about a catalogue. The predicate is now
+`declared_for >= FACET_LEAF_DECLARED_SHARE * candidates`, and 0.85 is where
+the measured stand splits:
+
+| axis | declared_for | share | coverage | outcome |
+| --- | --- | --- | --- | --- |
+| bathroom | 30 of 34 | 0.88 | 18 | kept |
+| kitchen area | 30 of 34 | 0.88 | 7 | kept |
+| sale method | 21 of 34 | 0.62 | 12 | withheld — union |
+
+The sale-method axis staying out is the half that makes the split right:
+only the selling side of the catalogue has sale options, so a low count
+there really does mean "this filter applies to few of these listings".
+
+The guard is unchanged where it was written to bite: a laptops `cpu` filled
+by one of nine is 0.11 and still loses, and the four guard tests are still
+unedited.
+
+The fixture now reproduces the live parent leaf for leaf — four children with
+the measured document counts (14/9/7/4) and the measured declaring sets — and
+was run RED against 0.17.0's equality test before going green.
+
 ## [0.17.0] — 2026-09-14
 
 Minor: the coverage floor learns which of two sentences a low count is, and
