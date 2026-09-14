@@ -4,6 +4,62 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] — 2026-09-14
+
+Minor: the coverage floor learns which of two sentences a low count is, and
+the panel is ordered by the coverage it MEASURED rather than the one it
+predicted.
+
+### The floor was answering the wrong question
+
+`FACET_MIN_COVERAGE` withholds a facet group whose buckets cover too little
+of the candidate set. On the reference stand's flats parent that withheld the
+bathroom axis (18 of 34), the sale-method axis (12) and the kitchen-area axis
+(7), and a rail the reference draws at 26 sections stood at 18.
+
+A low count is two different sentences and the floor could only read one:
+
+  - **"this filter applies to few of these listings"** — the axis belongs to
+    a minority of the children under a parent. Offering it costs a real axis
+    its budget slot. This is the case the floor was written for, and the
+    reason it exists is unchanged: a laptops `cpu` filled by one of nine is
+    an axis that narrows to a single row.
+  - **"most sellers left it blank"** — every candidate's category declares
+    the axis, and the people who did fill it can still be filtered to. That
+    is a working filter, and the floor was deleting it.
+
+`FacetPlan` now carries `declared_for` — the documents whose category
+declares each slug, which the planner already computed as `_Fold.weight` and
+threw away. When it equals the candidate count, every candidate's category
+declares the axis, and the floor becomes `coverage >= 0.15 * declared_for`
+AND at least 2 documents. Below it, the union case, the original threshold
+stands unchanged.
+
+Unknown means unchanged: a plan with no weight recorded falls through to
+exactly the rule that stood before. Defaulting it to the candidate count
+would have silently disabled the floor wherever the number was missing.
+
+### Ordered by measurement, not by prediction
+
+`evidence_plan` ranks before anything is counted, from a prediction —
+documents whose category DECLARES a slug. Once the counts exist the same
+quantity is available measured, so the BORROWED half of the plan is now
+ordered by it, descending. A sparse axis admitted by the narrowed floor sits
+low, where a phone's tail-fold takes it first.
+
+The authored half is untouched: a page that has a schema is drawn in that
+schema, and a widened plan may add axes below it but may not reshuffle it.
+
+### Notes
+
+- Both changes were run RED against the pre-change module before going
+  green, on a fixture that reproduces the live shape — a PARENT over two
+  children, which is what `/c/kvartiry` is. A fixture built on a single leaf
+  cannot fail: `plan.evidence` excludes the queried category's own slugs, so
+  a leaf's own axes were never governed by the floor at all.
+- The four existing guard tests are unedited and still pass; their argument
+  survives the narrowing (1 of 9 is 0.11 and still loses).
+
 ## [0.16.8] — 2026-09-14
 
 Patch, and the last reader of `vocabulary_refs` that 0.16.6 left narrower

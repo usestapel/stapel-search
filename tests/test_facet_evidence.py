@@ -725,6 +725,158 @@ def test_a_group_the_whole_page_carries_survives_the_floor(mixed_catalogue, mixe
     assert answer["facets"]["material"] == {"wood": 70}
 
 
+#: The live `/c/kvartiry` shape: a PARENT that authors nothing over children
+#: that hold the listings and declare the same axes. The parent is the part
+#: that matters — `plan.evidence` EXCLUDES the queried category's own slugs
+#: (the 0.14.3 exemption), so on a leaf the floor never governs its own axes
+#: and no fixture built on one can go red. `kvartiry` has four children.
+_FLATS_AXES = [
+    # Declared FIRST and filled by seven; `condition` is declared second and
+    # filled by all thirty-four. Both children declare both, so the planner's
+    # PREDICTION (documents whose category declares the slug) ties at 34 and
+    # falls through to schema position — putting the sparse axis on top. The
+    # measured coverage says the opposite. The disagreement is the point: an
+    # ordering test on a fixture where prediction and measurement agree
+    # cannot fail.
+    #
+    # Non-numeric on purpose: `ram_size` in the fixture above is a select
+    # whose VALUES are numbers, and the answer withholds its RANGE rather
+    # than its group — a different code path from the one the live flats
+    # page exercises. A bathroom is a word, so this axis can only ever be
+    # a group.
+    _select("bathroom", "combined", "separate"),
+    _select("condition", "new", "used"),
+]
+
+FLATS_LIKE = {
+    "flatslike": [],
+    "flats-prodam": list(_FLATS_AXES),
+    "flats-sdam": list(_FLATS_AXES),
+}
+
+
+@pytest.fixture()
+def flats_like_catalogue():
+    """A parent over two children that declare the same two word-valued axes."""
+    from stapel_core.comm import register_function
+    from stapel_core.comm.registry import function_registry
+
+    def provider(payload):
+        category_id = str(payload["category_id"])
+        return {
+            "category_id": category_id,
+            "revision": 1,
+            "features": FLATS_LIKE.get(category_id, []),
+        }
+
+    register_function("categories.features", provider)
+    yield FLATS_LIKE
+    function_registry._providers.pop("categories.features", None)
+    function_registry._schemas.pop("categories.features", None)
+
+
+@pytest.fixture()
+def flats_like_corpus(conformance):
+    """Thirty-four rows split over the two children; bathroom filled by seven.
+
+    Both children declare both axes, so every candidate's category declares
+    `bathroom` — `declared_for` equals the candidate count, which is the
+    "most sellers left it blank" case. The live flats ratio: `kitchen_space`
+    was 7 of 34 and withheld.
+    """
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    conformance.backend.clear(DOC_TYPE)
+    SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+
+    docs = []
+    for index in range(34):
+        child = "flats-prodam" if index % 2 == 0 else "flats-sdam"
+        features = {"condition": {"type": "select", "value": ["used"]}}
+        if index < 7:
+            features["bathroom"] = {"type": "select", "value": ["combined"]}
+        docs.append(
+            _document(
+                doc_key=f"f{index}",
+                title=f"Квартира {index}",
+                card={"title": f"Квартира {index}"},
+                category_id=child,
+                category_path=("flatslike", child),
+                features=features,
+            )
+        )
+    index_documents(DOC_TYPE, docs)
+    return docs
+
+
+def test_a_leaf_axis_most_sellers_left_blank_is_still_a_filter(
+    flats_like_catalogue, flats_like_corpus
+):
+    """The flats shape, owner 2026-09-14.
+
+    On one leaf every candidate's category declares every axis, so a low count
+    means "most sellers left it blank", not "this filter applies to few of
+    these listings". Those are different sentences and only the second is
+    worth hiding.
+
+    Measured live before this rule: the flats bathroom axis (18 of 34), the
+    sale-method axis (12) and the kitchen-area axis (7) were all withheld, and
+    a rail the reference draws at 26 sections stood at 18. This axis is 7 of
+    34 — the kitchen axis' own ratio — and word-valued, so it can only be a
+    GROUP, which is the path the live leaf exercises.
+
+    The guard is NOT gone: a laptops `cpu` filled by one of nine is 0.11 and
+    still loses (`test_a_slug_only_a_handful_of_documents_carry_is_withheld`,
+    unchanged).
+
+    RED FIRST against the pre-change floor, in a throwaway copy of the module:
+    `AssertionError: assert 'bathroom' not in ['bathroom']` — 7 < 0.5 x 34
+    withheld it outright.
+    """
+    from stapel_search.services import search
+
+    with tuned(**{"FACET_MIN_COVERAGE": 0.5}):
+        answer = search({"type": DOC_TYPE, "category": "flatslike"})
+
+    assert answer["count"] == 34
+    withheld = [
+        row["slug"]
+        for row in answer["facet_meta"]["withheld"]
+        if row["axis"] == "group"
+    ]
+    assert "bathroom" not in withheld, withheld
+    assert answer["facets"]["bathroom"] == {"combined": 7}
+
+
+def test_a_sparse_axis_sits_below_a_dense_one(flats_like_catalogue, flats_like_corpus):
+    """Admitted by the narrowed floor is not promoted to the top of the rail.
+
+    `bathroom` is declared FIRST by both children and carried by 7 of 34;
+    `condition` is declared second and carried by all 34. The plan is ranked
+    before anything is counted, from a PREDICTION — documents whose category
+    declares the slug — which ties at 34 for both and falls through to schema
+    position, so the sparse axis led the panel. Once the counts exist the
+    same quantity is available measured, and the borrowed tier is ordered by
+    it: the sparse axis sits low, where the phone's tail-fold takes it first.
+
+    The parent authors nothing, so both axes are borrowed and the tier is the
+    whole panel. The authored tier is NOT reordered — a page with a schema is
+    drawn in that schema (`test_the_widened_plan_keeps_the_pages_own_schema_
+    order_on_top`, unchanged).
+
+    RED before the reorder: `assert ['bathroom', 'condition'] == ['condition',
+    'bathroom']` — the predicted order stood.
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "flatslike"})
+
+    assert answer["facet_meta"]["plan"] == "evidence"
+    assert list(answer["facets"]) == ["condition", "bathroom"]
+
+
 def test_the_leaf_itself_keeps_every_one_of_them(mixed_catalogue, mixed_corpus):
     """Scoped to the phones leaf, coverage is ~1 and nothing is withheld —
     the drill-down `category_counts` offers for the uncategorised case."""

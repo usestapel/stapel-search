@@ -1115,6 +1115,7 @@ def _shape(
         },
         vocabulary_refs={slug: refs[slug] for slug in selected if slug in refs},
         vocabulary_sources={slug: sources[slug] for slug in selected if slug in sources},
+        declared_for={slug: fold.weight[slug] for slug in selected if slug in fold.weight},
         group_labels={
             slug: fold.group_labels[slug]
             for slug in selected

@@ -547,6 +547,41 @@ a closed option set answering with its zeros is a shipped decision — a range
 has no zeros to answer with and no option set to have decided about, so
 authorship says nothing about whether the axis describes this page.
 
+**Which sentence a low count is (0.17.0).** The floor reads one number and
+that number says two different things. `FacetPlan.declared_for` — the
+documents whose category declares each slug, which the planner already
+computed as `_Fold.weight` — separates them:
+
+| `declared_for` vs candidates | the sentence | the floor |
+| --- | --- | --- |
+| equal | every candidate's category has this axis, so a low count means **most sellers left it blank** — still a filter for the ones who did not | `coverage >= 0.15 * declared_for` and at least 2 documents |
+| less | the axis belongs to SOME children only — **this filter applies to few of these listings** | `FACET_MIN_COVERAGE`, unchanged |
+| unknown | a plan that recorded no weight | unchanged — exactly the rule that stood before |
+
+Unknown means unchanged deliberately. Defaulting it to the candidate count
+would disable the floor wherever the number happened to be missing, which is
+not a policy but an accident waiting for a plan that does not fill it in.
+
+The guard is narrowed, not deleted: a laptops `cpu` filled by one of nine is
+0.11 and still loses, and its four guard tests are unedited.
+
+One thing to know before writing a test for this: **`plan.evidence` excludes
+the queried category's own slugs**, so a leaf's authored axes are not
+governed by the floor at all. A fixture built on a single leaf passes with
+the rule and passes without it. The live shape is a PARENT over children that
+declare the axis — `/c/kvartiry` has four — and that is the only shape that
+can go red.
+
+**Ordered by what was measured (0.17.0).** `evidence_plan` ranks BEFORE
+counting, from a prediction — documents whose category declares the slug.
+After counting, the same quantity exists measured, and the BORROWED half of
+the plan is reordered by it, descending, so a sparse axis the narrowed floor
+admitted sits low and a phone's tail-fold takes it first. The authored half
+keeps the schema's order: a widened plan may add axes below it, never
+reshuffle it. This governs the answer's own order — the chip row and the
+tail-fold budget — and not the rail on a parent node, which
+`orderFacetGroupsBySchema` already drops into its evidence band.
+
 **It is on the budget, and in the schema's order.** `range_candidates` was
 uncapped, on the reasoning that a bound costs one grouped aggregate for every
 axis at once. That is the SERVER's cost; `MAX_FACET_FIELDS` is how wide a

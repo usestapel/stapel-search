@@ -496,6 +496,18 @@ class FacetPlan:
     #: codes against each of them in turn. Disjoint from ``vocabulary_refs``:
     #: a slug is in exactly one of the two.
     vocabulary_sources: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    #: ``{slug: documents}`` — how many of the candidate set's documents sit in
+    #: a category that DECLARES this slug. On a leaf every candidate's category
+    #: declares every axis, so this equals the candidate count; on a parent
+    #: whose children differ it is the share the axis actually applies to.
+    #:
+    #: The coverage floor cannot be read without it. That floor exists to hide
+    #: a UNION axis belonging to only some children — "these filters apply to
+    #: too few of these" — and measured against the whole candidate set it was
+    #: also hiding LEAF axes that apply to everything and that few sellers
+    #: happened to fill. Those are different sentences and now take different
+    #: thresholds.
+    declared_for: dict[str, int] = field(default_factory=dict)
     #: ``{slug: (name, translatable)}`` — the feature definition's own name,
     #: which is the HEADING a panel puts above the buckets, and whether that
     #: name is a translation key (``FeatureDef.translate``) or literal text.

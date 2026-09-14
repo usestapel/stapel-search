@@ -1023,6 +1023,18 @@ def _range_payload(bounds) -> tuple[dict[str, dict], dict[str, int]]:
 #: client that branches on it has these three and nothing else, and an
 #: unknown value means it is older than the server.
 WITHHELD_COVERAGE = "coverage"
+
+#: The floor a LEAF-declared axis must clear — a share of the documents whose
+#: category declares it, not of the whole candidate set.
+#:
+#: Two numbers because one does not separate the cases. Owner, 2026-09-14:
+#: a flats leaf wants its bathroom axis (18 of 34) and its kitchen-area axis
+#: (7 of 34, 0.21) drawn, and a laptops page still wants a `cpu` filled by one
+#: of nine (0.11) withheld — an axis that narrows to a single row and pushes a
+#: real one past the budget. The share seats all three; the absolute floor is
+#: what stops a two-document corpus making every axis "100% covered".
+FACET_LEAF_MIN_SHARE = 0.15
+FACET_LEAF_MIN_DOCUMENTS = 2
 WITHHELD_UNLABELLED = "unlabelled"
 WITHHELD_REASONS = (WITHHELD_COVERAGE, WITHHELD_UNLABELLED)
 
@@ -1955,22 +1967,46 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                     # case: capped at 200 of 418, it reads as half a page.
                     continue
                 coverage = sum(values.values())
-                if coverage < floor * denominator:
-                    withheld.append(
-                        {
-                            "slug": slug,
-                            # `axis` and `reason` are named since 0.16.0.
-                            # `withheld` used to hold one kind of thing, so
-                            # both were the list's identity; it now holds
-                            # ranges too, and a panel saying «3 filters apply
-                            # to too few of these» about an axis withheld for
-                            # having no name is a sentence that is not true.
-                            "axis": AXIS_GROUP,
-                            "reason": WITHHELD_COVERAGE,
-                            "coverage": coverage,
-                            "candidates": denominator,
-                        }
-                    )
+                # WHICH SENTENCE IS THIS AXIS?
+                #
+                # `declared_for` is the documents whose category declares the
+                # slug. Equal to the candidate count means every candidate's
+                # category has this axis — a leaf, or a parent whose children
+                # all share it — and a low count then means "most sellers left
+                # it blank", which is a filter that still works for the ones
+                # who did not. Less than the candidate count means the axis
+                # belongs to SOME children only, which is the union case the
+                # floor was written for and keeps its original threshold.
+                #
+                # Unknown means unchanged: a plan that never recorded the
+                # weight falls through to exactly the rule that stood before.
+                # The alternative — defaulting to the candidate count — would
+                # silently disable the floor wherever the number is missing,
+                # which is what the first attempt at this did.
+                applies_to = plan.declared_for.get(slug)
+                if applies_to is not None and applies_to >= denominator:
+                    if (
+                        coverage >= FACET_LEAF_MIN_DOCUMENTS
+                        and coverage >= FACET_LEAF_MIN_SHARE * applies_to
+                    ):
+                        continue
+                elif coverage >= floor * denominator:
+                    continue
+                withheld.append(
+                    {
+                        "slug": slug,
+                        # `axis` and `reason` are named since 0.16.0.
+                        # `withheld` used to hold one kind of thing, so
+                        # both were the list's identity; it now holds
+                        # ranges too, and a panel saying «3 filters apply
+                        # to too few of these» about an axis withheld for
+                        # having no name is a sentence that is not true.
+                        "axis": AXIS_GROUP,
+                        "reason": WITHHELD_COVERAGE,
+                        "coverage": coverage,
+                        "candidates": denominator,
+                    }
+                )
     withheld_slugs = {row["slug"] for row in withheld}
     if withheld_slugs:
         facet_result = replace(
@@ -2010,6 +2046,58 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 if slug not in withheld_slugs
             },
         )
+
+    # ORDER: coverage descending, inside the BORROWED tier only.
+    #
+    # Narrowing the floor above admits sparse axes that used to be withheld
+    # (the flats bathroom at 7 of 34). Admitted is not the same as promoted:
+    # a sparse axis has to sit LOW, so the phone's tail-fold folds it away
+    # before a dense one and the budget spends its last slots on axes that
+    # describe the page.
+    #
+    # The plan was ranked BEFORE counting, by `evidence_plan`'s prediction —
+    # documents whose category DECLARES the slug. Now the counts exist, so
+    # the same quantity can be used measured instead of predicted.
+    #
+    # Only the borrowed tier is reordered. `plan.evidence` holds exactly the
+    # slugs the queried category did NOT author, and the authored tier is
+    # drawn in the schema's own order — "a widened plan may add axes BELOW
+    # it but may not reshuffle it". Sorting is stable, so a tie keeps the
+    # predicted rank, and the slugs stay in their own positions: a borrowed
+    # slug can only trade places with another borrowed slug.
+    #
+    # This governs the ANSWER's order — the chip row and the tail-fold
+    # budget. It does not move the rail on a parent node, which is already
+    # coverage-ordered client-side: with no schema to name them every group
+    # lands in `orderFacetGroupsBySchema`'s last band and falls through to
+    # `compareFacetsByEvidence`.
+    if facet_result and plan.evidence and len(plan.slugs) > 1:
+        borrowed = {slug for slug in plan.slugs if slug in set(plan.evidence)}
+        if len(borrowed) > 1:
+            by_coverage = sorted(
+                (slug for slug in plan.slugs if slug in borrowed),
+                key=lambda slug: -sum((facet_result.counts.get(slug) or {}).values()),
+            )
+            refill = iter(by_coverage)
+            ordered = tuple(
+                next(refill) if slug in borrowed else slug for slug in plan.slugs
+            )
+            plan = replace(plan, slugs=ordered)
+            # The payload's `facets` is built from the counts dict, so the
+            # answer only reports this order if the counts carry it too.
+            facet_result = replace(
+                facet_result,
+                counts={
+                    slug: facet_result.counts[slug]
+                    for slug in ordered
+                    if slug in facet_result.counts
+                }
+                | {
+                    slug: values
+                    for slug, values in facet_result.counts.items()
+                    if slug not in set(ordered)
+                },
+            )
 
     # The measurement half of the panel, held to the same two rules: an axis
     # nobody can name is not offered, and an axis that describes too little
