@@ -4,6 +4,44 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.8] — 2026-09-14
+
+Patch, and the last reader of `vocabulary_refs` that 0.16.6 left narrower
+than its call site meant. `understanding._vocabulary_rung` reads that map to
+learn WHERE to send an unclaimed query phrase, so a slug fed by several
+dictionaries — no single address — was skipped entirely and a breed typed at
+a pets root won no auto-applied chip.
+
+Unlike the cap in 0.16.7 this was never a wrong predicate: the rung genuinely
+needs ONE level to send a phrase to, and a union has none. What was missing
+was a policy, and guessing it would have cost something either way. It is now
+decided and recorded in `MODULE.md` with its bound and the conditions that
+would revisit it.
+
+- **A union slug asks the FIRST contributing dictionary in fold order — the
+  busiest declaring category's — and no other.** Cost is identical to a
+  single-dictionary slug's, so `_MATCH_CALL_BUDGET` (eight round trips for
+  the whole query, slug loop on the outside) is untouched; trying every
+  contributor would let a root over twenty children spend all eight on one
+  slug and starve the rest. It is also the rule the CAPTIONS of a union group
+  already use since 0.16.6, so such a group answers with the busiest
+  category's word in both places rather than in one and not the other.
+- What the choice costs, stated rather than discovered: a phrase belonging to
+  a non-busiest child finds no filter. The text search still finds the
+  listing, so what is lost is the chip, not the page — and the loss is silent,
+  which is why it is written down.
+- The later shape is kept in `MODULE.md` rather than lost: every contributor
+  under a per-slug sub-budget, triggered by evidence that such phrases are
+  typed at roots often enough to be noticed. A decision whose alternative is
+  lost is one nobody can revisit.
+- New tests pin the CHOICE, not the behaviour: a union slug is reached at all;
+  a term held ONLY by the second contributor yields no chip and that
+  dictionary is never asked; and a union slug costs the same number of round
+  trips as a single-dictionary one. The second goes red the day someone
+  widens the rung without restructuring the budget, which is the conversation
+  the policy exists to force.
+- No wire change.
+
 ## [0.16.7] — 2026-09-14
 
 Patch, and the second half of 0.16.6. A group fed by more than one

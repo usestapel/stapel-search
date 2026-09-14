@@ -358,9 +358,25 @@ def _vocabulary_rung(
     """Resolve unclaimed phrases inside the plan's vocabulary levels.
 
     A level holds tens of thousands of terms and the plan holds only its
-    ADDRESS (``vocabulary_refs``), which is exactly why the term is sent
-    out to be resolved instead of pulled in to be scanned. Phrases are
-    tried longest-first so «айфон 17» beats «айфон».
+    ADDRESS (``facets.vocabulary_addresses``), which is exactly why the term
+    is sent out to be resolved instead of pulled in to be scanned. Phrases
+    are tried longest-first so «айфон 17» beats «айфон».
+
+    A slug whose declaring categories name DIFFERENT dictionaries has no one
+    level to send a phrase to, and until the decision of 2026-09-14 it was
+    skipped outright — a breed typed at a pets root won no chip. The chosen
+    policy is FIRST CONTRIBUTOR ONLY: the phrase goes to the busiest
+    declaring category's dictionary and to no other. It is deliberately
+    partial, for two reasons written down in MODULE.md. Cost — this rung
+    spends ``_MATCH_CALL_BUDGET`` round trips across ALL slugs with the slug
+    loop on the outside, so a root over twenty children trying every
+    contributor would spend the whole budget on one slug and starve the
+    rest. Consistency — the captions of such a group already resolve first
+    contributor first (0.16.6), so a union answers with the busiest
+    category's word in both places rather than in one and not the other. A
+    phrase that belongs to a non-busiest child finds no filter; the text
+    search still finds the listing, so what is lost is the chip, not the
+    page.
 
     Every phrase is tried as TYPED and again through the curated
     equivalents, because this is where brands live — `brand` and `model`
@@ -372,8 +388,19 @@ def _vocabulary_rung(
     """
     from .conf import search_settings
 
-    refs = getattr(plan, "vocabulary_refs", None) or {}
-    wanted = [slug for slug in refs if slug not in claimed_slugs]
+    from .facets import vocabulary_addresses
+
+    # One address per slug, ALWAYS the first: see the policy above. Written
+    # as a narrowing of the uniform view rather than as a read of
+    # `vocabulary_refs`, so a union slug is reached at all and the choice of
+    # which dictionary is visible here instead of being implied by which map
+    # was consulted.
+    addresses = {
+        slug: group[0]
+        for slug, group in vocabulary_addresses(plan).items()
+        if group
+    }
+    wanted = [slug for slug in addresses if slug not in claimed_slugs]
     if not wanted:
         return
     seeker = match or _comm_match
@@ -382,7 +409,7 @@ def _vocabulary_rung(
     budget = _MATCH_CALL_BUDGET
 
     for slug in wanted:
-        vocabulary, level = refs[slug]
+        vocabulary, level = addresses[slug]
         found = False
         for first, last in _phrases(tokens, claimed_tokens):
             if found or budget <= 0:

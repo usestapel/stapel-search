@@ -479,3 +479,111 @@ def test_the_numeral_still_reaches_a_vocabulary_phrase():
     hit = {f.slug: f for f in answer.filters}["model"]
     assert (hit.value, hit.applied) == ("iphone-17", True)
     assert "айфон 17" in seen
+
+
+# --------------------------------------------------------------------------
+# a slug fed by MORE THAN ONE vocabulary
+# --------------------------------------------------------------------------
+#
+# A pets root draws its plan from its children, and those children answer
+# `breed` out of DIFFERENT dictionaries — cats and dogs. Such a slug has no
+# single address, so it is absent from `vocabulary_refs` (0.16.6) and this
+# rung, which reads that map to learn WHERE to send a phrase, skipped it
+# entirely: a breed typed at a root won no chip at all.
+#
+# The decision of 2026-09-14 is FIRST CONTRIBUTOR ONLY — see MODULE.md. The
+# phrase goes to the busiest declaring category's dictionary and to no other,
+# which costs exactly what one dictionary cost before and keeps the same rule
+# the captions already use. It is deliberately partial, and the tests below
+# pin the CHOICE, not only the behaviour: the second one fails the day
+# someone widens this to every contributor without restructuring the shared
+# `_MATCH_CALL_BUDGET`, which is the failure this policy exists to refuse.
+
+#: A pets root: one axis, two dictionaries, busiest declarer first.
+UNION_PLAN = FacetPlan(
+    slugs=("breed",),
+    kinds={"breed": "term"},
+    vocabulary_sources={
+        "breed": (("cats-212", "Breed"), ("dogs-215", "Breed")),
+    },
+)
+
+
+def _breed_seam(terms):
+    """A match seam over ``{vocabulary: {phrase: value}}``, recording calls."""
+
+    def match(name, payload):
+        match.calls.append((payload["vocabulary"], payload["level"], payload["text"]))
+        value = (terms.get(payload["vocabulary"]) or {}).get(
+            payload["text"].casefold()
+        )
+        if not value:
+            return {"match": None}
+        return {"match": {"value": value, "label": value, "score": 0.97,
+                          "method": "exact"}}
+
+    match.calls = []
+    return match
+
+
+@on
+def test_a_union_slug_reaches_its_busiest_dictionary_at_all():
+    """Before the decision this slug was skipped: no call, no chip, and a
+    reader typing a breed at a pets root got nothing."""
+    match = _breed_seam({"cats-212": {"бенгальская": "bengalskaya"}})
+
+    out = extract("бенгальская", language="ru", plan=UNION_PLAN,
+                  vector=no_vector, match=match)
+
+    (chip,) = out.filters
+    assert (chip.slug, chip.value) == ("breed", "bengalskaya")
+    assert match.calls, "the rung asked somebody"
+    assert match.calls[0][0] == "cats-212"
+
+
+@on
+def test_a_union_slug_asks_the_first_contributor_and_no_other():
+    """The policy, pinned where it costs something.
+
+    «такса» is in the DOG dictionary and in no other, and the answer is no
+    chip — not a chip from the second contributor. That is the bounded loss
+    the decision accepts (text search still finds the listing; what is lost
+    is the filter), and asserting it here is what makes the decision
+    revisitable rather than accidental: widening the rung to every
+    contributor turns this test red, which is the conversation we want to
+    have before the shared call budget is spent across N dictionaries.
+    """
+    match = _breed_seam({"dogs-215": {"такса": "taksa"}})
+
+    out = extract("такса", language="ru", plan=UNION_PLAN,
+                  vector=no_vector, match=match)
+
+    assert list(out.filters) == []
+    assert match.calls, "the first contributor was still asked"
+    asked = {call[0] for call in match.calls}
+    assert asked == {"cats-212"}, asked
+    assert "dogs-215" not in asked
+
+
+@on
+def test_a_union_slug_costs_what_one_dictionary_costs():
+    """No change to `_MATCH_CALL_BUDGET` and none to its spending: a union
+    slug is one level's worth of round trips, exactly as a single-dictionary
+    slug is. This is the half of the decision that is about cost."""
+    union = _breed_seam({})
+    single = _breed_seam({})
+
+    extract("такса", language="ru", plan=UNION_PLAN, vector=no_vector, match=union)
+    extract(
+        "такса",
+        language="ru",
+        plan=FacetPlan(
+            slugs=("breed",),
+            kinds={"breed": "term"},
+            vocabulary_refs={"breed": ("cats-212", "Breed")},
+        ),
+        vector=no_vector,
+        match=single,
+    )
+
+    assert len(union.calls) == len(single.calls)

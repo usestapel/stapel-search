@@ -630,17 +630,48 @@ in full:
 | `services.search` — the `groups` list | is it a dictionary | routed through the same view in 0.16.7 |
 | `services.search` — `vocabulary` / `level` in `facet_labels` | which dictionary | correct: there is no single one, and the answer says so |
 | `services.search` — the `withheld` prune | which dictionary | correct; `vocabulary_sources` is pruned beside it |
-| `understanding._vocabulary_rung` | **which** dictionary to send an unclaimed phrase to | narrower than ideal and deliberately unchanged — see below |
+| `understanding._vocabulary_rung` | **which** dictionary to send an unclaimed phrase to | asks the FIRST contributor only — a policy, decided 2026-09-14, recorded below |
+
+#### Policy: a union slug asks its busiest dictionary and no other (2026-09-14)
 
 `_vocabulary_rung` sends a phrase out to be matched inside ONE named level,
-under a hard ceiling of eight comm round trips for the whole query. A union
-slug has no one level, so it is skipped and a breed typed on a pets root wins
-no auto-applied chip (the text search still finds the listing; what is lost is
-the filter, not the page). Trying every contributing dictionary is not a
-one-line change of predicate: a root over twenty children would spend the
-whole eight-call budget on one slug and starve the rest, so which dictionaries
-a union slug may spend that budget on is a policy question and is left open
-rather than answered by accident.
+under a hard ceiling of eight comm round trips for the WHOLE query
+(`_MATCH_CALL_BUDGET`), with the slug loop on the outside. A union slug has no
+one level. Until this decision it was skipped outright, so a breed typed at a
+pets root won no chip at all.
+
+**Decided: the phrase goes to the first contributing dictionary in fold
+order** — the busiest declaring category's — and to no other.
+
+*Why this arm.* Cost is identical to a single-dictionary slug's, so nothing
+about the shared budget moves; trying every contributor would let a root over
+twenty children spend all eight calls on one slug and starve the rest. And it
+is the same rule the CAPTIONS of a union group already use (0.16.6, first
+contributor wins), so such a group answers with the busiest category's word in
+both places rather than in one and not the other. That consistency was judged
+worth more than completeness.
+
+*What it costs, exactly.* A phrase that belongs to a non-busiest child — «такса»
+under a pets root whose cats outnumber its dogs — finds no filter. The text
+search still finds the listing, so what is lost is the auto-applied chip, not
+the page. The loss is silent by construction: no answer says "this phrase might
+have been a dog breed".
+
+*The later shape, if it is ever needed.* Every contributor tried, under a
+PER-SLUG sub-budget carved out of `_MATCH_CALL_BUDGET` so one wide slug cannot
+starve the others — which means restructuring a budget nothing else is asking
+to restructure. **What should trigger it:** evidence that phrases genuinely
+belonging to a non-busiest child are typed at a root often enough to be
+noticed — a measurable rate of root queries whose residual matches a term in a
+contributing dictionary that was never asked. Until that number exists, the
+cost of the restructure is real and the benefit is assumed.
+
+Both tests that pin this live in `tests/test_understanding.py` and pin the
+CHOICE rather than the behaviour: one asserts the union slug is reached at
+all, the other that a term held ONLY by the second contributor yields no chip
+and that `dogs-215` is never asked. The second goes red the day someone widens
+the rung without restructuring the budget, which is the conversation this
+policy exists to force.
 
 ### The key a facet group has in the address (0.14.4)
 
