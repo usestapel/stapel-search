@@ -1383,3 +1383,69 @@ def test_each_contributing_dictionary_is_asked_once_for_the_counted_codes(
     assert [call[0] for call in breed_calls] == ["cats-212", "dogs-215"]
     for _vocabulary, _level, codes in breed_calls:
         assert set(codes) <= set(search({"type": DOC_TYPE, "category": "zoo"})["facets"]["breed"])
+
+
+def test_a_union_group_is_capped_as_the_dictionary_it_is(catalogue):
+    """The cap keyed on the wrong predicate (0.16.7).
+
+    `bucket_limit` sized a group by membership in `vocabulary_refs`, which
+    until 0.16.6 meant "vocabulary-backed" and afterwards means "has exactly
+    ONE vocabulary". So the one group that most needs the larger cap was the
+    one excluded from it: a root over two breed dictionaries has strictly
+    MORE terms than either child, and it was being cut at the inline cap
+    while each child got the dictionary one.
+
+    Asserted against the SETTINGS, not against today's numbers: the rule is
+    "a union is a dictionary", and a test that spelled 1000 would keep
+    passing if the two caps were ever swapped.
+    """
+    from stapel_search.backends._shared import bucket_limit
+    from stapel_search.conf import search_settings
+    from stapel_search.facets import evidence_plan
+
+    plan = evidence_plan([("cats", 4), ("dogs", 3)])
+
+    assert "breed" not in plan.vocabulary_refs, "no single address, by construction"
+    assert plan.vocabulary_sources["breed"] == (
+        ("cats-212", "Breed"),
+        ("dogs-215", "Breed"),
+    )
+    assert bucket_limit(plan, "breed") == int(
+        search_settings.MAX_FACET_VALUES_VOCABULARY
+    )
+    # The leaf's own plan is the control: same axis, one dictionary, and the
+    # cap it always had.
+    from stapel_search.facets import facet_plan
+
+    assert bucket_limit(facet_plan("cats"), "breed") == int(
+        search_settings.MAX_FACET_VALUES_VOCABULARY
+    )
+
+
+def test_a_union_group_answers_past_the_inline_cap(
+    catalogue, zoo_corpus, breed_resolver, settings
+):
+    """The same rule through the front door, on both engines' one cap.
+
+    Six breeds counted across the two dictionaries; the inline cap is three.
+    A panel that filters the bucket list can only filter what it was sent,
+    so a root cut at the inline cap hides breeds its own children show.
+    """
+    from stapel_search.services import search
+
+    settings.STAPEL_SEARCH = {
+        **settings.STAPEL_SEARCH,
+        "MAX_FACET_VALUES": 3,
+        "MAX_FACET_VALUES_VOCABULARY": 9,
+    }
+    counted = search({"type": DOC_TYPE, "category": "zoo"})["facets"]["breed"]
+
+    assert len(counted) == 6, sorted(counted)
+    assert set(counted) == {
+        "bengalskaya",
+        "meyn-kun",
+        "sfinks",
+        "ghost-breed",
+        "nemeckaya-ovcharka",
+        "taksa",
+    }

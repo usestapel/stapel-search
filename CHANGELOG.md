@@ -4,6 +4,43 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.7] — 2026-09-14
+
+Patch, and the second half of 0.16.6. A group fed by more than one
+vocabulary got its captions back in 0.16.6 and was still sized as if it had
+none: `bucket_limit` asked whether a slug was vocabulary-backed by looking it
+up in `vocabulary_refs`, which until 0.16.6 meant exactly that and afterwards
+means "has exactly ONE vocabulary". So the union group was cut at
+`MAX_FACET_VALUES` (200) while each of its children got
+`MAX_FACET_VALUES_VOCABULARY` (1000) — and a pets root over a cat breed level
+and a dog one holds strictly MORE terms than either child. The one group that
+most needed the larger cap was the one excluded from it, and a rail that
+filters the bucket list can only filter what it was sent.
+
+- `backends/_shared.bucket_limit` keys on `facets.vocabulary_addresses(plan)`
+  — the view that knows "this slug is vocabulary-backed" for the single and
+  the union case alike. Same two caps, same rule; only the predicate moved.
+  The `groups` list in `services.search` is routed through the same view, so
+  "vocabulary-backed" is asked in one place.
+- The cap also feeds the coverage floor (a bucket list at its cap makes
+  coverage a FLOOR, not a measurement, and a group is not withheld on a
+  floor), so a union group was additionally at risk of being withheld on a
+  number that could not establish it.
+- Audit of every other reader of `vocabulary_refs`, in `MODULE.md`: three ask
+  WHICH dictionary and are correct as they stand.
+  `understanding._vocabulary_rung` asks which dictionary to send an unclaimed
+  phrase to, under a hard ceiling of eight comm round trips per query, and is
+  deliberately unchanged — a union slug has no one level, and letting one
+  slug spend the whole budget across twenty dictionaries is a policy question,
+  not a change of predicate. What a reader loses today is an auto-applied
+  chip on a root, not the page.
+- No wire change: `docs/schema.json` is untouched.
+- New tests: a union group's cap is the vocabulary cap, asserted against the
+  SETTING rather than against `1000`, with the single-dictionary child as the
+  control; and through the front door, a root over two dictionaries answers
+  with all six counted breeds where the inline cap of three would have shown
+  three.
+
 ## [0.16.6] — 2026-09-14
 
 Patch. A facet group whose values come from MORE THAN ONE vocabulary shipped

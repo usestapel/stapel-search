@@ -72,7 +72,9 @@ DEFAULTS = {
     # the answer saying so. 1000 covers the dictionaries the fleet has and
     # still bounds the response — the buckets a query produces are limited by
     # the distinct values its candidate set actually carries, never by the
-    # level's size.
+    # level's size. "Vocabulary-backed" is `facets.vocabulary_addresses`,
+    # so a group fed by SEVERAL dictionaries is governed by this cap too —
+    # it holds more terms than any one of its children, not fewer.
     "MAX_FACET_VALUES_VOCABULARY": 1000,
     # --- a plan the RESULT SET justifies (D175) ---------------------------
     # How many categories the plan may draw feature definitions from when

@@ -391,7 +391,11 @@ def vocabulary_addresses(plan: FacetPlan) -> dict[str, tuple[tuple[str, str], ..
     dicts are disjoint by construction (a slug is in exactly one of them), so
     the merge below cannot double-count a slug.
     """
-    out = {slug: (address,) for slug, address in plan.vocabulary_refs.items()}
+    # Read through `getattr`: `bucket_limit` calls this on whatever plan an
+    # engine was handed, and a cap that raises is worse than a cap that is
+    # wrong.
+    refs = getattr(plan, "vocabulary_refs", None) or {}
+    out = {slug: (address,) for slug, address in refs.items()}
     for slug, addresses in (getattr(plan, "vocabulary_sources", None) or {}).items():
         if addresses and slug not in out:
             out[slug] = tuple(addresses)

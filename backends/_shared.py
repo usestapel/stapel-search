@@ -69,10 +69,22 @@ def bucket_limit(plan, slug: str) -> int:
     vocabulary-backed (``optionsRef``) and ``MAX_FACET_VALUES`` governs the
     rest. Both are still caps: an unbounded group is a response whose size
     is set by the corpus.
+
+    "Vocabulary-backed" is asked of :func:`facets.vocabulary_addresses` and
+    not of ``vocabulary_refs`` membership. Those were the same question until
+    0.16.6 and stopped being: a group whose declaring categories name
+    DIFFERENT dictionaries has no single address, so it is absent from
+    ``vocabulary_refs`` while being as vocabulary-backed as a group can get.
+    Keyed on the old predicate, the one group that most needs the larger cap
+    was the one excluded from it — a pets root over a cat breed level and a
+    dog one holds strictly more terms than either child, and was cut at the
+    inline cap while each child got the dictionary one, hiding breeds from
+    the root that its own children show.
     """
     from ..conf import search_settings
+    from ..facets import vocabulary_addresses
 
-    if slug in (getattr(plan, "vocabulary_refs", None) or {}):
+    if slug in vocabulary_addresses(plan):
         return int(search_settings.MAX_FACET_VALUES_VOCABULARY)
     return int(search_settings.MAX_FACET_VALUES)
 

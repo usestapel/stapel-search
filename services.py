@@ -1698,6 +1698,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         path_degradation,
         reset_path_degradation,
         url_keys,
+        vocabulary_addresses,
         vocabulary_extras,
         vocabulary_labels,
     )
@@ -2052,8 +2053,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     groups = (
         list(counts)
         + [slug for slug in plan.option_labels if slug not in counts]
-        + [slug for slug in plan.vocabulary_refs if slug not in counts]
-        + [slug for slug in plan.vocabulary_sources if slug not in counts]
+        # "Vocabulary-backed" asked in ONE place (0.16.7). Spelled as
+        # `vocabulary_refs` membership it is a narrower question since
+        # 0.16.6 — it excludes a group fed by several dictionaries — and
+        # every reader here means the wider one.
+        + [slug for slug in vocabulary_addresses(plan) if slug not in counts]
     )
     facet_labels: dict[str, dict] = {}
     for slug in groups:

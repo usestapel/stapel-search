@@ -616,6 +616,32 @@ dog. **First contributor wins**, and the order is not arbitrary:
 the dictionary of the category most of the page is made of. `vocabularies`
 lists them in that same order, so the rule is legible in the answer.
 
+#### What "vocabulary-backed" is asked of (0.16.7)
+
+`vocabulary_refs` answered two questions at once until 0.16.6 — *which
+dictionary is this* and *is this a dictionary at all* — and now answers only
+the first, because a union group has no single address. Every reader that
+means the second asks `facets.vocabulary_addresses(plan)` instead. The audit,
+in full:
+
+| reader | asks | after 0.16.6 |
+|---|---|---|
+| `backends/_shared.bucket_limit` | is it a dictionary | **was wrong** — a union group was cut at `MAX_FACET_VALUES` (200) while each child got `MAX_FACET_VALUES_VOCABULARY` (1000). The root over two breed levels holds strictly more terms than either child, so the group that most needed the larger cap was the one excluded from it. Fixed in 0.16.7 |
+| `services.search` — the `groups` list | is it a dictionary | routed through the same view in 0.16.7 |
+| `services.search` — `vocabulary` / `level` in `facet_labels` | which dictionary | correct: there is no single one, and the answer says so |
+| `services.search` — the `withheld` prune | which dictionary | correct; `vocabulary_sources` is pruned beside it |
+| `understanding._vocabulary_rung` | **which** dictionary to send an unclaimed phrase to | narrower than ideal and deliberately unchanged — see below |
+
+`_vocabulary_rung` sends a phrase out to be matched inside ONE named level,
+under a hard ceiling of eight comm round trips for the whole query. A union
+slug has no one level, so it is skipped and a breed typed on a pets root wins
+no auto-applied chip (the text search still finds the listing; what is lost is
+the filter, not the page). Trying every contributing dictionary is not a
+one-line change of predicate: a root over twenty children would spend the
+whole eight-call budget on one slug and starve the rest, so which dictionaries
+a union slug may spend that budget on is a policy question and is left open
+rather than answered by accident.
+
 ### The key a facet group has in the address (0.14.4)
 
 An importer mints a type suffix onto every slug it creates, and the suffix
