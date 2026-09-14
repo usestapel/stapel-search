@@ -87,6 +87,12 @@ CATALOGUE = {
         _select("colour", "red", "blue"),
         {**_select("vin", "a", "b"), "visibility": "owner"},
     ],
+    # A root whose two children answer the SAME axis out of DIFFERENT
+    # vocabularies — the «Порода» case measured on the live stand under
+    # `/c/zhivotnye`, where cats and dogs are two breed dictionaries.
+    "zoo": [],
+    "cats": [_ref_select("breed", vocabulary="cats-212", level="Breed")],
+    "dogs": [_ref_select("breed", vocabulary="dogs-215", level="Breed")],
 }
 
 
@@ -1135,3 +1141,245 @@ def test_the_rollup_is_taken_after_a_hidden_filter_is_dropped(catalogue, fleet_c
     assert answer["facet_meta"]["dropped_filters"] == ["vin"]
     assert answer["count"] == 3
     assert _rollup(answer) == {"fleet/new": 2, "fleet/used": 1}
+
+
+# --------------------------------------------------------------------------
+# a group fed by MORE THAN ONE vocabulary
+# --------------------------------------------------------------------------
+#
+# Measured on the live stand (ruberi.ru, stapel-search 0.16.5), two requests
+# from one page load of `/c/zhivotnye`:
+#
+#   ?category=142        (the root)  facets.breed: bengalskaya,
+#                        nemeckaya-ovcharka, meyn-kun, taksa
+#                        facet_labels.breed.values: {}   <- EMPTY
+#   ?category=142/144    (the cats leaf)
+#                        facet_labels.breed.values: {"bengalskaya": "Бенгальская",
+#                        "meyn-kun": "Мейн-кун"}
+#
+# `bengalskaya` has a perfectly good caption in the leaf's map and printed as
+# a raw slug at the root, because the root's map was empty rather than
+# partial. The cause is in the fold: two declaring categories naming
+# different vocabulary ADDRESSES for one slug marked it `conflicted`, which
+# dropped the address entirely, which left the post-count resolver with
+# nothing to ask. "No single vocabulary" and "no captions exist" are
+# different facts and the answer conflated them.
+
+
+@pytest.fixture
+def zoo_corpus(conformance):
+    """Four cats and three dogs under one root, two breed dictionaries."""
+    from stapel_search.models import SearchDocument
+    from stapel_search.services import index_documents
+    from stapel_search.testing import _document
+
+    conformance.backend.clear(DOC_TYPE)
+    SearchDocument.objects.filter(doc_type=DOC_TYPE).delete()
+
+    def pet(key, title, leaf, code):
+        return _document(
+            doc_key=key,
+            title=title,
+            card={"title": title},
+            category_id=leaf,
+            category_path=("zoo", leaf),
+            features={"breed": {"type": "ref_select", "value": [code]}},
+        )
+
+    docs = [
+        # Cats outnumber dogs, so `cats` is the busier contributor and
+        # `evidence_plan` folds it FIRST — which is the collision rule.
+        pet("c1", "Кошка 1", "cats", "bengalskaya"),
+        pet("c2", "Кошка 2", "cats", "meyn-kun"),
+        pet("c3", "Кошка 3", "cats", "sfinks"),
+        pet("c4", "Кошка 4", "cats", "ghost-breed"),
+        pet("d1", "Собака 1", "dogs", "nemeckaya-ovcharka"),
+        pet("d2", "Собака 2", "dogs", "taksa"),
+        pet("d3", "Собака 3", "dogs", "sfinks"),
+    ]
+    index_documents(DOC_TYPE, docs)
+    return docs
+
+
+@pytest.fixture
+def breed_resolver():
+    """Two breed dictionaries that share one code with different words."""
+    from stapel_attributes.vocabularies import register_vocabulary_resolver
+
+    TERMS = {
+        "cats-212": {
+            "bengalskaya": "Бенгальская",
+            "meyn-kun": "Мейн-кун",
+            "sfinks": "Сфинкс",
+        },
+        "dogs-215": {
+            "nemeckaya-ovcharka": "Немецкая овчарка",
+            "taksa": "Такса",
+            # The same code, another animal: the collision this has to rule on.
+            "sfinks": "Сфинкс (собака)",
+        },
+    }
+
+    class _Resolver:
+        calls: list[tuple] = []
+
+        def describe(self, vocabulary):
+            return None
+
+        def exists(self, vocabulary, level, code):
+            return code in TERMS.get(vocabulary, {})
+
+        def is_child(self, vocabulary, level, code, parent_level, parent_code):
+            return False
+
+        def labels(self, vocabulary, level, codes):
+            _Resolver.calls.append((vocabulary, level, tuple(codes)))
+            terms = TERMS.get(vocabulary, {})
+            return {code: terms[code] for code in codes if code in terms}
+
+    resolver = _Resolver()
+    register_vocabulary_resolver(resolver)
+    yield resolver
+    register_vocabulary_resolver(None)
+    _Resolver.calls.clear()
+
+
+def test_a_leaf_over_one_breed_vocabulary_is_captioned_as_before(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """The single-vocabulary path, pinned byte for byte BEFORE the union one.
+
+    This is the request the stand answered correctly and it must keep
+    answering it identically — same keys, same values, no new key added to a
+    group that has exactly one vocabulary behind it.
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "zoo/cats"})
+
+    assert answer["facet_labels"]["breed"] == {
+        "label": "breed",
+        "label_translatable": False,
+        "url_key": "breed",
+        "translatable": False,
+        "values": {
+            "bengalskaya": "Бенгальская",
+            "meyn-kun": "Мейн-кун",
+            "sfinks": "Сфинкс",
+        },
+        "vocabulary": "cats-212",
+        "level": "Breed",
+        "order": 1,
+    }
+
+
+def test_a_root_over_two_breed_vocabularies_captions_every_code_it_can(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """The defect itself: four counted breeds, four Russian words.
+
+    The union is taken over the codes the answer actually counted, so each
+    contributing dictionary is asked once for its own share.
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "zoo"})
+
+    assert answer["facet_meta"]["plan"] == "evidence"
+    counted = answer["facets"]["breed"]
+    assert set(counted) >= {
+        "bengalskaya",
+        "meyn-kun",
+        "nemeckaya-ovcharka",
+        "taksa",
+    }
+    values = answer["facet_labels"]["breed"]["values"]
+    assert values["bengalskaya"] == "Бенгальская"
+    assert values["meyn-kun"] == "Мейн-кун"
+    assert values["nemeckaya-ovcharka"] == "Немецкая овчарка"
+
+
+def test_a_code_only_one_contributing_dictionary_knows_is_still_captioned(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """`taksa` is in the dog dictionary and in no other. A union that only
+    captioned the codes every contributor knows would caption nothing at
+    all — the dictionaries are disjoint by construction."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "zoo"})
+
+    assert answer["facet_labels"]["breed"]["values"]["taksa"] == "Такса"
+
+
+def test_a_code_no_contributing_dictionary_resolves_is_absent_not_empty(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """Exactly as on the single-vocabulary path: an unresolved code has no
+    key, rather than a key holding "" — a client falls back to the code, and
+    "" would print an empty row."""
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "zoo"})
+
+    values = answer["facet_labels"]["breed"]["values"]
+    assert answer["facets"]["breed"]["ghost-breed"] == 1, "counted, just uncaptioned"
+    assert "ghost-breed" not in values
+
+
+def test_the_union_names_no_single_vocabulary_and_says_it_is_a_union(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """`vocabulary: null` is the truth for a union — there genuinely is not
+    one — and it is a different fact from "no captions exist". A consumer
+    that needs to know which dictionaries fed the group reads `vocabularies`
+    rather than inferring it from an emptied map."""
+    from stapel_search.services import search
+
+    group = search({"type": DOC_TYPE, "category": "zoo"})["facet_labels"]["breed"]
+
+    assert group["vocabulary"] is None
+    assert "level" not in group
+    assert group["vocabularies"] == [
+        {"vocabulary": "cats-212", "level": "Breed"},
+        {"vocabulary": "dogs-215", "level": "Breed"},
+    ]
+    # The single-vocabulary group carries no such key: a reader tells the two
+    # shapes apart by presence, and nothing about the old shape moved.
+    leaf = search({"type": DOC_TYPE, "category": "zoo/cats"})["facet_labels"]["breed"]
+    assert "vocabularies" not in leaf
+
+
+def test_a_code_in_both_dictionaries_takes_the_busiest_contributor_s_word(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """`sfinks` is a cat and a dog, with a different word in each.
+
+    The rule is FIRST CONTRIBUTOR WINS, and the fold order is not arbitrary:
+    `evidence_plan` folds the categories busiest first, so the winner is the
+    dictionary of the category most of this page is made of. Four cats
+    against three dogs, so «Сфинкс».
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE, "category": "zoo"})
+
+    assert answer["facet_labels"]["breed"]["values"]["sfinks"] == "Сфинкс"
+
+
+def test_each_contributing_dictionary_is_asked_once_for_the_counted_codes(
+    catalogue, zoo_corpus, breed_resolver
+):
+    """The cost rule the single-vocabulary path already holds to, kept under
+    the union: one batched call per dictionary, never one per code, and never
+    a read of a level that can hold tens of thousands of terms."""
+    from stapel_search.services import search
+
+    breed_resolver.calls.clear()
+    search({"type": DOC_TYPE, "category": "zoo"})
+
+    breed_calls = [call for call in breed_resolver.calls if call[1] == "Breed"]
+    assert len(breed_calls) == 2, breed_calls
+    assert [call[0] for call in breed_calls] == ["cats-212", "dogs-215"]
+    for _vocabulary, _level, codes in breed_calls:
+        assert set(codes) <= set(search({"type": DOC_TYPE, "category": "zoo"})["facets"]["breed"])

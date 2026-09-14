@@ -275,6 +275,13 @@ class FacetMetaSerializer(serializers.Serializer):
     )
 
 
+class VocabularyAddressSerializer(serializers.Serializer):
+    """One dictionary a facet group draws its option codes from."""
+
+    vocabulary = serializers.CharField()
+    level = serializers.CharField()
+
+
 class FacetLabelsSerializer(serializers.Serializer):
     """The heading for one facet group, plus captions for its option codes."""
 
@@ -347,6 +354,21 @@ class FacetLabelsSerializer(serializers.Serializer):
         required=False,
         help_text="The vocabulary level `vocabulary` resolves against. Present only "
         "alongside a non-null `vocabulary`.",
+    )
+    vocabularies = VocabularyAddressSerializer(
+        many=True,
+        required=False,
+        help_text=(
+            "The dictionaries behind a group whose contributing categories "
+            "name DIFFERENT ones — a pets root over a cat breed level and a "
+            "dog one. Present only in that case, and then `vocabulary` and "
+            "`level` are null/absent because there genuinely is no single "
+            "address. That says nothing about the captions: `values` is the "
+            "union of what these dictionaries know about the codes this "
+            "answer counted, and a code two of them spell differently takes "
+            "the word of the first — the category most of this page is made "
+            "of. Listed in that same order."
+        ),
     )
     order = serializers.IntegerField(
         allow_null=True,
@@ -501,7 +523,11 @@ class SearchResponseSerializer(serializers.Serializer):
             "only for the codes that hold anything. `vocabulary` names the "
             "vocabulary a `ref_select` axis reads its options from and is "
             "null for an inline `select` — the only way a client with no "
-            "leaf schema of its own can tell the two apart."
+            "leaf schema of its own can tell the two apart. It is also null "
+            "for a group fed by SEVERAL dictionaries (a pets root over cat "
+            "and dog breeds), which names them in `vocabularies` and still "
+            "captions its values from all of them: no single address is a "
+            "different fact from no captions."
         ),
     )
     facet_meta = FacetMetaSerializer()

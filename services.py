@@ -1998,6 +1998,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
                 for slug, address in plan.vocabulary_refs.items()
                 if slug not in withheld_slugs
             },
+            vocabulary_sources={
+                slug: addresses
+                for slug, addresses in plan.vocabulary_sources.items()
+                if slug not in withheld_slugs
+            },
             group_labels={
                 slug: label
                 for slug, label in plan.group_labels.items()
@@ -2048,6 +2053,7 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         list(counts)
         + [slug for slug in plan.option_labels if slug not in counts]
         + [slug for slug in plan.vocabulary_refs if slug not in counts]
+        + [slug for slug in plan.vocabulary_sources if slug not in counts]
     )
     facet_labels: dict[str, dict] = {}
     for slug in groups:
@@ -2080,8 +2086,25 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         facet_labels[slug]["vocabulary"] = ref[0] if ref else None
         if ref:
             facet_labels[slug]["level"] = ref[1]
+        # A group whose declaring categories name DIFFERENT dictionaries —
+        # `/c/zhivotnye` over a cat breed level and a dog one. There is no
+        # single address, so `vocabulary` stays null, and that is a statement
+        # about the ADDRESS: the captions below are the union of what those
+        # dictionaries know about the codes this answer counted. Until 0.16.6
+        # the group lost its captions along with its address and the rail
+        # printed `bengalskaya` at readers. A client that needs to know it is
+        # reading a union reads THIS key rather than inferring it from an
+        # empty map; absent for a group with one dictionary, so nothing about
+        # that shape moved.
+        union = plan.vocabulary_sources.get(slug)
+        if union:
+            facet_labels[slug]["vocabularies"] = [
+                {"vocabulary": vocabulary, "level": level}
+                for vocabulary, level in union
+            ]
     for slug, values in vocabulary_labels(plan, counts).items():
         ref = plan.vocabulary_refs.get(slug)
+        union = plan.vocabulary_sources.get(slug)
         default = {
             "label": None,
             "label_translatable": False,
@@ -2091,6 +2114,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         }
         if ref:
             default["level"] = ref[1]
+        if union:
+            default["vocabularies"] = [
+                {"vocabulary": vocabulary, "level": level}
+                for vocabulary, level in union
+            ]
         facet_labels.setdefault(slug, default)
         facet_labels[slug].update({"translatable": False, "values": values})
     # What the catalogue knows about a code besides its name — a colour's

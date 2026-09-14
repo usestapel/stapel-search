@@ -591,6 +591,13 @@
             "type": "string",
             "description": "The vocabulary level `vocabulary` resolves against. Present only alongside a non-null `vocabulary`."
           },
+          "vocabularies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VocabularyAddress"
+            },
+            "description": "The dictionaries behind a group whose contributing categories name DIFFERENT ones — a pets root over a cat breed level and a dog one. Present only in that case, and then `vocabulary` and `level` are null/absent because there genuinely is no single address. That says nothing about the captions: `values` is the union of what these dictionaries know about the codes this answer counted, and a code two of them spell differently takes the word of the first — the category most of this page is made of. Listed in that same order."
+          },
           "order": {
             "type": "integer",
             "nullable": true,
@@ -1062,7 +1069,7 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/FacetLabels"
             },
-            "description": "{slug: {label, label_translatable, url_key, translatable, values: {value: caption}, vocabulary, level}} — one entry for EVERY group in `facets`. `url_key` is the group's key in the address. `label` is the group's heading and is null when the definition has no name; `values` is empty for a slug whose options are not inline in the category schema and whose vocabulary resolved nothing, because this module will not invent a caption it has not read. `extras` carries what a term holds besides its caption (a colour's `hue`) and is present only for the codes that hold anything. `vocabulary` names the vocabulary a `ref_select` axis reads its options from and is null for an inline `select` — the only way a client with no leaf schema of its own can tell the two apart."
+            "description": "{slug: {label, label_translatable, url_key, translatable, values: {value: caption}, vocabulary, level}} — one entry for EVERY group in `facets`. `url_key` is the group's key in the address. `label` is the group's heading and is null when the definition has no name; `values` is empty for a slug whose options are not inline in the category schema and whose vocabulary resolved nothing, because this module will not invent a caption it has not read. `extras` carries what a term holds besides its caption (a colour's `hue`) and is present only for the codes that hold anything. `vocabulary` names the vocabulary a `ref_select` axis reads its options from and is null for an inline `select` — the only way a client with no leaf schema of its own can tell the two apart. It is also null for a group fed by SEVERAL dictionaries (a pets root over cat and dog breeds), which names them in `vocabularies` and still captions its values from all of them: no single address is a different fact from no captions."
           },
           "facet_meta": {
             "$ref": "#/components/schemas/FacetMeta"
@@ -1181,6 +1188,22 @@
           "items",
           "language",
           "terms"
+        ]
+      },
+      "VocabularyAddress": {
+        "type": "object",
+        "description": "One dictionary a facet group draws its option codes from.",
+        "properties": {
+          "vocabulary": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "vocabulary"
         ]
       },
       "WithheldAxis": {

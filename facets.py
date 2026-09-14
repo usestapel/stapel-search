@@ -374,6 +374,30 @@ def _ref_field(options_ref: Any, name: str) -> str:
     return str(value) if value else ""
 
 
+def vocabulary_addresses(plan: FacetPlan) -> dict[str, tuple[tuple[str, str], ...]]:
+    """``{slug: (address, …)}`` — every dictionary behind each facet group.
+
+    One tuple per slug, so a caller resolves a group the same way whether the
+    group has one dictionary behind it or four. A slug with a single address
+    (``vocabulary_refs``) yields a one-tuple and the answer it produces is
+    what it always was; a slug whose declaring categories name different
+    dictionaries (``vocabulary_sources``) yields them in fold order, which is
+    BUSIEST DECLARER FIRST under :func:`evidence_plan`.
+
+    That order is the collision rule, and it has to be one: ``sfinks`` is a
+    cat and a dog with a different word in each dictionary. First contributor
+    wins, so the word comes from the category most of the page is made of —
+    which is also the word most of the page's readers are looking at. The two
+    dicts are disjoint by construction (a slug is in exactly one of them), so
+    the merge below cannot double-count a slug.
+    """
+    out = {slug: (address,) for slug, address in plan.vocabulary_refs.items()}
+    for slug, addresses in (getattr(plan, "vocabulary_sources", None) or {}).items():
+        if addresses and slug not in out:
+            out[slug] = tuple(addresses)
+    return out
+
+
 def vocabulary_labels(
     plan: FacetPlan, counts: dict[str, dict[str, int]]
 ) -> dict[str, dict[str, str]]:
@@ -392,7 +416,11 @@ def vocabulary_labels(
     reason that is about size rather than tidiness: a level of the phone
     catalogue holds 15 844 terms and the plan does not know which of them a
     query will produce. What a query produces is at most ``MAX_FACET_VALUES``
-    codes per slug, and they are asked for in ONE batched call per slug.
+    codes per slug, and they are asked for in ONE batched call per dictionary
+    — one for a group with a single ``optionsRef``, and one per contributing
+    dictionary for a group a root draws from several of them
+    (:func:`vocabulary_addresses`), each asked only for what is still
+    unnamed.
 
     The resolver is ``stapel-attributes``' — the same abstraction the ref
     types validate and snapshot through, so a deployment wires a vocabulary
@@ -400,7 +428,8 @@ def vocabulary_labels(
     exactly what it was: codes. A caption is an improvement on a code, never a
     precondition for answering.
     """
-    if not plan.vocabulary_refs:
+    addresses = vocabulary_addresses(plan)
+    if not addresses:
         return {}
     try:
         from stapel_attributes.vocabularies import get_vocabulary_resolver
@@ -412,38 +441,62 @@ def vocabulary_labels(
         return {}
 
     out: dict[str, dict[str, str]] = {}
-    for slug, (vocabulary, level) in plan.vocabulary_refs.items():
+    for slug, group in addresses.items():
         codes = [code for code in (counts.get(slug) or {}) if code]
         if not codes:
             continue
-        try:
-            # `VocabularyResolver.labels`, not `refs.resolve_labels`. The
-            # latter labels an unresolved code as ITSELF, which is right for a
-            # stored DAO — something must be shown — and wrong here: a caption
-            # map is an OVERLAY, and `{"apple": "apple"}` would make a map that
-            # resolved nothing indistinguishable from one that resolved every
-            # term to its own name. `labels()` omits what it does not know,
-            # which is the distinction this needs, and a reader falls back to
-            # the code for a missing key anyway. (`realme`'s catalogue label
-            # really is `realme`; the two are not the same fact.)
-            mapping = resolver.labels(vocabulary, level, list(codes)) or {}
-        except Exception as exc:  # noqa: BLE001 — a caption is never fatal
-            logger.warning(
-                "vocabulary labels unavailable for facet %r (%s/%s): %s",
-                slug,
-                vocabulary,
-                level,
-                exc,
-            )
-            continue
-        captions = {
-            code: str(mapping[code])
-            for code in codes
-            if mapping.get(code) not in (None, "")
-        }
+        captions: dict[str, str] = {}
+        for vocabulary, level in group:
+            # Only what is still unnamed: the FIRST dictionary that knows a
+            # code keeps it, and a group with one dictionary asks exactly the
+            # question it always asked.
+            wanted = [code for code in codes if code not in captions]
+            if not wanted:
+                break
+            _resolve_into(captions, resolver, vocabulary, level, wanted, slug)
         if captions:
             out[slug] = captions
     return out
+
+
+def _resolve_into(
+    captions: dict[str, str],
+    resolver: Any,
+    vocabulary: str,
+    level: str,
+    codes: list[str],
+    slug: str,
+) -> None:
+    """Add one dictionary's words for *codes* to *captions*, first word wins.
+
+    A dictionary that cannot be read leaves *captions* as it found it and the
+    next one is still asked: under a union, one unreadable level must not cost
+    the group the words the others have. A caption is never fatal.
+    """
+    # `VocabularyResolver.labels`, not `refs.resolve_labels`. The latter
+    # labels an unresolved code as ITSELF, which is right for a stored DAO —
+    # something must be shown — and wrong here: a caption map is an OVERLAY,
+    # and `{"apple": "apple"}` would make a map that resolved nothing
+    # indistinguishable from one that resolved every term to its own name.
+    # `labels()` omits what it does not know, which is the distinction this
+    # needs, and a reader falls back to the code for a missing key anyway.
+    # (`realme`'s catalogue label really is `realme`; not the same fact.)
+    try:
+        mapping = resolver.labels(vocabulary, level, list(codes)) or {}
+    except Exception as exc:  # noqa: BLE001 — a caption is never fatal
+        logger.warning(
+            "vocabulary labels unavailable for facet %r (%s/%s): %s",
+            slug,
+            vocabulary,
+            level,
+            exc,
+        )
+        return
+    for code in codes:
+        word = mapping.get(code)
+        if word in (None, ""):
+            continue
+        captions.setdefault(code, str(word))
 
 
 def vocabulary_extras(
@@ -468,7 +521,8 @@ def vocabulary_extras(
     not a code, so asking it per value would be one full level read per
     bucket. Two slugs pointing at the same level share the one read.
     """
-    if not plan.vocabulary_refs:
+    addresses = vocabulary_addresses(plan)
+    if not addresses:
         return {}
     try:
         from stapel_attributes.vocabularies import get_vocabulary_resolver
@@ -484,15 +538,23 @@ def vocabulary_extras(
 
     by_level: dict[tuple[str, str], dict[str, dict]] = {}
     out: dict[str, dict[str, dict]] = {}
-    for slug, (vocabulary, level) in plan.vocabulary_refs.items():
+    for slug, group in addresses.items():
         codes = [code for code in (counts.get(slug) or {}) if code]
         if not codes:
             continue
-        key = (vocabulary, level)
-        if key not in by_level:
-            by_level[key] = _level_extras(reader, vocabulary, level, slug)
-        bags = by_level[key]
-        extras = {code: dict(bags[code]) for code in codes if bags.get(code)}
+        # Same walk and the same first-contributor rule as the captions: a
+        # group drawing on two dictionaries takes each code's bag from the
+        # first of them that carries one, so a swatch and its word come from
+        # one term rather than from two catalogues that disagree.
+        extras: dict[str, dict] = {}
+        for vocabulary, level in group:
+            key = (vocabulary, level)
+            if key not in by_level:
+                by_level[key] = _level_extras(reader, vocabulary, level, slug)
+            bags = by_level[key]
+            for code in codes:
+                if code not in extras and bags.get(code):
+                    extras[code] = dict(bags[code])
         if extras:
             out[slug] = extras
     return out
@@ -789,6 +851,14 @@ class _Fold:
         #: overlay is dropped and the raw code prints, which is honest.
         self.conflicted: set[str] = set()
         self.vocabulary_refs: dict[str, tuple[str, str]] = {}
+        #: ``{slug: [(vocabulary, level), …]}`` — EVERY distinct vocabulary
+        #: address the declaring categories name for the slug, in fold order
+        #: (busiest declarer first under `evidence_plan`). `vocabulary_refs`
+        #: holds the one address when they agree; this holds all of them when
+        #: they do not, which is how a group fed by two dictionaries is still
+        #: captioned. Disagreement is not corruption here: cats and dogs
+        #: really do have two breed dictionaries.
+        self.vocabulary_sources: dict[str, list[tuple[str, str]]] = {}
         self.rank: dict[str, tuple[int, int]] = {}
         #: The declaring category's own order for the slug — see
         #: :func:`_schema_rank`. Paired with `position` it IS the schema.
@@ -934,7 +1004,13 @@ def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
             level = _ref_field(config["optionsRef"], "level")
             if vocabulary and level:
                 address = (vocabulary, level)
+                sources = fold.vocabulary_sources.setdefault(slug, [])
+                if address not in sources:
+                    sources.append(address)
                 if fold.vocabulary_refs.setdefault(slug, address) != address:
+                    # No single address for this slug, so none is reported —
+                    # but the captions are not the address. See
+                    # `FacetPlan.vocabulary_sources`.
                     fold.conflicted.add(slug)
             continue
         options = config.get("options")
@@ -1010,6 +1086,16 @@ def _shape(
         for slug, address in fold.vocabulary_refs.items()
         if slug not in fold.conflicted
     }
+    # Exactly the vocabulary-backed slugs `refs` dropped: one address is one
+    # address, and where there is no single one the contributors are carried
+    # instead. Written as "not in refs" rather than "len > 1" so a slug
+    # dropped for a caption disagreement keeps its dictionary too — the one
+    # thing that was never in question.
+    sources = {
+        slug: tuple(addresses)
+        for slug, addresses in fold.vocabulary_sources.items()
+        if addresses and slug not in refs
+    }
     return FacetPlan(
         slugs=selected,
         kinds={slug: kinds.get(slug, "term") for slug in selected},
@@ -1024,6 +1110,7 @@ def _shape(
             if slug in fold.translatable and slug not in fold.conflicted
         },
         vocabulary_refs={slug: refs[slug] for slug in selected if slug in refs},
+        vocabulary_sources={slug: sources[slug] for slug in selected if slug in sources},
         group_labels={
             slug: fold.group_labels[slug]
             for slug in selected

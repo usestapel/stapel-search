@@ -587,6 +587,35 @@ dotted key or an untranslated word. A vocabulary-backed slug is **absent**
 from the map: its level lives outside the schema, and the plan will not
 invent a caption it has not read.
 
+### A group fed by more than one vocabulary (0.16.6)
+
+The captions for a vocabulary-backed slug are resolved after the count, from
+the address the plan recorded. A branch or root draws its plan from the
+categories its documents are in, and those categories can point one slug at
+DIFFERENT dictionaries: under a pets root, `breed` is a cat breed level in
+one child and a dog breed level in the other. Until 0.16.6 that disagreement
+dropped the address, and with it every caption — the rail printed
+`bengalskaya` beside `taksa` at readers, while the same axis on the cats
+child printed «Бенгальская».
+
+Two facts were being conflated. There genuinely is no single vocabulary for
+such a group, so `vocabulary` is `null` and `level` absent — but the words
+exist, each in its own dictionary. `values` is therefore the **union** of
+what the contributing dictionaries know about the codes this answer counted,
+one batched `labels()` call per dictionary, each asked only for what is still
+unnamed; a code no contributor resolves stays absent from the map exactly as
+it does on the single-dictionary path, and one unreadable level costs the
+group only its own share. `facet_labels[slug].vocabularies` names the
+contributors (`[{vocabulary, level}, …]`) so a consumer learns it is reading
+a union from a field rather than from an emptied map, and is absent for a
+group with one dictionary.
+
+Two dictionaries can spell one code differently — `sfinks` is a cat and a
+dog. **First contributor wins**, and the order is not arbitrary:
+`evidence_plan` folds the categories busiest first, so the word comes from
+the dictionary of the category most of the page is made of. `vocabularies`
+lists them in that same order, so the rule is legible in the answer.
+
 ### The key a facet group has in the address (0.14.4)
 
 An importer mints a type suffix onto every slug it creates, and the suffix

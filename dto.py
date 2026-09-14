@@ -486,6 +486,16 @@ class FacetPlan:
     #: which is not known until the counting is done. This is the address the
     #: post-count pass needs.
     vocabulary_refs: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: ``{slug: ((vocabulary, level), …)}`` for a slug whose declaring
+    #: categories name DIFFERENT vocabularies — a root over two breed
+    #: dictionaries, cats and dogs. Such a slug has no single address, so it
+    #: is absent from ``vocabulary_refs`` and the answer says
+    #: ``vocabulary: null`` about it; that is a statement about the ADDRESS
+    #: and never about the captions. The contributing addresses are all here,
+    #: busiest declarer first, and the post-count pass resolves the counted
+    #: codes against each of them in turn. Disjoint from ``vocabulary_refs``:
+    #: a slug is in exactly one of the two.
+    vocabulary_sources: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     #: ``{slug: (name, translatable)}`` — the feature definition's own name,
     #: which is the HEADING a panel puts above the buckets, and whether that
     #: name is a translation key (``FeatureDef.translate``) or literal text.

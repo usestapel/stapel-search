@@ -4,6 +4,59 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.6] — 2026-09-14
+
+Patch. A facet group whose values come from MORE THAN ONE vocabulary shipped
+an EMPTY caption map, so a storefront printed raw slugs where a reader should
+see words. Measured on a live stand: `/c/zhivotnye` is a pets root whose
+children use different breed dictionaries, and one page load asked two
+questions —
+
+    ?category=142       (the root)  facet_labels.breed.values: {}
+    ?category=142/144   (the cats child)
+                        facet_labels.breed.values: {"bengalskaya": "Бенгальская",
+                        "meyn-kun": "Мейн-кун"}
+
+— so «Порода» offered `bengalskaya`, `nemeckaya-ovcharka`, `meyn-kun`,
+`taksa`. The single-dictionary path was right; the multi-dictionary path gave
+up entirely rather than partially, and `bengalskaya` has a perfectly good
+word in the child's own map.
+
+- The cause was one conflation. Two declaring categories naming different
+  vocabulary ADDRESSES for one slug marked it conflicted, which dropped the
+  address, which left the post-count resolver with nothing to ask. "No
+  single vocabulary" and "no captions exist" are different facts.
+- `values` is now the UNION of the contributing dictionaries' words,
+  restricted to the codes this answer counted. A code no contributor
+  resolves is still ABSENT from the map rather than present as `""`, exactly
+  as on the single-dictionary path — a reader falls back to the code.
+- `vocabulary` legitimately stays `null` for such a group (there is no
+  single one) and `level` stays absent. The new optional
+  `facet_labels[<slug>].vocabularies` — `[{vocabulary, level}, …]` — says it
+  is a union, so a consumer learns that from a field rather than from an
+  emptied map. Absent for a group with one dictionary: nothing about that
+  shape moved.
+- Collision rule, stated in the code: FIRST CONTRIBUTOR WINS. `sfinks` is a
+  cat and a dog with a different word in each. `evidence_plan` folds the
+  categories busiest first, so the winner is the dictionary of the category
+  most of the page is made of — the word most of the page's readers are
+  looking at. `vocabularies` lists them in that same order.
+- Cost is unchanged in shape: one batched `labels()` call per contributing
+  dictionary, each asked only for the codes still unnamed, and never one
+  call per code. A dictionary that cannot be read is logged and the others
+  are still asked — under a union, one unreadable level must not cost the
+  group the words the rest have. `extras` follows the same walk and the same
+  first-contributor rule.
+- Wire: `docs/schema.json` gains the optional `vocabularies` key on
+  `FacetLabels` and the `VocabularyAddress` schema. Additive — no existing
+  key changes type, name or meaning.
+- New tests: a root over two breed dictionaries captions every code it can;
+  a code only one contributor knows is still captioned; a code nobody
+  resolves is absent rather than empty; the union names no single vocabulary
+  and says it is a union; a code in both dictionaries takes the busiest
+  contributor's word; each dictionary is asked once for the counted codes;
+  and the single-dictionary group is pinned key for key, unchanged.
+
 ## [0.16.5] — 2026-09-11
 
 Patch. A vocabulary-backed facet shipped a caption per counted code and
