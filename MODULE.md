@@ -581,6 +581,22 @@ the rule and passes without it. The live shape is a PARENT over children that
 declare the axis — `/c/kvartiry` has four — and that is the only shape that
 can go red.
 
+**Both halves, one rule (0.17.2).** The floor is asked its question once of
+the bucket lists and once of the measured ranges, and 0.17.0 taught only the
+first. The live cost: an `int` axis declared by 30 of 34 and carried by 7 kept
+its GROUP (undrawable — no client makes a checkbox per number) and lost its
+RANGE (the only drawable half), so the answer asserted an axis that was on the
+page nowhere. `_withheld_ranges` now reads `declared_for` through the same
+predicate. An axis carried by NO document still goes, at either half: zero is
+not "most sellers left it blank".
+
+The invariant this failure names is now a test —
+`assert_every_counted_axis_is_drawable`: every slug in `counted` must have at
+least one drawable half, a group only when the feature type is one a client
+builds buckets for and a range only when it is not withheld. It runs over the
+live parent's own shape. Two rules that are supposed to be one rule need an
+assertion that spans both, or the gap between them ships.
+
 **Ordered by what was measured (0.17.0).** `evidence_plan` ranks BEFORE
 counting, from a prediction — documents whose category declares the slug.
 After counting, the same quantity exists measured, and the BORROWED half of

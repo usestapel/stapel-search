@@ -4,6 +4,51 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.17.2] — 2026-09-15
+
+Patch: the other half of the panel gets the same rule, and a gate so the two
+halves cannot drift apart again.
+
+### An answer that asserted an axis it could draw nowhere
+
+The floor is asked its question twice per answer — once of the bucket lists,
+once of the measured ranges. 0.17.0 and 0.17.1 taught the FIRST one that a low
+count is two different sentences and left the second on the flat floor.
+
+On the live flats parent that produced an axis in neither column.
+«Площадь кухни» is an `int`: declared by 30 of 34 candidates' categories and
+carried by 7.
+
+  - the GROUP floor, newly narrowed, kept it — so it came back in `counted`
+    as five bare integers;
+  - no client draws a bucket list for a numeric axis (`int` is not in
+    `FACETABLE_FEATURE_TYPES` — a number is narrowed with two bounds), so the
+    group half was undrawable by construction;
+  - the RANGE floor, untouched, withheld it at 7 < 0.6 x 34.
+
+The answer said the axis was there and a walker searching the whole DOM for
+it found nothing. Nothing was red: both halves were individually correct by
+their own rule, and the defect lived exactly in the gap between two rules
+that were supposed to be one.
+
+`_withheld_ranges` now reads `declared_for` through the same predicate as the
+group half. `kitchen_space` (30 of 34 declared, 7 carried) keeps its range;
+`living_space` (34 declared, 0 carried) stays withheld, because 0 documents is
+not "most sellers left it blank" — there is nothing behind it to filter to.
+
+### The gate
+
+`assert_every_counted_axis_is_drawable` asserts over the WHOLE plan that every
+axis in `counted` has at least one drawable half: a group only if the feature
+type is one a client builds buckets for, a range only if it is not withheld.
+It runs against the flats fixture — which is the live parent leaf for leaf,
+including its three `int` area axes — so it is the instance rather than an
+analogue, and against a second corpus so it is not one page's assertion.
+
+Against the pre-0.17.2 floor it fails naming the slug, its type, its bucket
+count and the withheld row. A rule taught to one half of a two-half panel is
+now something the suite refuses to ship.
+
 ## [0.17.1] — 2026-09-14
 
 Patch: "every candidate's category declares it" is a SHARE, not an equality.

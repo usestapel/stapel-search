@@ -59,6 +59,23 @@ def _select(slug, *values, **flags):
     }
 
 
+def _int(slug, **flags):
+    """A measurement axis, typed the way the live flats leaf types its areas.
+
+    `int`, not a select whose values happen to be numbers: the difference is
+    the whole point of the drawability gate. The server counts an `int` into a
+    bucket list all the same, but a client draws no checkbox per value for one
+    — `FACETABLE_FEATURE_TYPES` excludes it — so the RANGE is the axis's only
+    drawable half.
+    """
+    return {
+        "id": 0, "slug": slug, "name": slug, "translate": "none",
+        "mandatory": False, "show_at_title": False, "show_as_badge": False,
+        **flags,
+        "config": {"type": "int", "postfix": "m2"},
+    }
+
+
 def _ref_select(slug, *, vocabulary, level, **flags):
     return {
         "id": 0, "slug": slug, "name": slug, "translate": "none",
@@ -759,7 +776,14 @@ _FLATS_CONDITION = _select("condition", "new", "used")
 #: falls through to schema position, putting the sparse axis on top. An
 #: ordering test on a fixture where the two agree cannot fail.
 _FLATS_BATHROOM = _select("bathroom", "combined", "separate")
-_FLATS_KITCHEN = _select("kitchen_space", "small", "large")
+#: NUMERIC on purpose, and this is the half the word-valued axis cannot
+#: exercise. «Площадь кухни» is an area, so its values are numbers: the answer
+#: carries it as a group of bare integers AND as a measured range, and a
+#: client builds no bucket list for it at all (an `int` is not in
+#: `FACETABLE_FEATURE_TYPES` — a number is narrowed with two bounds). The
+#: range is therefore the only drawable half, which is what makes the range
+#: floor the one that decides whether this axis exists on the page.
+_FLATS_KITCHEN = _int("kitchen_space")
 _FLATS_SALE = _select("sale_options", "mortgage", "cash")
 
 FLATS_LIKE = {
@@ -821,7 +845,9 @@ def flats_like_corpus(conformance):
             if index < 12 and "sale_options" in declared:
                 features["sale_options"] = {"type": "select", "value": ["cash"]}
             if index < 7 and "kitchen_space" in declared:
-                features["kitchen_space"] = {"type": "select", "value": ["small"]}
+                # The live spread: 11, 8, 10, 2, 6 over seven documents.
+                area = ["11", "8", "10", "6", "11", "8", "10"][index]
+                features["kitchen_space"] = {"type": "select", "value": [area]}
             docs.append(
                 _document(
                     doc_key=f"f{index}",
@@ -885,13 +911,153 @@ def test_an_axis_almost_every_child_declares_is_still_a_filter(
     assert "bathroom" not in withheld, withheld
     assert "kitchen_space" not in withheld, withheld
     assert answer["facets"]["bathroom"] == {"combined": 18}
-    assert answer["facets"]["kitchen_space"] == {"small": 7}
+    assert sum(answer["facets"]["kitchen_space"].values()) == 7
 
     # The other side of the split, asserted beside it: a rule that kept the
     # first two by widening far enough to admit this one would pass a test
     # that only looked at what came back.
     assert "sale_options" in withheld, withheld
     assert "sale_options" not in answer["facets"]
+
+
+#: The feature types a CLIENT will draw a bucket list for.
+#:
+#: Mirrors `@stapel/search-react`'s `FACETABLE_FEATURE_TYPES` deliberately and
+#: is stated here rather than imported, because this library cannot import the
+#: pair and the pair cannot import this one. `int`, `float` and
+#: `convertible_unit` are absent on purpose: a number is narrowed with two
+#: bounds, not with a checkbox per value, so a numeric axis's group half is
+#: undrawable BY CONSTRUCTION however many buckets the counter returns.
+#:
+#: If the pair widens its list, this constant is what has to move with it, and
+#: the gate below is what will notice that it did not.
+CLIENT_FACETABLE_TYPES = frozenset(
+    {"bool", "select", "ref_select", "hierarchical_select", "multiselect"}
+)
+
+
+def assert_every_counted_axis_is_drawable(answer, catalogue):
+    """AN ANSWER MUST NEVER ASSERT AN AXIS IT CAN DRAW IN NEITHER COLUMN.
+
+    The panel has two halves and the floor is asked its question once per
+    half. 0.17.0 taught the group half that a low count is two different
+    sentences and left the range half on the flat floor, and the result was an
+    axis that existed in `counted` and on the page nowhere: «Площадь кухни»
+    came back as five bare integers, which no client draws, while its range —
+    the only drawable half — was withheld for the very coverage the group half
+    had just been taught to forgive.
+
+    Nothing was red. Both halves were individually correct by their own rule,
+    and the defect lived precisely in the gap between two rules that were
+    supposed to be one. This gate is that gap, expressed as an assertion over
+    the whole plan rather than a case per axis.
+
+    A group half counts as drawable only if the feature TYPE is one a client
+    builds buckets for; a range half only if the axis is not withheld.
+    """
+    meta = answer["facet_meta"]
+    ranges = meta.get("ranges") or {}
+    types = {}
+    for features in catalogue.values():
+        for feature in features:
+            types[feature["slug"]] = str((feature.get("config") or {}).get("type") or "")
+
+    undrawable = []
+    for slug in meta.get("counted") or ():
+        kind = types.get(slug)
+        # An axis this catalogue does not type is not this gate's business:
+        # the rule is about axes we KNOW a client cannot draw a group for.
+        group_drawable = kind is None or kind in CLIENT_FACETABLE_TYPES
+        range_drawable = slug in ranges
+        if not group_drawable and not range_drawable:
+            withheld = [row for row in meta.get("withheld", ()) if row["slug"] == slug]
+            undrawable.append(
+                {
+                    "slug": slug,
+                    "type": kind,
+                    "buckets": len(answer["facets"].get(slug) or {}),
+                    "range": "withheld" if withheld else "absent",
+                    "withheld": withheld,
+                }
+            )
+    assert not undrawable, (
+        "these axes are in `counted` and drawable in NEITHER column — a group "
+        "is undrawable because the feature is numeric, and the range is gone: "
+        f"{undrawable}"
+    )
+
+
+def test_no_answer_offers_an_axis_that_can_be_drawn_in_neither_column(
+    flats_like_catalogue, flats_like_corpus
+):
+    """The gate, over the shape that produced the defect.
+
+    The flats fixture is the live `/c/kvartiry` shape leaf for leaf, including
+    the three `int` area axes, so this is the instance — not an analogue of
+    it. Run against the pre-0.17.2 range floor it names `kitchen_space`.
+    """
+    from stapel_search.services import search
+
+    with tuned(**{"FACET_MIN_COVERAGE": 0.6}):
+        answer = search({"type": DOC_TYPE, "category": "flatslike"})
+
+    assert_every_counted_axis_is_drawable(answer, flats_like_catalogue)
+
+
+def test_the_gate_holds_on_the_pages_that_are_not_flats(mixed_catalogue, mixed_corpus):
+    """The same gate on a different corpus, so it is not one page's assertion.
+
+    `ram_size` here is a `select` whose VALUES are numbers — a client DOES
+    draw buckets for it, and the gate must not confuse "the values look
+    numeric" with "the feature is numeric". That distinction is the one thing
+    this rule turns on.
+    """
+    from stapel_search.services import search
+
+    answer = search({"type": DOC_TYPE})
+    assert_every_counted_axis_is_drawable(answer, mixed_catalogue)
+
+
+def test_a_numeric_leaf_axis_keeps_the_only_half_that_can_be_DRAWN(
+    flats_like_catalogue, flats_like_corpus
+):
+    """«Площадь кухни», and the defect 0.17.0 created by teaching one half.
+
+    The floor is asked the same question twice per answer — once of the bucket
+    lists and once of the measured ranges — and 0.17.0/0.17.1 taught only the
+    first one that a low count is two different sentences. The live result, on
+    the stand, with the group half narrowed and the range half not:
+
+      - `kitchen_space` survived the GROUP floor and came back in `counted`
+        as five bare integers;
+      - a client builds no bucket list for it, because an `int` is not in
+        `FACETABLE_FEATURE_TYPES` — a number is narrowed with two bounds;
+      - its RANGE, the only drawable half, was withheld at 7 < 0.6 x 34.
+
+    So the answer asserted an axis that could be drawn in neither column, and
+    the axis was on the page nowhere. A walker searching the DOM for "kitchen"
+    found zero nodes while the answer said the axis was there.
+
+    `living_space` is the control: declared by ALL 34 and carried by none, it
+    stays withheld through the same branch, because 0 documents is not "most
+    sellers left it blank" — there is nothing behind it to filter to.
+
+    RED FIRST against the pre-0.17.2 range floor:
+    `AssertionError: kitchen_space range withheld: [{'slug': 'kitchen_space',
+    'axis': 'range', 'reason': 'coverage', 'coverage': 7, 'candidates': 34}]`.
+    """
+    from stapel_search.services import search
+
+    with tuned(**{"FACET_MIN_COVERAGE": 0.6}):
+        answer = search({"type": DOC_TYPE, "category": "flatslike"})
+
+    withheld_ranges = [
+        row for row in answer["facet_meta"]["withheld"] if row["axis"] == "range"
+    ]
+    assert not [row for row in withheld_ranges if row["slug"] == "kitchen_space"], (
+        f"kitchen_space range withheld: {withheld_ranges}"
+    )
+    assert "kitchen_space" in (answer["facet_meta"].get("ranges") or {})
 
 
 def test_a_sparse_axis_sits_below_a_dense_one(flats_like_catalogue, flats_like_corpus):

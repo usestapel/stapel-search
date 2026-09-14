@@ -1148,16 +1148,40 @@ def _withheld_ranges(payload, coverage, plan, q, candidates: int) -> list[dict]:
         if slug in core or floor <= 0 or candidates <= 0 or slug not in coverage:
             continue
         documents = coverage[slug]
-        if documents < floor * candidates:
-            withheld.append(
-                {
-                    "slug": slug,
-                    "axis": AXIS_RANGE,
-                    "reason": WITHHELD_COVERAGE,
-                    "coverage": documents,
-                    "candidates": candidates,
-                }
-            )
+        # WHICH SENTENCE IS THIS AXIS? The same question 0.17.0/0.17.1 taught
+        # the GROUP half, asked here — and not asking it here is what shipped
+        # an answer that asserted an axis it could draw in neither column.
+        #
+        # «Площадь кухни» on the live flats parent: declared by 30 of 34
+        # candidates' categories and filled by 7. The group floor kept it, so
+        # it came back in `counted` as five bare integers — and a client
+        # builds no bucket list for a numeric axis, because a number is
+        # narrowed with two bounds. Its range was the only drawable half, and
+        # this floor withheld it at 7 < 0.6 x 34. The axis was in the answer
+        # and on the page nowhere.
+        #
+        # One policy, both halves: see FACET_LEAF_DECLARED_SHARE.
+        applies_to = plan.declared_for.get(slug)
+        if (
+            applies_to is not None
+            and applies_to >= FACET_LEAF_DECLARED_SHARE * candidates
+        ):
+            if (
+                documents >= FACET_LEAF_MIN_DOCUMENTS
+                and documents >= FACET_LEAF_MIN_SHARE * applies_to
+            ):
+                continue
+        elif documents >= floor * candidates:
+            continue
+        withheld.append(
+            {
+                "slug": slug,
+                "axis": AXIS_RANGE,
+                "reason": WITHHELD_COVERAGE,
+                "coverage": documents,
+                "candidates": candidates,
+            }
+        )
     return withheld
 
 
