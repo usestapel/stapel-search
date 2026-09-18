@@ -1636,6 +1636,9 @@ def test_a_leaf_over_one_breed_vocabulary_is_captioned_as_before(
         "vocabulary": "cats-212",
         "level": "Breed",
         "order": 1,
+        # Independent under staged dependent facets (0.18.0).
+        "depends_on": None,
+        "gated": False,
     }
 
 

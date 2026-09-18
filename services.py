@@ -1275,6 +1275,54 @@ def _category_counts(backend, q) -> tuple[list[tuple[tuple[str, ...], int]], tup
         return [], ("facet_plan_evidence",)
 
 
+def _dependent_facets_mode() -> str:
+    """``staged`` | ``flat`` — how this deployment answers dependent groups."""
+    from .conf import search_settings
+
+    mode = str(search_settings.DEPENDENT_FACETS or "").strip().lower()
+    # Anything unrecognised reads as the default rather than as "off":
+    # `stapel_search.E006` is what makes the typo visible, and a typo must
+    # not quietly widen a panel. See `checks.check_dependent_facets`.
+    return "flat" if mode == "flat" else "staged"
+
+
+def _stage_dependents(q, plan) -> tuple[frozenset[str], frozenset[str]]:
+    """``(gated, parent_missing)`` for one settled query.
+
+    GATED: the group declares a parent, the request carries no value for the
+    parent and none for the group itself. It is answered with no options and
+    no aggregation is asked for — general before specific, the rule the
+    posting form has honoured since the field existed.
+
+    PARENT_MISSING: the request filters on the DEPENDENT and not on its
+    parent — a deep link, a bookmark, an address written by an older panel.
+    The filter stays applied and the group keeps its options: a filter the
+    server silently dropped is the most expensive kind of wrong answer, and
+    the reader would see a wider page than the one they linked to. The
+    marker is for the client, so it can open the parent group beside it.
+    Nothing here infers the parent from the child; that needs a vocabulary
+    walk this module does not do.
+
+    A group whose parent is not an axis of this plan is NOT gated: gating it
+    would leave the reader a filter with no control that opens it.
+    """
+    parents = plan.parent_features
+    if not parents:
+        return frozenset(), frozenset()
+    chosen = {slug for slug, values in (q.facets or {}).items() if values}
+    axes = set(plan.slugs)
+    gated: set[str] = set()
+    orphaned: set[str] = set()
+    for slug, parent in parents.items():
+        if slug not in axes or parent in chosen:
+            continue
+        if slug in chosen:
+            orphaned.add(slug)
+        elif parent in axes:
+            gated.add(slug)
+    return frozenset(gated), frozenset(orphaned)
+
+
 def _drop_hidden_filters(q, plan) -> tuple[Any, tuple[str, ...]]:
     """Strip ``f.<slug>``/``r.<slug>`` filters on slugs the category hides.
 
@@ -1870,6 +1918,19 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
         q, unextracted, extraction, result, backend, plan
     )
 
+    # Staged dependent facets, decided on the SETTLED query — extraction can
+    # supply the parent's value («toyota camry» is a make filter), so this
+    # cannot be read off the raw parameters. A gated slug leaves the plan
+    # before the engine sees it: the group is answered empty, and no
+    # aggregation is paid for a panel nobody may open yet.
+    facet_mode = _dependent_facets_mode()
+    gated: frozenset[str] = frozenset()
+    parent_missing: frozenset[str] = frozenset()
+    if facet_mode == "staged":
+        gated, parent_missing = _stage_dependents(q, plan)
+        if gated:
+            plan = replace(plan, slugs=tuple(s for s in plan.slugs if s not in gated))
+
     facet_result = None
     if plan.slugs and capabilities.facet_counts:
         facet_result = backend.facets(q, plan)
@@ -2168,6 +2229,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
     range_bounds = _range_meta(range_bounds, label_plan)
 
     counts = fill_zero_options(facet_result.counts, plan) if facet_result else {}
+    # A gated group is PRESENT and empty, never absent: the panel draws it
+    # disabled under its parent, which is the whole affordance. Absent would
+    # read as "this leaf has no model filter".
+    for slug in gated:
+        counts[slug] = {}
     count, count_is_lower_bound = _honest_count(result, offset=offset, shown=len(items))
     exact_total = bool(result.exact_total and count is not None and not count_is_lower_bound)
     # A vocabulary-backed slug's caption is resolved from the codes the query
@@ -2213,6 +2279,18 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             # and models, not below them.
             "order": label_plan.order.get(slug),
         }
+        if facet_mode == "staged":
+            # The sibling this group's codes are the children of, and
+            # whether this answer is therefore holding it shut. `null` and
+            # `false` for an independent axis, never absent, so a client can
+            # tell "no parent" from "this server does not stage".
+            facet_labels[slug]["depends_on"] = plan.parent_features.get(slug)
+            facet_labels[slug]["gated"] = slug in gated
+            if slug in parent_missing:
+                # The reader filtered the child without the parent. The
+                # filter IS applied; this says the parent group should be
+                # drawn open beside it.
+                facet_labels[slug]["parent_missing"] = True
         # The vocabulary a client can't otherwise learn: a branch page has no
         # leaf schema of its own, and the plan's feature definition is the
         # only place that still knows this axis is `ref_select` rather than
@@ -2289,6 +2367,11 @@ def search(params, *, accept_language: str = "", audience: str = "anonymous") ->
             # that renders a confident wrong narrowing.
             "dropped_filters": list(dropped_filters),
             "core_ranges": list(plan.core_ranges),
+            # `staged` | `flat` — how this server answered dependent groups,
+            # under BOTH values. A client follows the server rather than
+            # carrying its own opinion: guessing `staged` against a `flat`
+            # answer hides a panel that was sent.
+            "dependent_facets": facet_mode,
             # `{slug: {min, max}}` for every axis that HAS a number in this
             # candidate set — core columns and attributes alike, measured
             # with the range filters removed. This is what a from/to picker

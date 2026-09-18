@@ -221,6 +221,18 @@ class FacetMetaSerializer(serializers.Serializer):
             "that does not implement the optional `ranges` verb."
         ),
     )
+    dependent_facets = serializers.CharField(
+        help_text=(
+            "`staged` | `flat` — how this server answered groups that declare "
+            "`OptionsRef.parentFeature`. `staged`: a dependent group is "
+            "returned empty with `gated: true` until its parent carries a "
+            "value, the way the posting form has always behaved — general "
+            "before specific. `flat`: every group is counted independently, "
+            "which is the pre-0.18 answer, and `depends_on`/`gated` are "
+            "absent from `facet_labels`. Sent under both values: a client "
+            "follows the server rather than carrying its own opinion."
+        )
+    )
     plan = serializers.CharField(
         help_text=(
             "Where the plan came from. `category` — the queried category's "
@@ -368,6 +380,43 @@ class FacetLabelsSerializer(serializers.Serializer):
             "answer counted, and a code two of them spell differently takes "
             "the word of the first — the category most of this page is made "
             "of. Listed in that same order."
+        ),
+    )
+    depends_on = serializers.CharField(
+        allow_null=True,
+        required=False,
+        help_text=(
+            "The slug of the sibling group this one's option codes are the "
+            "CHILDREN of (`OptionsRef.parentFeature`): a model group depends "
+            "on the make group, a generation group on the model. `null` for "
+            "an independent axis. Absent entirely when "
+            "`facet_meta.dependent_facets` is `flat`. Draw a dependent group "
+            "below the group it names — the answer already orders it that "
+            "way — and treat it as unavailable while `gated` is true."
+        ),
+    )
+    gated = serializers.BooleanField(
+        required=False,
+        help_text=(
+            "True when this answer deliberately holds the group shut: it "
+            "depends on a group the request carries no value for, so "
+            "`values` is empty and NO aggregation was requested for it. Not "
+            "the same as a group with no buckets on this page — this one has "
+            "not been counted. Choose the parent and ask again, and the "
+            "group comes back with the children of what was chosen. Absent "
+            "when `facet_meta.dependent_facets` is `flat`."
+        ),
+    )
+    parent_missing = serializers.BooleanField(
+        required=False,
+        help_text=(
+            "Present and true only when the request filters on THIS group "
+            "while carrying no value for the group it `depends_on` — a deep "
+            "link, or an address an older panel wrote. The filter is applied "
+            "and the group is counted as usual; this says the parent group "
+            "should be drawn open beside it, so the reader can see what the "
+            "selection is a child of. The server never infers the parent "
+            "from the child."
         ),
     )
     order = serializers.IntegerField(

@@ -345,6 +345,11 @@ def test_a_vocabulary_backed_facet_ships_captions_for_what_it_counted(
         # Where the group sits in the ONE panel it shares with the ranges
         # (0.16.0). `price` is the core range and takes position 0.
         "order": 1,
+        # An INDEPENDENT axis under staged dependent facets (0.18.0): `null`
+        # and `false`, never absent, so a client can tell "no parent" from
+        # "this server does not stage".
+        "depends_on": None,
+        "gated": False,
     }
 
 
@@ -533,6 +538,9 @@ def test_the_answer_ships_the_captions_beside_the_counts(
         # Position in the one panel the groups share with the ranges
         # (0.16.0); `price` is the core range and takes 0.
         "order": 1,
+        # Independent under staged dependent facets (0.18.0).
+        "depends_on": None,
+        "gated": False,
     }
     assert answer["facet_labels"]["brand"]["translatable"] is True
 

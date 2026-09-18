@@ -555,6 +555,17 @@ class FacetPlan:
     #: rest follow in the plan's own order (mandatory first, then as
     #: authored, for a category's own schema).
     order: dict[str, int] = field(default_factory=dict)
+    #: ``{slug: parent slug}`` — the sibling feature this one's codes are
+    #: restricted to the children of (``OptionsRef.parentFeature``). The
+    #: schema already says it and the posting form already honours it; a
+    #: panel that offers every model before a make is chosen is the same
+    #: field read differently by the two halves of one product. The read
+    #: path uses it to STAGE the group (``facet_meta.dependent_facets``);
+    #: ``_shape`` uses it to keep a dependent BELOW its parent, because a
+    #: filter you may not use yet must not sit above the one that unlocks
+    #: it. One feature that cascades inside itself
+    #: (``ref_hierarchical_select``) is not this: it is one slug.
+    parent_features: dict[str, str] = field(default_factory=dict)
     #: The subset of ``slugs`` admitted by the CANDIDATE SET's categories
     #: rather than by the queried category's own schema (``evidence_plan``).
     #: Empty for an authored plan. Only these are governed by

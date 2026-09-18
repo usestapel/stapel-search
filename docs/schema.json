@@ -598,6 +598,19 @@
             },
             "description": "The dictionaries behind a group whose contributing categories name DIFFERENT ones — a pets root over a cat breed level and a dog one. Present only in that case, and then `vocabulary` and `level` are null/absent because there genuinely is no single address. That says nothing about the captions: `values` is the union of what these dictionaries know about the codes this answer counted, and a code two of them spell differently takes the word of the first — the category most of this page is made of. Listed in that same order."
           },
+          "depends_on": {
+            "type": "string",
+            "nullable": true,
+            "description": "The slug of the sibling group this one's option codes are the CHILDREN of (`OptionsRef.parentFeature`): a model group depends on the make group, a generation group on the model. `null` for an independent axis. Absent entirely when `facet_meta.dependent_facets` is `flat`. Draw a dependent group below the group it names — the answer already orders it that way — and treat it as unavailable while `gated` is true."
+          },
+          "gated": {
+            "type": "boolean",
+            "description": "True when this answer deliberately holds the group shut: it depends on a group the request carries no value for, so `values` is empty and NO aggregation was requested for it. Not the same as a group with no buckets on this page — this one has not been counted. Choose the parent and ask again, and the group comes back with the children of what was chosen. Absent when `facet_meta.dependent_facets` is `flat`."
+          },
+          "parent_missing": {
+            "type": "boolean",
+            "description": "Present and true only when the request filters on THIS group while carrying no value for the group it `depends_on` — a deep link, or an address an older panel wrote. The filter is applied and the group is counted as usual; this says the parent group should be drawn open beside it, so the reader can see what the selection is a child of. The server never infers the parent from the child."
+          },
           "order": {
             "type": "integer",
             "nullable": true,
@@ -659,6 +672,10 @@
             },
             "description": "`{slug: {min, max, label, label_translatable, unit?, order}}` — every numeric axis that HAS a number on this page, core columns (`price`) and attributes (`year`, `mileage`, `engine_volume`) alike, with everything needed to DRAW it. What a from/to picker is made of: a range axis has no values to enumerate, so `facets` says nothing about it and a client without these two numbers either draws no picker or draws one over a guess. Measured with the range filters REMOVED, so the ends are the domain the picker can be widened back to and not the ends of its own selection. An axis absent here either has no numbers behind it in this candidate set — a different fact from a bound of zero — or was WITHHELD, and then it is named in `withheld` with the reason. Capped by MAX_FACET_FIELDS since 0.16.0: the budget is how wide a panel may be, and a from/to picker is as wide as a bucket list. Empty, with `facet_ranges` in `degraded[]`, on an engine that does not implement the optional `ranges` verb."
           },
+          "dependent_facets": {
+            "type": "string",
+            "description": "`staged` | `flat` — how this server answered groups that declare `OptionsRef.parentFeature`. `staged`: a dependent group is returned empty with `gated: true` until its parent carries a value, the way the posting form has always behaved — general before specific. `flat`: every group is counted independently, which is the pre-0.18 answer, and `depends_on`/`gated` are absent from `facet_labels`. Sent under both values: a client follows the server rather than carrying its own opinion."
+          },
           "plan": {
             "type": "string",
             "description": "Where the plan came from. `category` — the queried category's own authored schema. `evidence` — the categories the CANDIDATE SET actually contains, used when that schema did not fill MAX_FACET_FIELDS, which is every branch category and every text query (`categories.features` resolves own + ANCESTOR-inherited features, so a branch owns no axes; its leaves do)."
@@ -685,6 +702,7 @@
           "categories",
           "core_ranges",
           "counted",
+          "dependent_facets",
           "dropped_filters",
           "plan",
           "ranges",

@@ -109,6 +109,20 @@ DEFAULTS = {
     # why a category page and a text query landing in one leaf keep every
     # group: their coverage is ~1 and their plan is not borrowed.
     "FACET_MIN_COVERAGE": 0.6,
+    # --- dependent facets -------------------------------------------------
+    # `staged` honours `OptionsRef.parentFeature` in the PANEL the way the
+    # posting form already honours it: a group whose codes are the children
+    # of a sibling's chosen term is returned empty and `gated` until that
+    # sibling carries a value. General before specific — a leaf that offers
+    # every model of every make before a make is chosen is one field read
+    # two different ways by the two halves of one product.
+    #
+    # `flat` is the pre-0.18 answer, byte for byte: no `gated`, no
+    # `depends_on`, every group counted. The mode is in
+    # `facet_meta.dependent_facets` under BOTH values, because a client that
+    # cannot see which one is in force has to guess, and guessing `staged`
+    # on a `flat` server hides a panel the server sent.
+    "DEPENDENT_FACETS": "staged",
     # --- text ------------------------------------------------------------
     "FTS_CONFIGS": {"ru": "russian", "en": "english", "de": "german"},
     "FTS_FALLBACK_CONFIG": "simple",

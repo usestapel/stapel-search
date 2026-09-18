@@ -528,3 +528,108 @@ def check_vector_layer(app_configs, **kwargs):
         )
     return findings
 
+
+
+#: How many indexed categories :func:`check_dependent_facets` reads feature
+#: definitions for. A system check may not walk a live catalogue: the leaves
+#: that matter are the ones the index actually holds documents in, and the
+#: read is revision-cached, so this is a cold-cache ceiling rather than a
+#: per-run cost.
+MAX_CHECKED_CATEGORIES = 100
+
+
+def _indexed_leaves() -> list[str]:
+    """Leaf category ids the index holds documents in, bounded and distinct."""
+    from .models import SearchDocument
+
+    leaves: list[str] = []
+    seen: set[str] = set()
+    rows = SearchDocument.objects.exclude(category_path=[]).values_list(
+        "category_path", flat=True
+    )[: MAX_CHECKED_CATEGORIES * 20]
+    for path in rows:
+        if not path:
+            continue
+        leaf = str(path[-1])
+        if leaf in seen:
+            continue
+        seen.add(leaf)
+        leaves.append(leaf)
+        if len(leaves) >= MAX_CHECKED_CATEGORIES:
+            break
+    return leaves
+
+
+@checks.register("stapel_search")
+def check_dependent_facets(app_configs, **kwargs):
+    """E005/E006/W011: the feature dependencies staging is drawn from.
+
+    ``OptionsRef.parentFeature`` is a promise about a SIBLING of the same
+    leaf schema. Two ways it is broken, and both are invisible until a
+    reader opens the panel:
+
+    * the named sibling is in no feature of that leaf. Under ``staged`` the
+      dependent is then gated by something that can never carry a value — a
+      filter that is present, empty and unopenable forever. An ERROR,
+      because nothing downstream can recover from it;
+    * the leaf authors the dependent ABOVE its parent. The answer reorders
+      it (``facets.order_dependents``) so the panel still reads general
+      before specific, and warns, because the schema is where it should be
+      fixed — the reorder is a rescue, not a resting place.
+
+    Read over the leaves the INDEX holds documents in, revision-cached
+    through the same ``categories.features`` path the plan uses. No index,
+    no database, or no provider yields nothing: a check that cannot look is
+    not a check that found nothing wrong, and it must not be a crash either.
+    """
+    from .conf import search_settings
+    from .facets import _feature_defs, dependency_report
+
+    findings = []
+    mode = str(search_settings.DEPENDENT_FACETS or "").strip().lower()
+    if mode not in ("staged", "flat"):
+        findings.append(
+            checks.Error(
+                f"STAPEL_SEARCH['DEPENDENT_FACETS'] is {mode!r}: not 'staged' or 'flat'.",
+                hint="'staged' gates a dependent group until its parent carries a "
+                     "value; 'flat' is the pre-0.18 answer. An unrecognised value "
+                     "would silently read as 'staged'.",
+                id="stapel_search.E006",
+            )
+        )
+    try:
+        leaves = _indexed_leaves()
+    except Exception:  # noqa: BLE001 - no database at check time
+        return findings
+    for leaf in leaves:
+        try:
+            features, _ = _feature_defs(leaf)
+        except Exception:  # noqa: BLE001 - an unreachable provider is W-territory
+            continue
+        if not features:
+            continue
+        dangling, misordered = dependency_report(features)
+        for slug, parent in dangling:
+            findings.append(
+                checks.Error(
+                    f"Category {leaf}: feature {slug!r} declares "
+                    f"optionsRef.parentFeature = {parent!r}, and no feature of that "
+                    "schema carries that slug.",
+                    hint="Name a sibling feature of the same category, or drop "
+                         "parentFeature. Under DEPENDENT_FACETS='staged' this group "
+                         "can never be opened.",
+                    id="stapel_search.E005",
+                )
+            )
+        for slug, parent in misordered:
+            findings.append(
+                checks.Warning(
+                    f"Category {leaf}: feature {slug!r} is authored above its parent "
+                    f"{parent!r}; the answer moves it below.",
+                    hint="Author the general axis first. The reorder keeps the panel "
+                         "readable, but the schema is what the posting form draws "
+                         "from too.",
+                    id="stapel_search.W011",
+                )
+            )
+    return findings

@@ -250,6 +250,14 @@ CATALOGUE = {
             ],
             allowCustom=True,
         ),
+        # A DEPENDENT group: its codes are the children of the brand chosen
+        # in the sibling above it. Authored below its parent, which is the
+        # order `facets.order_dependents` would otherwise have to rescue.
+        _feature_def(
+            "model", "ref_select",
+            optionsRef={"vocabulary": "autocatalog", "level": "Model",
+                        "parentFeature": "brand"},
+        ),
         _feature_def("year", "int", postfix="y"),
     ],
     "laptops": [
@@ -963,3 +971,63 @@ def test_the_gate_is_not_blind():
         "these operations passed validation against {'type': 'string'} — the "
         "gate is not looking at the body it received:\n  " + "\n  ".join(survivors)
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Staged dependent facets: the three group fields and the mode
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _component_properties(*, containing: str) -> dict:
+    """The declared properties of the one component that carries *containing*.
+
+    Addressed by a field it owns rather than by component NAME: drf-spectacular
+    renames components when a serializer is renamed, and a gate that then
+    silently finds nothing is the family of green this module exists to
+    refuse.
+    """
+    matches = [
+        schema.get("properties") or {}
+        for schema in (SCHEMA.get("components", {}).get("schemas") or {}).values()
+        if containing in (schema.get("properties") or {})
+    ]
+    assert len(matches) == 1, (
+        f"expected exactly one declared component carrying {containing!r}, "
+        f"found {len(matches)}"
+    )
+    return matches[0]
+
+
+@pytest.mark.django_db
+def test_the_dependent_facet_fields_are_declared_and_sent():
+    """The wire and the contract, asked about the same four fields.
+
+    ``depends_on``/``gated``/``parent_missing`` are OPTIONAL in the schema, so
+    the validation pass above cannot see them: an optional field nobody sends
+    validates perfectly. This asks both halves directly — the committed
+    document must declare them, and a real answer must carry them — which is
+    the only shape in which the two cannot drift apart.
+    """
+    group = _component_properties(containing="url_key")
+    for field in ("depends_on", "gated", "parent_missing"):
+        assert field in group, f"facet group schema does not declare {field!r}"
+    assert "dependent_facets" in _component_properties(containing="core_ranges")
+
+    category_features()
+    with corpus_loaded():
+        client = anonymous()
+        gated = client.get(f"{V1}/query", {"type": DOC_TYPE, "category": "phones"}).json()
+        opened = client.get(
+            f"{V1}/query", {"type": DOC_TYPE, "category": "phones", "f.brand": "apple"}
+        ).json()
+        deep = client.get(
+            f"{V1}/query", {"type": DOC_TYPE, "category": "phones", "f.model": "iphone-13"}
+        ).json()
+
+    assert gated["facet_meta"]["dependent_facets"] == "staged"
+    assert gated["facet_labels"]["model"]["depends_on"] == "brand"
+    assert gated["facet_labels"]["model"]["gated"] is True
+    assert gated["facet_labels"]["brand"]["depends_on"] is None
+    assert gated["facet_labels"]["brand"]["gated"] is False
+    assert opened["facet_labels"]["model"]["gated"] is False
+    assert deep["facet_labels"]["model"]["parent_missing"] is True

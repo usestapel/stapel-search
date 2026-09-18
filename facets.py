@@ -854,6 +854,10 @@ class _Fold:
         #: from `Б/у` by looking, and neither can this: on a disagreement the
         #: overlay is dropped and the raw code prints, which is honest.
         self.conflicted: set[str] = set()
+        #: ``{slug: parent slug}`` — ``OptionsRef.parentFeature``, the
+        #: sibling whose chosen term this slug's codes are the children of.
+        #: First declarer wins, like every other overlay here.
+        self.parent_features: dict[str, str] = {}
         self.vocabulary_refs: dict[str, tuple[str, str]] = {}
         #: ``{slug: [(vocabulary, level), …]}`` — EVERY distinct vocabulary
         #: address the declaring categories name for the slug, in fold order
@@ -1004,6 +1008,9 @@ def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
             # recorded here and the codes are resolved after the count, where
             # the set is small and known. See `vocabulary_labels`.
             fold.open.add(slug)
+            parent = _ref_field(config["optionsRef"], "parentFeature")
+            if parent:
+                fold.parent_features.setdefault(slug, parent)
             vocabulary = _ref_field(config["optionsRef"], "vocabulary")
             level = _ref_field(config["optionsRef"], "level")
             if vocabulary and level:
@@ -1054,6 +1061,78 @@ def _collect(features: list[dict], fold: _Fold, *, weight: int = 0) -> None:
                 fold.open.add(slug)
 
 
+def order_dependents(ordered: list[str], parents: dict[str, str]) -> list[str]:
+    """*ordered* with every dependent moved to directly after its parent.
+
+    General before specific. A panel draws the list it is given, so a leaf
+    that authors «Модель» above «Марка» ships a filter the reader may not
+    use yet above the one that unlocks it — and under staging that reads as
+    a broken panel rather than as an order. The schema is not rewritten;
+    this answer is. ``stapel_search.W011`` names every leaf it had to move
+    something in, so the schema gets fixed at its source too.
+
+    A dependent whose parent is not in *ordered* (cut by the budget, hidden,
+    or named by nothing — ``stapel_search.E005``) keeps its place: there is
+    nothing to sit after.
+    """
+    if not parents:
+        return list(ordered)
+    out = list(ordered)
+    # Only a child that sits AT OR ABOVE its parent moves, and it moves to
+    # directly below it. A schema that already reads general-before-specific
+    # comes back byte-identical, slugs in between included. Bounded: a cycle
+    # (a declares b, b declares a) would swap forever, and neither link can
+    # ever be opened anyway — E005/W011 are what say so.
+    for _ in range(len(out) + 1):
+        moved = False
+        for slug in list(out):
+            parent = parents.get(slug)
+            if not parent or parent not in out:
+                continue
+            if out.index(parent) < out.index(slug):
+                continue
+            out.remove(slug)
+            out.insert(out.index(parent) + 1, slug)
+            moved = True
+        if not moved:
+            break
+    return out
+
+
+def dependency_report(
+    features: list[dict],
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    """``(dangling, misordered)`` for one leaf's feature definitions.
+
+    ``dangling`` is ``(child, parent)`` where ``parentFeature`` names a slug
+    no feature of this schema carries — a dependency on nothing, which under
+    staging gates the child forever. ``misordered`` is ``(child, parent)``
+    where the schema authors the child ABOVE its parent.
+
+    Reads the raw definitions rather than a :class:`FacetPlan`, so it sees
+    the schema as authored — including features the plan excludes.
+    """
+    order: dict[str, int] = {}
+    declared: dict[str, str] = {}
+    for position, feature in enumerate(features):
+        slug = feature.get("slug")
+        if not slug:
+            continue
+        order.setdefault(str(slug), position)
+        parent = _ref_field((feature.get("config") or {}).get("optionsRef"), "parentFeature")
+        if parent:
+            declared.setdefault(str(slug), parent)
+    dangling = tuple(
+        (slug, parent) for slug, parent in declared.items() if parent not in order
+    )
+    misordered = tuple(
+        (slug, parent)
+        for slug, parent in declared.items()
+        if parent in order and order[parent] > order[slug]
+    )
+    return dangling, misordered
+
+
 def _shape(
     fold: _Fold,
     ordered: list[str],
@@ -1078,6 +1157,9 @@ def _shape(
         for slug in ordered:
             kinds.setdefault(slug, "term")
 
+    # Below its parent BEFORE the budget is cut, so staging never hands a
+    # reader a gated group whose parent did not fit (see `order_dependents`).
+    ordered = order_dependents(list(ordered), fold.parent_features)
     selected = tuple(ordered[:max_fields])
     closed = fold.closed_options()
     labels = {
@@ -1114,6 +1196,11 @@ def _shape(
             if slug in fold.translatable and slug not in fold.conflicted
         },
         vocabulary_refs={slug: refs[slug] for slug in selected if slug in refs},
+        parent_features={
+            slug: fold.parent_features[slug]
+            for slug in selected
+            if slug in fold.parent_features
+        },
         vocabulary_sources={slug: sources[slug] for slug in selected if slug in sources},
         declared_for={slug: fold.weight[slug] for slug in selected if slug in fold.weight},
         group_labels={
@@ -1290,11 +1377,13 @@ __all__ = [
     "URL_KEY_SUFFIXES",
     "evidence_plan",
     "category_path",
+    "dependency_report",
     "facet_plan",
     "fill_zero_options",
     "lookup_path",
     "lookup_slug",
     "note_changed",
+    "order_dependents",
     "note_path_degradation",
     "path_degradation",
     "reset_path_degradation",

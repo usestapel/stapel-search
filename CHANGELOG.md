@@ -4,6 +4,76 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] — 2026-09-18
+
+Minor: the panel learns the dependency the schema has always declared and the
+posting form has always honoured. New wire fields, no removals.
+
+### One field, two halves of one product, two answers
+
+`OptionsRef.parentFeature` says a feature's codes are restricted to the
+children of a sibling feature's chosen term: brand -> model, make -> model ->
+generation, vehicle type -> body type. The compose form reads it and does not
+offer the child until the parent carries a value. `facets.facet_plan` did not
+read it at all — it builds every group from the index independently — so the
+SERP listed every model of every brand above a reader who had chosen no
+brand. The same declaration, obeyed on one side of the product and invisible
+on the other.
+
+### Staged, not hidden
+
+`STAPEL_SEARCH["DEPENDENT_FACETS"]` is `"staged"` (default) or `"flat"`, and
+the answer says which in `facet_meta.dependent_facets` under BOTH values — a
+client that has to guess the mode hides a panel the server sent.
+
+Under `staged`, a group whose parent carries no value comes back PRESENT,
+empty and `gated: true`, and **no aggregation is requested for it**: the
+saving is real, not cosmetic. Absent would have read as "this leaf has no
+model filter", which is why it is present and empty instead. Choose the
+parent and the group returns with that parent's children — the parent's own
+filter already narrows the aggregation to them, so nothing new is computed.
+
+A request that filters on the CHILD and not the parent — a bookmark, an
+address an older panel wrote — keeps its filter and keeps its options, and is
+flagged `parent_missing: true` so the client can draw the parent group open
+beside it. Dropping the filter would answer a wider page than the link asked
+for, which is the most expensive kind of wrong answer. Nothing infers the
+parent from the child: `model=iphone-13` implies `brand=apple` only to a
+vocabulary walk, and this release does not do one.
+
+`flat` is the pre-0.18 answer byte for byte, with `depends_on`, `gated` and
+`parent_missing` absent from `facet_labels` entirely.
+
+### General before specific, in the order too
+
+A gated filter drawn ABOVE the one that unlocks it reads as a broken panel
+rather than as an order, so `facets.order_dependents` moves a dependent to
+directly below its parent before the `MAX_FACET_FIELDS` budget is cut — a
+schema that already reads general-before-specific comes back untouched, slugs
+in between included.
+
+### Wire
+
+`facet_labels[<slug>]` gains `depends_on` (the parent's slug, or `null`),
+`gated` (bool) and `parent_missing` (present and true only for the deep-link
+case). `facet_meta` gains `dependent_facets`. Nothing was removed and no
+existing field changed shape.
+
+### Checks
+
+- `stapel_search.E005` — `parentFeature` names a slug that is in no feature of
+  the same leaf. Under `staged` that group can never be opened by anybody.
+- `stapel_search.W011` — a leaf authors the dependent above its parent. The
+  answer moves it below; the schema is where it gets fixed, because the
+  posting form draws from the same schema.
+- `stapel_search.E006` — `DEPENDENT_FACETS` is neither `staged` nor `flat`. A
+  typo that quietly read as the default would hide a panel.
+
+Both schema checks read the leaves the INDEX holds documents in (bounded at
+`checks.MAX_CHECKED_CATEGORIES`, revision-cached through the same
+`categories.features` path the plan uses). No database and no provider yields
+nothing rather than a crash — but also rather than a green.
+
 ## [0.17.2] — 2026-09-15
 
 Patch: the other half of the panel gets the same rule, and a gate so the two
