@@ -4,6 +4,44 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.1] — 2026-09-18
+
+### Fixed — `/suggest` sent a string in `CategorySuggestion.id`, which is declared an integer
+
+Patch, no migration, no shape change: the contract already said `integer` and
+now the wire agrees. Descriptions change in `docs/schema.json` (the `id` and
+`degraded` help), nothing else.
+
+A goods-driven row — the half of the type-ahead that runs when no category
+NAME matched, which is the ordinary case for a brand query — derived its `id`
+from the leaf of the indexed category path and wrote
+
+```python
+"id": int(leaf) if leaf.lstrip("-").isdigit() else leaf
+```
+
+so the field's TYPE was a function of the data. A client generated from the
+contract parses `id` as a number and got a string on every index whose paths
+are not ids. The drift gate could not see it: `docs/schema.json` and the
+annotation it is emitted from agree, and only `tests/test_contract_wire.py`
+drives the real view and validates the body it gets.
+
+A category id is an integer (`categories.names` resolves nothing else), and
+the path leaf is the only place this half can learn one. So a leaf that is
+not an id yields **no row**, with **`category_listing_ids`** in `degraded[]`
+— the shortfall is declared like every other one in this module rather than
+papered over with a segment in an integer field, and never with an invented
+id. The drop is per row: the resolvable destinations in the same answer are
+still offered.
+
+**Who sees a change.** An index loaded with id paths — what
+`categories.path` builds and what the fleet runs — is unaffected, and its
+rows now carry a true `int` in `id` instead of one only when the digits
+allowed. An index loaded with slug paths loses its goods-driven rows and
+gains the marker that says why; the name-matched half, the `terms` half and
+every count are untouched.
+
+
 ## [0.18.0] — 2026-09-18
 
 Minor: the panel learns the dependency the schema has always declared and the

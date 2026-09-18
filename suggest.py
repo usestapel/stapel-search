@@ -339,6 +339,14 @@ def _listing_rows(
     so an operator learns the read is dark from the payload rather than
     from a dropdown quietly full of numbers. The ``category`` filter string
     keeps the IDS regardless: display changed, the tap did not.
+
+    A path whose LEAF is not a category id (the tree serves integer pks)
+    yields no row at all, with ``category_listing_ids`` in ``degraded[]``:
+    ``id`` is declared an integer, and the segment is the only place this
+    half can learn one. Until 0.18.1 such a row shipped the segment itself
+    in the integer field, so a generated client parsing ``id`` as a number
+    got a string on the ordinary brand query — the case half of the
+    type-ahead exists for.
     """
     fallback = getattr(backend, "suggest_categories", None)
     if fallback is None:
@@ -354,16 +362,29 @@ def _listing_rows(
         return [], ["category_listing_suggestions"]
 
     rows: list[dict[str, Any]] = []
+    unresolved = 0
     for path, count in pairs or []:
         path_ids = [str(segment) for segment in path if str(segment)]
         if not path_ids:
             continue
         leaf = path_ids[-1]
+        # `id` is a category id, and a category id is an integer (the tree
+        # serves integer pks — `categories.names` resolves nothing else).
+        # The leaf of the indexed path is the only place a goods row can
+        # learn it. A leaf that is not one is not an id, so the row is
+        # DROPPED rather than shipped with the segment in an integer field:
+        # a client generated from this contract parses `id` as a number, and
+        # the alternative — typing the field as "integer or whatever the
+        # segment happened to be" — makes every consumer carry the
+        # uncertainty of an index that was loaded wrong. The shortfall is
+        # declared in `degraded[]` like every other one here, so an operator
+        # sees WHY the dropdown is short instead of a silent gap.
+        if not leaf.lstrip("-").isdigit():
+            unresolved += 1
+            continue
         rows.append(
             {
-                # The provider serves integer pks; keep the type where the
-                # segment allows it so the two row kinds read alike.
-                "id": int(leaf) if leaf.lstrip("-").isdigit() else leaf,
+                "id": int(leaf),
                 "slug": "",
                 "name": leaf,
                 "path": list(path_ids),
@@ -378,11 +399,13 @@ def _listing_rows(
                 "match": LISTINGS_MATCH,
             }
         )
+    degraded = ["category_listing_ids"] if unresolved else []
     if not rows:
-        return rows, []
+        return rows, degraded
     names, names_degraded = _category_names(
         {segment for row in rows for segment in row["path"]}
     )
+    degraded.extend(names_degraded)
     for row in rows:
         row["path"] = [
             (names.get(segment) or {}).get("name") or segment
@@ -391,7 +414,7 @@ def _listing_rows(
         resolved = names.get(str(row["id"])) or {}
         row["name"] = resolved.get("name") or row["name"]
         row["slug"] = resolved.get("slug") or row["slug"]
-    return rows, names_degraded
+    return rows, degraded
 
 
 def _category_names(ids: set[str]) -> tuple[dict[str, dict], list[str]]:

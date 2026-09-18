@@ -401,7 +401,12 @@ segment long and no candidate's ancestry can match, so the answer reports
 when no name matched and the configured engine does not implement (or fails)
 the optional goods-driven verb, the answer is 0.9.0's answer plus
 `degraded: ["category_listing_suggestions"]` — the difference is declared,
-never absorbed.
+never absorbed. A goods-driven row takes its `id` from the leaf of the
+INDEXED path, which is a category id and therefore an integer; an index
+whose paths are not ids yields no such rows at all and says
+`degraded: ["category_listing_ids"]`, because `id` is declared an integer
+and a row with a segment in that field is a lie a generated client cannot
+parse (0.18.1).
 
 **The transliteration table gained a rule** in the same release, and it is a
 SERP fix as much as a dropdown one. GOST sends both `й` and `ы` to `y`, so

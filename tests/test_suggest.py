@@ -466,14 +466,15 @@ def test_goods_lead_where_names_cannot(api_client, samsung_stock, provider):
 
     rows = body["categories"]
     assert rows, "the goods exist; the dropdown must lead to them"
-    assert [row["match"] for row in rows] == ["listings", "listings", "listings"]
+    assert [row["match"] for row in rows] == ["listings", "listings"]
     # Busier place first, and the filter is ready to paste into /query.
     assert rows[0]["category"] == "90/205"
     assert rows[0]["count"] == 2
-    assert {(row["category"], row["count"]) for row in rows[1:]} == {
-        ("90/206", 1),
-        ("electronics/phones", 1),
-    }
+    assert {(row["category"], row["count"]) for row in rows[1:]} == {("90/206", 1)}
+    # The corpus doc that also matches sits under a SLUG path, whose leaf is
+    # no category id — that row is dropped rather than shipped with a string
+    # in the declared-integer `id`, and the dropdown says so.
+    assert "category_listing_ids" in body["degraded"]
 
 
 def test_a_goods_row_count_is_the_serp_count(api_client, samsung_stock, provider):
@@ -557,7 +558,6 @@ def test_goods_outrank_a_substring_name_row(api_client, samsung_stock, provider)
     assert [row["match"] for row in body["categories"]] == [
         "listings",
         "listings",
-        "listings",
         "substring",
     ]
     assert body["categories"][0]["category"] == "90/205"
@@ -636,15 +636,64 @@ def test_goods_rows_carry_display_names(api_client, samsung_stock, provider, nam
     assert rows["90/205"]["slug"] == "telefony"
     assert rows["90/205"]["path"] == ["Электроника", "Телефоны"]
     assert rows["90/206"]["name"] == "Аксессуары"
-    # A segment the provider does not know keeps its id — a truthful
-    # segment, never an invented name (the conformance corpus path).
-    assert rows["electronics/phones"]["name"] == "phones"
     assert "category_names" not in body["degraded"]
-    # One batched round trip, ids deduplicated.
+    # One batched round trip, ids deduplicated. The conformance corpus row
+    # under a slug path never reaches the caption read: it was dropped for
+    # having no resolvable id, which is also what the names provider would
+    # have answered about it.
+    assert "electronics/phones" not in rows
     assert len(names_provider.payloads) == 1
-    assert sorted(names_provider.payloads[0]["ids"]) == [
-        "205", "206", "90", "electronics", "phones",
-    ]
+    assert sorted(names_provider.payloads[0]["ids"]) == ["205", "206", "90"]
+
+
+def test_a_goods_path_whose_leaf_is_not_an_id_yields_no_row(
+    api_client, conformance, provider
+):
+    """`id` is declared an integer, so a row that cannot resolve one is not sent.
+
+    A goods row learns its category id from the leaf of the INDEXED path,
+    and a leaf that is not an integer is not an id. Until 0.18.1 such a row
+    shipped the segment itself in the integer field — the ordinary answer to
+    a brand query on any index loaded with slug paths, and precisely the
+    case the goods half exists for — so a client generated from this
+    contract parsed `id` as a number and got a string.
+
+    The row is now dropped and the shortfall is declared, the way every
+    other one in this module is: an operator reads WHY the dropdown is short
+    instead of finding it silently so.
+    """
+    from stapel_search.services import index_documents
+
+    index_documents(
+        DOC_TYPE,
+        [
+            _document(
+                doc_key="slugged",
+                title="Samsung Galaxy Fold",
+                category_path=("electronics", "phones"),
+            )
+        ],
+    )
+    provider.answers_with()
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    assert body["categories"] == []
+    assert "category_listing_ids" in body["degraded"]
+
+
+def test_a_goods_row_with_an_id_path_survives_beside_a_dropped_one(
+    api_client, samsung_stock, provider
+):
+    """The drop is per ROW, not per answer: the resolvable destinations are
+    still offered, and only the unresolvable one is missing."""
+    provider.answers_with()
+
+    body = api_client.get(SUGGEST, {"type": DOC_TYPE, "q": "samsung", "lang": "ru"}).json()
+
+    assert [row["id"] for row in body["categories"]] == [205, 206]
+    assert all(isinstance(row["id"], int) for row in body["categories"])
+    assert "category_listing_ids" in body["degraded"]
 
 
 def test_goods_rows_without_a_names_provider_keep_ids_and_declare_it(

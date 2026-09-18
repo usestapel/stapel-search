@@ -56,24 +56,27 @@ borrowed, and the library's own urlconf is left alone.
 
 What it found on its first run — 5 of 5 operations driven, 1 red:
 
-* ``GET /search/api/v1/suggest`` declares ``CategorySuggestion.id`` as a
-  REQUIRED ``integer`` and sends a STRING for every goods-driven row whose
-  category path does not end in digits. ``suggest._listing_rows``
-  (suggest.py:366) writes ``"id": int(leaf) if leaf.lstrip("-").isdigit()
-  else leaf`` — the comment beside it ("keep the type where the segment
-  allows it") is the defect stated out loud: the field's type is a function
-  of the data. A goods-driven row is minted whenever no category NAME
-  matched, which is the whole reason that half of the feature exists
-  («samsung» names no node), so this is the ordinary answer for a brand
-  query, not a corner. A generated client typed from this schema parses
-  ``id`` as a number and gets a string.
+* ``GET /search/api/v1/suggest`` declared ``CategorySuggestion.id`` as a
+  REQUIRED ``integer`` and sent a STRING for every goods-driven row whose
+  category path did not end in digits. ``suggest._listing_rows`` wrote
+  ``"id": int(leaf) if leaf.lstrip("-").isdigit() else leaf`` — the comment
+  beside it ("keep the type where the segment allows it") was the defect
+  stated out loud: the field's type was a function of the data. A
+  goods-driven row is minted whenever no category NAME matched, which is
+  the whole reason that half of the feature exists («samsung» names no
+  node), so this was the ordinary answer for a brand query, not a corner.
 
-  Only the goods-driven half is affected: a row that came from the
+  Only the goods-driven half was affected: a row that came from the
   ``categories.suggest`` provider passes the provider's own ``id`` through
-  (suggest.py:523) and the fleet's provider serves integer pks.
+  and the fleet's provider serves integer pks.
 
-Left exactly as it is: this is a gate, not a fix. The other four operations
-are honest, in both states, including every ``nullable`` claim.
+  Closed in 0.18.1: a category id is an integer, the indexed path's leaf is
+  the only place that half can learn one, and a leaf that is not one yields
+  NO ROW — with ``category_listing_ids`` in ``degraded[]``, so the shortfall
+  is declared rather than papered over with a fake id. The recipe below
+  drives both leaf shapes.
+
+The other four operations are honest, in both states, including every ``nullable`` claim.
 ``test_the_gate_is_not_blind`` proves that is a finding rather than a gate
 that never looked: it re-validates every driven body against
 ``{"type": "string"}`` and requires all of them to fail.
@@ -578,19 +581,35 @@ def _suggest(call):
     A NAME row comes from the ``categories.suggest`` provider and carries
     that provider's ``id``. A GOODS-DRIVEN row is minted here, from the
     engine's own answer about which categories hold matching documents, and
-    derives its ``id`` from the path's leaf segment — which in this corpus,
-    and in any catalogue whose paths are slugs, is not a number.
+    takes its ``id`` from the path's leaf segment — an integer, because a
+    category id is one.
+
+    Both leaf shapes are driven: the conformance corpus is pathed with
+    SLUGS, which are not ids, and a goods row that cannot resolve an integer
+    id is dropped with ``category_listing_ids`` in ``degraded[]`` (0.18.1;
+    it used to ship the segment itself in the declared-integer field). So
+    the third branch re-paths the matching documents onto the numeric ids a
+    real tree serves, which is where the integer actually gets exercised —
+    without it the populated pass would only ever see the row NOT arrive.
     """
+    from stapel_search.models import SearchDocument
+
     with corpus_loaded():
         category_suggest(NAMED_ROWS)
         named = call(anonymous(), query={"type": DOC_TYPE, "q": "phones"})
         # No name matches «apple», so the goods-driven half runs — the whole
         # reason that half exists (a brand names no category).
         category_suggest([])
+        slug_pathed = call(anonymous(), query={"type": DOC_TYPE, "q": "apple"})
+        SearchDocument.objects.filter(doc_type=DOC_TYPE).update(
+            category_path=["90", "205"]
+        )
         goods = call(anonymous(), query={"type": DOC_TYPE, "q": "apple"})
     return [
         ("a name-matched row (provider id)", named),
-        ("a goods-driven row (id derived from the path leaf)", goods),
+        ("a goods path whose leaf is no id, so no row and a degradation",
+         slug_pathed),
+        ("a goods-driven row (integer id from the path leaf)", goods),
     ]
 
 
@@ -692,23 +711,7 @@ def _reindex_empty(call):
 #: Operations whose declared body the wire does not send, with the defect and
 #: its owner. ``strict=True``: a fixed entry fails until it is deleted, so a
 #: finding can be neither forgotten nor quietly kept.
-KNOWN_MISMATCHES = {
-    ("GET", V1 + "/suggest"):
-        "declares CategorySuggestion.id as a REQUIRED integer and sends a "
-        "STRING on every goods-driven row whose category path does not end "
-        "in digits. suggest._listing_rows (suggest.py:366) writes "
-        "'id': int(leaf) if leaf.lstrip('-').isdigit() else leaf — the "
-        "field's type is a function of the data, which the comment beside it "
-        "states as an intention ('keep the type where the segment allows "
-        "it'). A goods-driven row is minted exactly when no category NAME "
-        "matched the query, which is the case that half of the type-ahead "
-        "exists for (a brand names no node), so a string id is the ordinary "
-        "answer to a brand query rather than a corner. A client generated "
-        "from this schema parses id as a number. The name-matched half is "
-        "honest: it passes the categories.suggest provider's own id through "
-        "(suggest.py:523). Owner: stapel-search — either coerce the derived "
-        "id or declare the field as the union it already is.",
-}
+KNOWN_MISMATCHES: dict[tuple[str, str], str] = {}
 
 
 def test_the_contract_declares_something_to_check():
