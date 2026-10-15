@@ -1513,7 +1513,7 @@ def test_the_rollup_is_taken_after_a_hidden_filter_is_dropped(catalogue, fleet_c
 # a group fed by MORE THAN ONE vocabulary
 # --------------------------------------------------------------------------
 #
-# Measured on the live stand (ruberi.ru, stapel-search 0.16.5), two requests
+# Measured on a live client-fleet stand (stapel-search 0.16.5), two requests
 # from one page load of `/c/zhivotnye`:
 #
 #   ?category=142        (the root)  facets.breed: bengalskaya,
