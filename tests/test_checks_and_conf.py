@@ -190,9 +190,17 @@ def test_the_beat_helper_names_celery_when_it_is_missing(monkeypatch):
         get_search_beat_schedule()
 
 
-def test_w003_is_quiet_when_there_is_no_beat_at_all():
-    """Celery is optional; a cron-driven deployment is not doing it wrong."""
-    assert checks.check_beat_schedule(None) == []
+def test_w003_fires_when_there_is_no_beat_at_all():
+    """No schedule is the generated-app default and means the catch-up never
+    runs. A cron-driven deployment opts out through SILENCED_SYSTEM_CHECKS,
+    which the hint names."""
+    for absent in ({}, None):
+        with override_settings(CELERY_BEAT_SCHEDULE=absent):
+            findings = checks.check_beat_schedule(None)
+            assert _ids(findings) == ["stapel_search.W003"]
+            assert "is not set" in findings[0].msg
+            assert "search_reindex_stale" in findings[0].msg
+            assert "SILENCED_SYSTEM_CHECKS" in findings[0].hint
 
 
 def test_w004_popular_offered_with_no_popularity_signal():

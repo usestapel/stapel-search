@@ -958,8 +958,9 @@ CELERY_BEAT_SCHEDULE = {**get_search_beat_schedule(), ...}
 ```
 
 Celery is optional — every task is a plain callable. But a catch-up job
-nobody schedules is a promise, not a mechanism, so `search.W003` fires when a
-beat schedule exists with no entry for `search_reindex_stale`.
+nobody schedules is a promise, not a mechanism, so `search.W003` fires when
+there is no beat schedule or it has no entry for `search_reindex_stale`; a
+cron-driven deployment adds `stapel_search.W003` to `SILENCED_SYSTEM_CHECKS`.
 
 `GET /search/api/v1/health` reports the engine, its capabilities,
 `lag_seconds` and a `stale_reason`. Target freshness is **≤ 5s** from source

@@ -190,25 +190,29 @@ def check_default_facet_mappings(app_configs, **kwargs):
 
 @checks.register("stapel_search")
 def check_beat_schedule(app_configs, **kwargs):
-    """W003: a beat schedule exists but nothing schedules the catch-up."""
+    """W003: nothing schedules the catch-up (no beat schedule, or no entry)."""
     from django.conf import settings
 
     from .tasks import REINDEX_STALE_TASK
 
-    schedule = getattr(settings, "CELERY_BEAT_SCHEDULE", None)
-    if not schedule:
-        return []
+    schedule = getattr(settings, "CELERY_BEAT_SCHEDULE", None) or {}
     if any(
         (entry or {}).get("task") == REINDEX_STALE_TASK
         for entry in schedule.values()
         if isinstance(entry, dict)
     ):
         return []
+    head = (
+        "CELERY_BEAT_SCHEDULE has no entry for "
+        if schedule
+        else "CELERY_BEAT_SCHEDULE is not set, so nothing runs "
+    )
     return [
         checks.Warning(
-            "CELERY_BEAT_SCHEDULE has no entry for "
-            f"{REINDEX_STALE_TASK}: nothing catches the index up after a lost event.",
-            hint="CELERY_BEAT_SCHEDULE = {**get_search_beat_schedule(), ...}",
+            f"{head}{REINDEX_STALE_TASK}: nothing catches the index up after a lost event.",
+            hint="CELERY_BEAT_SCHEDULE = {**get_search_beat_schedule(), ...}. If cron "
+                 "or a systemd timer runs stapel_search.tasks.search_reindex_stale "
+                 "instead, add 'stapel_search.W003' to SILENCED_SYSTEM_CHECKS.",
             id="stapel_search.W003",
         )
     ]

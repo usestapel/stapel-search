@@ -4,6 +4,16 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.2] — 2026-10-22
+
+### Fixed — `W003` fires when there is no beat schedule at all
+
+The check stayed quiet when `CELERY_BEAT_SCHEDULE` was absent, which is what a
+generated app ships, so `search_reindex_stale` never ran and nothing caught the
+index up after a lost event. It now warns; a deployment that runs the callable
+from cron or a systemd timer adds `stapel_search.W003` to
+`SILENCED_SYSTEM_CHECKS`.
+
 ## [0.18.1] — 2026-09-18
 
 ### Fixed — `/suggest` sent a string in `CategorySuggestion.id`, which is declared an integer

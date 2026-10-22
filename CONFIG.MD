@@ -95,7 +95,7 @@ letters.
 |---|---|---|
 | `SCORERS` | `{}` | `{slug: dotted path to a Scorer | None}` over the five builtins. Weights here drive both the ranking and the generated P2B disclosure, so the two cannot drift. |
 | `REINDEX_SCHEDULE` | `{"hour": 3, "minute": 20}` | Cadence of the nightly tombstone purge. |
-| `STALE_REINDEX_SCHEDULE` | `{"minute": "*/10"}` | Cadence of the catch-up job. A beat schedule with no entry for it raises `search.W003`: a catch-up nobody schedules is a promise, not a mechanism. |
+| `STALE_REINDEX_SCHEDULE` | `{"minute": "*/10"}` | Cadence of the catch-up job. No beat schedule, or one with no entry for it, raises `search.W003`: a catch-up nobody schedules is a promise, not a mechanism. |
 | `TOMBSTONE_RETENTION_DAYS` | `7` | How long an invisible row is kept before purging. The window is what stops a late event resurrecting a stale version. |
 
 There is **no `INGEST_BATCH_MS` key**. A micro-batching window would hold a
