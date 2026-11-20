@@ -37,7 +37,7 @@ jobs:
         run: python -c "import stapel_search; print('import OK')"
 
       - name: Install test dependencies
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.42.0"
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.84.0,<1"
 
       - name: Tests with coverage
         run: |
@@ -97,7 +97,7 @@ jobs:
         run: python -c "import stapel_search; print('import OK')"
 
       - name: Install test dependencies
-        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.42.0"
+        run: pip install pytest pytest-django pytest-cov "stapel-tools>=0.84.0,<1"
 
       - name: Tests with coverage
         run: |
@@ -149,7 +149,7 @@ jobs:
           cache: pip
       - run: pip install git+https://github.com/usestapel/stapel-core.git
       - run: pip install -e ".[all]" || pip install -e .
-      - run: pip install pytest pytest-django psycopg[binary] "stapel-tools>=0.42.0"
+      - run: pip install pytest pytest-django psycopg[binary] "stapel-tools>=0.84.0,<1"
       - name: Tests against Postgres
         env:
           STAPEL_SEARCH_TEST_DB: postgres://postgres:stapel@127.0.0.1:5432/search_test
@@ -178,7 +178,7 @@ jobs:
           cache: pip
       - run: pip install git+https://github.com/usestapel/stapel-core.git
       - run: pip install -e ".[meili]"
-      - run: pip install pytest pytest-django "stapel-tools>=0.42.0"
+      - run: pip install pytest pytest-django "stapel-tools>=0.84.0,<1"
       - name: Conformance against Meilisearch
         env:
           STAPEL_SEARCH_MEILI_URL: http://127.0.0.1:7700
@@ -219,7 +219,7 @@ jobs:
           cache: pip
       - run: pip install git+https://github.com/usestapel/stapel-core.git
       - run: pip install -e ".[meili]"
-      - run: pip install psycopg[binary] "stapel-tools>=0.42.0"
+      - run: pip install psycopg[binary] "stapel-tools>=0.84.0,<1"
       - name: Same assertions, two engines
         env:
           STAPEL_SEARCH_TEST_DB: postgres://postgres:stapel@127.0.0.1:5432/search_test
@@ -238,7 +238,7 @@ jobs:
           cache: pip
       - run: pip install git+https://github.com/usestapel/stapel-core.git
       - run: pip install -e ".[all]" || pip install -e .
-      - run: pip install "stapel-tools>=0.42.0"
+      - run: pip install "stapel-tools>=0.84.0,<1"
       - name: Contract drift gate
         run: make contract-check
       - name: Index contract lint

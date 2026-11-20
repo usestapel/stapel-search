@@ -26,7 +26,7 @@ def _load(name):
 
 @pytest.mark.parametrize(
     "name",
-    ["schema.json", "flows.json", "errors.json", "capabilities.json",
+    ["schema.json", "schema.v2.json", "flows.json", "errors.json", "capabilities.json",
      "index.json", "ranking.json", "llms.txt"],
 )
 def test_the_artifact_is_committed(name):

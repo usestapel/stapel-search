@@ -1,0 +1,1482 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "",
+    "version": "0.0.0",
+    "x-stapel-contract": 2
+  },
+  "paths": {
+    "/search/api/v1/health": {
+      "get": {
+        "operationId": "search_api_v1_health_retrieve",
+        "description": "``GET /search/api/v1/health`` — backend, capabilities, index lag.\n\n**Permissions:** `IsNotAnonymousUser`",
+        "summary": "Engine reachability, capabilities and index lag",
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "x-stapel-errors": [
+              "error.403.search_forbidden"
+            ]
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "x-stapel-errors": [
+              "error.503.search_backend_unavailable"
+            ]
+          }
+        }
+      }
+    },
+    "/search/api/v1/query": {
+      "get": {
+        "operationId": "search_api_v1_query_retrieve",
+        "description": "``GET /search/api/v1/query`` — the whole read contract.\n\n**Permissions:** `AllowAny`",
+        "summary": "Search one registered document type",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "anchor",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque keyset cursor from a previous answer."
+          },
+          {
+            "in": "query",
+            "name": "bbox",
+            "schema": {
+              "type": "string"
+            },
+            "description": "minLat,minLon,maxLat,maxLon. minLon > maxLon means the box crosses +/-180. For an anonymous caller the rectangle is grown OUTWARD to whole ~1.1km cells of the public geo grid, so it can only ever ask about the area a public card publishes: a box EXCLUDES rows, and halving one around a listing would otherwise converge on the seller's pin in a few dozen requests."
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            },
+            "description": "root/leaf path; a prefix filter, so a parent finds its descendants. Segments are node IDS or SLUGS, in any mix: a bare node id is resolved to that node's full path (`166` == `141/151/166`), and a slug is a whole address on its own because slugs are globally unique (`avtomobili` == `transport/avtomobili` == `141/151`). The form that answered is echoed in `category_resolved`. A segment no category has is a 400, never an empty answer."
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "schema": {
+              "type": "string"
+            },
+            "description": "next | prev."
+          },
+          {
+            "in": "query",
+            "name": "f.<slug>",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Facet filter. Repeat for OR within a slug; different slugs AND together."
+          },
+          {
+            "in": "query",
+            "name": "facets",
+            "schema": {
+              "type": "string"
+            },
+            "description": "on | off | comma-separated slugs. Default is the category's plan."
+          },
+          {
+            "in": "query",
+            "name": "geo_mode",
+            "schema": {
+              "type": "string"
+            },
+            "description": "rank | filter. What `radius_km` means. `rank` PARTITIONS: the answer comes back as `nearby` (inside the radius) then `all` (every remaining row), nothing is withheld, and `count` stays the whole matching total — a query can never come back empty because of distance. `filter` is the historical hard cut, for a caller that genuinely wants only what is within N km. `rank` is the default inside the feature; while STAPEL_SEARCH['GEO_BANDS'] is off this parameter is inert and `radius_km` filters as it always has."
+          },
+          {
+            "in": "query",
+            "name": "lang",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Language of the query: selects the analyzer AND narrows the corpus. Omit it and only the analyzer is chosen (from Accept-Language) — a header must not hide a catalogue."
+          },
+          {
+            "in": "query",
+            "name": "lat",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Centre latitude (with lon)."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Centre longitude (with lat)."
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque owner key — the seller's own listings."
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Free text. Dictionary-normalized here; morphology belongs to the engine."
+          },
+          {
+            "in": "query",
+            "name": "qu",
+            "schema": {
+              "type": "string"
+            },
+            "description": "auto | off. Whether the query's own words may become filters. `auto` (the default while QUERY_UNDERSTANDING is on) extracts and reports what it extracted under `query_understanding`; each filter carries the literal `param` to replay. Send `qu=off` with those replayed params afterwards — extraction is stateless, so without it a removed chip comes straight back."
+          },
+          {
+            "in": "query",
+            "name": "r.<slug>",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Range filter, `from..to`; either end may be omitted."
+          },
+          {
+            "in": "query",
+            "name": "radius_km",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Distance around the centre, in km. Its MEANING is `geo_mode`'s: under `rank` it is the edge of the `nearby` band and excludes nothing; under `filter` it is a hard cut. Defaults to NEAR_BAND_RADIUS_KM under `rank`."
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "type": "string"
+            },
+            "description": "relevance | newest | price_asc | price_desc | distance. An explicit sort never receives a promotional boost."
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Registered doc_type. One type per query — federated search across types is not in v1.",
+            "required": true
+          }
+        ],
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.search_bad_cursor",
+              "error.400.search_bad_geo",
+              "error.400.search_bad_range",
+              "error.400.search_query_too_long",
+              "error.400.search_sort_needs_center",
+              "error.400.search_too_many_facets",
+              "error.400.search_too_many_ranges",
+              "error.400.search_unknown_category",
+              "error.400.search_unknown_doc_type",
+              "error.400.search_unknown_sort",
+              "error.400.search_window_exceeded"
+            ]
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "x-stapel-errors": [
+              "error.503.search_backend_unavailable"
+            ]
+          }
+        },
+        "x-stapel-pagination": {
+          "style": "anchor",
+          "items": "items",
+          "params": [
+            "anchor",
+            "direction",
+            "limit"
+          ]
+        }
+      }
+    },
+    "/search/api/v1/ranking": {
+      "get": {
+        "operationId": "search_api_v1_ranking_retrieve",
+        "description": "``GET /search/api/v1/ranking`` — the P2B Art. 5 disclosure.\n\nGenerated from the scorer registry and annotated with what the\nconfigured engine can actually evaluate, so it cannot claim a parameter\nis in effect when the backend cannot compute it.\n\n**Permissions:** `AllowAny`",
+        "summary": "Ranking disclosure (P2B Art. 5), generated from the scorer registry",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankingResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "x-stapel-errors": [
+              "error.503.search_backend_unavailable"
+            ]
+          }
+        }
+      }
+    },
+    "/search/api/v1/reindex": {
+      "post": {
+        "operationId": "search_api_v1_reindex_create",
+        "description": "``POST /search/api/v1/reindex`` — targeted re-pull or a full rebuild.\n\n**Permissions:** `IsNotAnonymousUser`",
+        "summary": "Re-pull specific keys, or rebuild a whole document type",
+        "tags": [
+          "search"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.search_unknown_doc_type"
+            ]
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "x-stapel-errors": [
+              "error.403.search_forbidden"
+            ]
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "x-stapel-errors": [
+              "error.503.search_backend_unavailable"
+            ]
+          }
+        }
+      }
+    },
+    "/search/api/v1/suggest": {
+      "get": {
+        "operationId": "search_api_v1_suggest_retrieve",
+        "description": "``GET /search/api/v1/suggest`` — what to offer under the search box.\n\n``categories`` is the primary half: each row is a destination with its\nfull ancestor path and the number of listings a buyer would actually\nsee there, ranked by that number. ``terms`` is the title-prefix half.\n\nNeither comes from a query log: no query log is kept, which is a privacy\ndecision before it is a product one, and on day one there would be\nnothing in it anyway.\n\nThe answer is public, identical for every reader and requested on every\nkeystroke, so it carries ``Cache-Control: public`` and an ``ETag``. This\nis the module's first conditional read — ``query`` has none, because a\nSERP answer embeds ``took_ms`` and a cursor and would revalidate to a\nmiss every time. Here the payload is deliberately free of anything that\nvaries with the clock.\n\n**Permissions:** `AllowAny`",
+        "summary": "Type-ahead: category paths with live counts, plus title prefixes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "lang",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Language of the query: picks the dictionary, so «shorty» reaches «шорты». Falls back to Accept-Language, then DEFAULT_LANGUAGE."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Rows per half. Capped by MAX_SUGGEST_LIMIT."
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "type": "string"
+            },
+            "description": "What the buyer has typed so far."
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Registered doc_type. Optional when exactly one type is registered — a type-ahead should not have to name the only corpus there is."
+          }
+        ],
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "JWTCookieAuth": []
+          },
+          {
+            "JWTBearerAuth": []
+          },
+          {}
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "x-stapel-errors": [
+              "error.400.search_query_too_long",
+              "error.400.search_unknown_doc_type"
+            ]
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StapelError"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "x-stapel-errors": [
+              "error.503.search_backend_unavailable"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AxisEnum": {
+        "enum": [
+          "group",
+          "range"
+        ],
+        "type": "string",
+        "description": "* `group` - group\n* `range` - range"
+      },
+      "BandSummary": {
+        "type": "object",
+        "description": "One partition of the answer — a heading, never a filter over it.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IdEnum"
+          },
+          "count": {
+            "type": "integer",
+            "nullable": true,
+            "description": "How many rows are in this band. `null` when the engine cannot say. The two counts add up to the top-level `count`, which is the machine-checkable form of 'nothing is hidden by distance'."
+          },
+          "count_is_lower_bound": {
+            "type": "boolean",
+            "description": "True when `count` is a floor (a capped count). Render 'N+'."
+          },
+          "radius_km": {
+            "type": "number",
+            "format": "double",
+            "description": "Present on `nearby` only: the edge, in km, the band was cut at. `all` has no edge — it is everything else, which is the promise."
+          }
+        },
+        "required": [
+          "count",
+          "count_is_lower_bound",
+          "id"
+        ]
+      },
+      "CategoryResolved": {
+        "type": "object",
+        "description": "The queried category in both forms an address can carry.",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The slash-joined ID path this answer actually filtered on — what to send back as `category`. `category=` accepts an id, an id path, a slug, a slug path and any mix, so the string the caller sent is not necessarily this one: `avtomobili` and `141/avtomobili` both answer `141/151`."
+          },
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "description": "The same node as slug segments, root->leaf — what a readable URL is built from (`/c/avtomobili`). `null`, never partial, when any segment has no slug: half a slug path builds a wrong address and a client cannot see that by looking. `null` here with `category_names` in `degraded[]` means the names provider was unreachable, not that the node has no slug."
+          }
+        },
+        "required": [
+          "path",
+          "slugs"
+        ]
+      },
+      "CategorySuggestion": {
+        "type": "object",
+        "description": "One destination in the dropdown, ready to render and ready to follow.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Category id. A `listings`-graded row derives it from the path's leaf segment; a path whose leaf is not an id yields no row at all (`category_listing_ids` in `degraded[]`) rather than a row with something else in this field."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Category slug. Empty on a `listings`-graded row: no comm Function in the fleet resolves a path id to its slug or name yet."
+          },
+          "name": {
+            "type": "string",
+            "description": "The category's own display name. On a `listings`-graded row this is the leaf id as a truthful segment — render such rows by their `count` instead."
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Display names root->leaf, e.g. ['Мужская одежда', 'Шорты']. This is what distinguishes three categories that share a name. `listings`-graded rows carry the id segments here."
+          },
+          "category": {
+            "type": "string",
+            "description": "The ancestry as ids joined with '/'. Pass it verbatim as the `category` parameter of /query — do not re-join path segments yourself."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live listings a buyer would see under this category, descendants included — the same number the SERP reports for it. On a `listings`-graded row: how many of them match the typed query, which is the count a `?q=…&category=…` tap will show."
+          },
+          "count_scope": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CountScopeEnum"
+              }
+            ],
+            "description": "What `count` counted. `category`: everything live under this category, the typed text ignored — the row is a PLACE. `query_in_category`: only the documents matching the typed text, which is what a `listings`-graded row is about. The two are different numbers about different pages, which is why the row says which one it is instead of leaving a storefront to guess.\n\n* `category` - category\n* `query_in_category` - query_in_category"
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The /query parameters this row's `count` was computed for — send them VERBATIM (plus your own `type`/`lang`/paging) when the buyer follows the row. Always carries `category`; carries `q` only when `count_scope` is `query_in_category`. Assembling these yourself re-opens the defect this field exists to close: a place row followed with the typed text opens an empty page while its count promised stock."
+          },
+          "depth": {
+            "type": "integer",
+            "description": "Number of segments in `path`."
+          },
+          "match": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MatchEnum"
+              }
+            ],
+            "description": "How the row earned its place: the four name grades from `categories.suggest`, or `listings` — a goods-driven row, offered because documents matching the query live there even though no category name says the word. Ranking: strong grades (exact/prefix/word) and `listings` sort as one class above `substring`; within a class, stocked before empty, then grade, then count desc, then depth, then name. `vector` rows — embedding-space neighbours offered when nothing first-class matched — always sit below every deterministic row, ordered by similarity.\n\n* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings\n* `vector` - vector"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "count_scope",
+          "depth",
+          "id",
+          "match",
+          "name",
+          "path",
+          "query",
+          "slug"
+        ]
+      },
+      "CountScopeEnum": {
+        "enum": [
+          "category",
+          "query_in_category"
+        ],
+        "type": "string",
+        "description": "* `category` - category\n* `query_in_category` - query_in_category"
+      },
+      "ExtractedFilter": {
+        "type": "object",
+        "description": "One filter the query's own words produced, ready to be replayed.",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value_label": {
+            "type": "string"
+          },
+          "method": {
+            "$ref": "#/components/schemas/MethodEnum"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "span": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "`[start, end)` into the RAW query, so a UI can underline the words that became this chip."
+          },
+          "param": {
+            "type": "string",
+            "description": "The literal query parameter this filter IS — e.g. `f.color=krasnyy`. Re-send it verbatim to KEEP the chip, omit it to remove it, and send `qu=off` alongside so the server does not extract it again. Nothing about extraction is remembered server-side, which is why the parameter has to be complete."
+          },
+          "applied": {
+            "type": "boolean",
+            "description": "True when this filter actually narrowed the answer. A false one still contributed to each row's `match_count`."
+          }
+        },
+        "required": [
+          "applied",
+          "confidence",
+          "label",
+          "method",
+          "param",
+          "slug",
+          "span",
+          "value",
+          "value_label"
+        ]
+      },
+      "FacetLabels": {
+        "type": "object",
+        "description": "The heading for one facet group, plus captions for its option codes.",
+        "properties": {
+          "label": {
+            "type": "string",
+            "nullable": true,
+            "description": "The feature definition's own name — the HEADING above this group's buckets. `null` when the definition carries no name: a client renders the slug only as a dev-mode fallback, because a raw slug in a heading is not a caption, and this field is how it can tell that case from a name the server has."
+          },
+          "label_translatable": {
+            "type": "boolean",
+            "description": "True when `label` is a translation KEY (`FeatureDef.translate` is `all` or `title`), false when it is literal text. Same question as `translatable`, one level up."
+          },
+          "url_key": {
+            "type": "string",
+            "description": "What to call this group in the address: `f.<url_key>` and `r.<url_key>`. The slug without the importer type suffix (`_select`, `_ref_select`, `_int`, `_bool`, `_string`) where that stays unambiguous among the features of the category in scope, and the slug itself otherwise — and always when the query names no category. Derived per request, never stored: the slug remains the feature's identity, and both forms are accepted inside the scope."
+          },
+          "translatable": {
+            "type": "boolean",
+            "description": "True when `values` holds translation KEYS to run through the catalogue; false when it holds literal captions. The reader cannot tell by looking — `b.apple` and `Б/у` are both strings."
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "extras": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "description": "{value: {…}} — what the vocabulary term carries BESIDES its caption, for the codes that carry anything. A colour level's terms carry `hue` (`{\"hue\": \"#1a1a1a\"}`), which is how a facet draws the swatch beside «Чёрный»: the code is a transliteration (`chernyy`), so no client can derive the colour from it. Absent entirely when no counted code of this group carries a bag, or when the deployment's vocabulary resolver does not serve them — a client keeps whatever fallback it drew before. Keys inside a bag are the source catalogue's own; read the ones you know and ignore the rest."
+          },
+          "vocabulary": {
+            "type": "string",
+            "nullable": true,
+            "description": "The vocabulary name this group's options come from, when the feature is `ref_select` (or any host type pointing at a vocabulary the same way). `null` for a group with an inline option set — a client that only sees this answer, with no leaf schema of its own (a branch page, a text query), still needs this to draw a vocabulary-backed axis as its picker rather than as a plain checkbox list."
+          },
+          "level": {
+            "type": "string",
+            "description": "The vocabulary level `vocabulary` resolves against. Present only alongside a non-null `vocabulary`."
+          },
+          "vocabularies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VocabularyAddress"
+            },
+            "description": "The dictionaries behind a group whose contributing categories name DIFFERENT ones — a pets root over a cat breed level and a dog one. Present only in that case, and then `vocabulary` and `level` are null/absent because there genuinely is no single address. That says nothing about the captions: `values` is the union of what these dictionaries know about the codes this answer counted, and a code two of them spell differently takes the word of the first — the category most of this page is made of. Listed in that same order."
+          },
+          "depends_on": {
+            "type": "string",
+            "nullable": true,
+            "description": "The slug of the sibling group this one's option codes are the CHILDREN of (`OptionsRef.parentFeature`): a model group depends on the make group, a generation group on the model. `null` for an independent axis. Absent entirely when `facet_meta.dependent_facets` is `flat`. Draw a dependent group below the group it names — the answer already orders it that way — and treat it as unavailable while `gated` is true."
+          },
+          "gated": {
+            "type": "boolean",
+            "description": "True when this answer deliberately holds the group shut: it depends on a group the request carries no value for, so `values` is empty and NO aggregation was requested for it. Not the same as a group with no buckets on this page — this one has not been counted. Choose the parent and ask again, and the group comes back with the children of what was chosen. Absent when `facet_meta.dependent_facets` is `flat`."
+          },
+          "parent_missing": {
+            "type": "boolean",
+            "description": "Present and true only when the request filters on THIS group while carrying no value for the group it `depends_on` — a deep link, or an address an older panel wrote. The filter is applied and the group is counted as usual; this says the parent group should be drawn open beside it, so the reader can see what the selection is a child of. The server never infers the parent from the child."
+          },
+          "order": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Where this group sits in ONE panel, numbered together with the numeric axes in `facet_meta.ranges` — draw both halves sorted by it and price and year land where the category's schema puts them, among the makes and models rather than below all of them. Core ranges take the first positions (they exist for every document in every category); the rest follow the plan's own order, which for a category's own schema is mandatory first and then as authored. `null` when the plan has no position for the group, which a client sorts last."
+          }
+        },
+        "required": [
+          "label",
+          "label_translatable",
+          "order",
+          "translatable",
+          "url_key",
+          "values",
+          "vocabulary"
+        ]
+      },
+      "FacetMeta": {
+        "type": "object",
+        "properties": {
+          "approximate": {
+            "type": "boolean",
+            "description": "True when counts came from a sample because the candidate set exceeded FACET_CANDIDATE_CAP."
+          },
+          "candidates": {
+            "type": "integer",
+            "description": "Size of the largest counted set."
+          },
+          "counted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Plan slugs dropped at MAX_FACET_FIELDS — reported, not vanished."
+          },
+          "dropped_filters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`f.<slug>`/`r.<slug>` filters this answer did NOT apply, because the category marks the slug non-public (`FeatureDef.visibility` is `owner` or `staff`). A hidden value is not indexed and is not filterable: letting `?f.vin=<value>` through would make the index an exact-match oracle over an identifier. The answer is wider than what was asked for, and says so here rather than silently."
+          },
+          "core_ranges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Range slugs that address a core document column rather than an attribute (`r.price`). Offer them as filters unconditionally: they exist for every document in every category, which is why they are not in the category's own plan."
+          },
+          "ranges": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RangeAxis"
+            },
+            "description": "`{slug: {min, max, label, label_translatable, unit?, order}}` — every numeric axis that HAS a number on this page, core columns (`price`) and attributes (`year`, `mileage`, `engine_volume`) alike, with everything needed to DRAW it. What a from/to picker is made of: a range axis has no values to enumerate, so `facets` says nothing about it and a client without these two numbers either draws no picker or draws one over a guess. Measured with the range filters REMOVED, so the ends are the domain the picker can be widened back to and not the ends of its own selection. An axis absent here either has no numbers behind it in this candidate set — a different fact from a bound of zero — or was WITHHELD, and then it is named in `withheld` with the reason. Capped by MAX_FACET_FIELDS since 0.16.0: the budget is how wide a panel may be, and a from/to picker is as wide as a bucket list. Empty, with `facet_ranges` in `degraded[]`, on an engine that does not implement the optional `ranges` verb."
+          },
+          "dependent_facets": {
+            "type": "string",
+            "description": "`staged` | `flat` — how this server answered groups that declare `OptionsRef.parentFeature`. `staged`: a dependent group is returned empty with `gated: true` until its parent carries a value, the way the posting form has always behaved — general before specific. `flat`: every group is counted independently, which is the pre-0.18 answer, and `depends_on`/`gated` are absent from `facet_labels`. Sent under both values: a client follows the server rather than carrying its own opinion."
+          },
+          "plan": {
+            "type": "string",
+            "description": "Where the plan came from. `category` — the queried category's own authored schema. `evidence` — the categories the CANDIDATE SET actually contains, used when that schema did not fill MAX_FACET_FIELDS, which is every branch category and every text query (`categories.features` resolves own + ANCESTOR-inherited features, so a branch owns no axes; its leaves do)."
+          },
+          "withheld": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WithheldAxis"
+            },
+            "description": "Axes this answer planned and then did not offer, each naming which half of the panel it is about (`axis`) and why (`reason`). Present so a panel can say «3 filters apply to too few of these» instead of «no filters» — the second is false whenever this list is not empty.\n\n`coverage` — counted, then withheld for describing too little of the result set (FACET_MIN_COVERAGE), with the two numbers. For a GROUP only slugs the evidence plan borrowed from another category are ever measured, because a group the queried category authored answers with its zeros on purpose; for a RANGE every non-core axis is, because a range has no zeros to answer with and a slider over three of fifty-two documents narrows nothing whoever authored it.\n\n`unlabelled` (0.16.0, ranges) — no caption could be resolved from any source, so a client could only print the storage slug above the picker. `doors` and `kilometrage` in a chip row is an axis that was there and unreadable.\n\nAn axis the reader has already filtered on is never withheld for any reason: that would leave the filter applied with no control to undo it."
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "description": "`{category, count}` — the categories this answer's candidate set is made of, busiest first, `category` being the same slash-joined id path the `category` filter takes. The evidence a widened plan was drawn from, and what a panel needs to offer the CATEGORY itself as a filter — a partition chip row above a category page is drawn from exactly this. Reported under EVERY `plan` since 0.16.4, measured over the same candidate set `count` and `facets` are, so the rows sum to the page. Empty only when the candidate set is, when FACET_EVIDENCE_CATEGORIES is 0, or when the engine cannot aggregate categories — and the last is `facet_plan_evidence` in `degraded[]`, because an empty rollup a client cannot tell from a missing one reads as «zero in every category»."
+          }
+        },
+        "required": [
+          "approximate",
+          "candidates",
+          "categories",
+          "core_ranges",
+          "counted",
+          "dependent_facets",
+          "dropped_filters",
+          "plan",
+          "ranges",
+          "skipped",
+          "withheld"
+        ]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lag_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "stale_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "detail",
+          "reachable",
+          "types"
+        ]
+      },
+      "IdEnum": {
+        "enum": [
+          "nearby",
+          "all"
+        ],
+        "type": "string",
+        "description": "* `nearby` - nearby\n* `all` - all"
+      },
+      "MatchEnum": {
+        "enum": [
+          "exact",
+          "prefix",
+          "word",
+          "substring",
+          "listings",
+          "vector"
+        ],
+        "type": "string",
+        "description": "* `exact` - exact\n* `prefix` - prefix\n* `word` - word\n* `substring` - substring\n* `listings` - listings\n* `vector` - vector"
+      },
+      "MethodEnum": {
+        "enum": [
+          "exact",
+          "translit",
+          "alias",
+          "vector"
+        ],
+        "type": "string",
+        "description": "* `exact` - exact\n* `translit` - translit\n* `alias` - alias\n* `vector` - vector"
+      },
+      "QueryUnderstanding": {
+        "type": "object",
+        "description": "What a free-text query turned out to be ABOUT, beside its words.",
+        "properties": {
+          "filters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExtractedFilter"
+            }
+          },
+          "category_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category_confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "residual": {
+            "type": "string",
+            "description": "The query with every extracted span removed — the text the engine still had to match. Empty is normal and correct: «красный» is entirely a filter, and the answer is then the filters' set."
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "category_confidence",
+          "category_path",
+          "degraded",
+          "filters",
+          "residual"
+        ]
+      },
+      "RangeAxis": {
+        "type": "object",
+        "description": "One numeric axis a from/to picker is drawn from, with its caption.",
+        "properties": {
+          "min": {
+            "type": "number",
+            "format": "double",
+            "description": "The low end of the axis over this candidate set, measured with the range filters removed. A number, not a string: a slider end is arithmetic the client does immediately. Integral values render integral, so a year is `2015` and an engine volume is `1.4`."
+          },
+          "max": {
+            "type": "number",
+            "format": "double",
+            "description": "The high end, same rule as `min`."
+          },
+          "label": {
+            "type": "string",
+            "description": "What to write above the picker. Resolved from the SAME source a facet group's heading comes from — the category's own feature definition — because a group and a range are two ways of narrowing one authored feature. A core range (`price`) has no definition to read and takes this library's own key. Never null: an axis with no resolvable caption is withheld instead (`withheld`, reason `unlabelled`), because a chip row printing `doors` and `kilometrage` at a reader is an axis that was there and unreadable."
+          },
+          "label_translatable": {
+            "type": "boolean",
+            "description": "True when `label` is a translation KEY, false when it is literal text the catalogue wrote. The reader cannot tell by looking."
+          },
+          "unit": {
+            "type": "string",
+            "description": "What the numbers are measured in — `postfix` off the feature definition, or the family's BASE unit for a `convertible_unit` (the stored value is in the base unit, so naming the input unit would label metres as kilometres). A translation key or literal text, exactly as the catalogue wrote it; this module never translates. ABSENT, not empty, for an axis whose definition names no unit — `price` among them, because a price's unit is the corpus's base currency and a property of each document rather than of the axis."
+          },
+          "order": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Where this axis sits in ONE panel, numbered together with the groups in `facet_labels`. Same field, same sequence: draw both halves sorted by it and the picker lands where the schema put it."
+          }
+        },
+        "required": [
+          "label",
+          "label_translatable",
+          "max",
+          "min",
+          "order"
+        ]
+      },
+      "RankingResponse": {
+        "type": "object",
+        "description": "The P2B Art. 5 disclosure, generated from the scorer registry.",
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "scorers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scorer"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "backend",
+          "doc_type",
+          "notes",
+          "scorers"
+        ]
+      },
+      "ReasonEnum": {
+        "enum": [
+          "coverage",
+          "unlabelled"
+        ],
+        "type": "string",
+        "description": "* `coverage` - coverage\n* `unlabelled` - unlabelled"
+      },
+      "ReindexRequest": {
+        "type": "object",
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Re-pull exactly these keys; omit to rebuild the whole type."
+          }
+        },
+        "required": [
+          "doc_type"
+        ]
+      },
+      "ReindexResponse": {
+        "type": "object",
+        "properties": {
+          "doc_type": {
+            "type": "string"
+          },
+          "indexed": {
+            "type": "integer"
+          },
+          "removed": {
+            "type": "integer"
+          },
+          "skipped_stale": {
+            "type": "integer"
+          },
+          "skipped_duplicate": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "doc_type",
+          "indexed",
+          "removed",
+          "skipped_duplicate",
+          "skipped_stale"
+        ]
+      },
+      "Scorer": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number",
+            "format": "double"
+          },
+          "description_key": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "applies_to_sorts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "description": "False when the configured engine cannot evaluate this parameter."
+          },
+          "inactive_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "applies_to_sorts",
+          "description",
+          "description_key",
+          "inactive_reason",
+          "params",
+          "slug",
+          "weight"
+        ]
+      },
+      "SearchItem": {
+        "type": "object",
+        "description": "One result row.",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The source's own document key."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Ranking score; 0 under an explicit sort."
+          },
+          "promoted": {
+            "type": "boolean",
+            "description": "Whether this result is promoted. Present on EVERY item under EVERY sort, including when false — a mandatory marking (DSA Art. 26), not an optional field."
+          },
+          "owner_key": {
+            "type": "string",
+            "description": "The seller this row belongs to, as the source named them — the same opaque key `owner=` filters on. Present on every item so a result page can draw a seller panel per card and read the profiles in one batched call by id; `\"\"` when the source indexed no owner, never a missing key. It is not a facet and not a ranking input: this module stores the id and nothing else about the seller."
+          },
+          "distance_km": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "description": "Great-circle distance from the searched centre, in km. For an ANONYMOUS reader it is measured from the same ~1.1km grid point the card publishes and floored to that grid's quantum (the cell's diagonal, ~1.574km): a distance finer than the position it came from is the position, three requests away. The listing's own owner, staff and the service transport get the exact number. Coarse is enough for what it drives — a card saying «12 км» does not need metres — and it never overstates proximity, being floored rather than rounded."
+          },
+          "band": {
+            "type": "string",
+            "description": "`nearby` | `all` | `\"\"`. Which partition this row sits in, present only under `geo_mode=rank`. A LABEL, never a filter: `all` carries every remaining row, including rows with no coordinates at all, so a query never returns fewer results because of distance. `\"\"` means the request ranked by proximity but gave no centre, which is not an error."
+          },
+          "match_count": {
+            "type": "integer",
+            "description": "How many of the filters the QUERY's own words produced this row satisfies — including the soft ones that were not applied as filters. Orders rows within a band, strongest first. Present only when the query produced signals."
+          },
+          "card": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Stored row fields, so a result page costs one query. For an ANONYMOUS reader the card never carries full-precision coordinates, on every path and whatever the flags: a key naming half a pair (`lat`, `latitude`, `lon`, `lng`, `*_lat`…) is rewritten onto the ~1.1km public grid from the row's own columns, and a key carrying a position this module cannot turn into an area (`geohash`, `location`, `coordinates`…) is removed rather than truncated — two differently-aligned areas around one point intersect down to a sliver. `geo_precision_km` says how wide the area is: draw a CIRCLE, never a marker. Under `geo_mode=rank` the pair is ADDED even to a card that carried no position at all."
+          }
+        },
+        "required": [
+          "card",
+          "distance_km",
+          "key",
+          "owner_key",
+          "promoted",
+          "score"
+        ]
+      },
+      "SearchResponse": {
+        "type": "object",
+        "description": "The query envelope: AnchorPagination's keys, plus what search owes.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchItem"
+            }
+          },
+          "category_resolved": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CategoryResolved"
+              }
+            ],
+            "nullable": true,
+            "description": "The category this answer filtered on, in both addressable forms. `null` when the query named no category."
+          },
+          "bands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BandSummary"
+            },
+            "description": "Per-band counts in render order — `nearby` («Объявления поблизости») then `all` («Все объявления»). Present only under `geo_mode=rank`; empty when no centre was given. The rows themselves carry `band`; this is the summary a heading needs. The top-level `count` remains the WHOLE matching total, never the nearby one."
+          },
+          "query_understanding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QueryUnderstanding"
+              }
+            ],
+            "description": "What the query's words became. Absent entirely while QUERY_UNDERSTANDING is off or `qu=off` was sent."
+          },
+          "facets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            },
+            "description": "{slug: {value: count}}, counted with the slug's own filter removed."
+          },
+          "facet_labels": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FacetLabels"
+            },
+            "description": "{slug: {label, label_translatable, url_key, translatable, values: {value: caption}, vocabulary, level}} — one entry for EVERY group in `facets`. `url_key` is the group's key in the address. `label` is the group's heading and is null when the definition has no name; `values` is empty for a slug whose options are not inline in the category schema and whose vocabulary resolved nothing, because this module will not invent a caption it has not read. `extras` carries what a term holds besides its caption (a colour's `hue`) and is present only for the codes that hold anything. `vocabulary` names the vocabulary a `ref_select` axis reads its options from and is null for an inline `select` — the only way a client with no leaf schema of its own can tell the two apart. It is also null for a group fed by SEVERAL dictionaries (a pets root over cat and dog breeds), which names them in `vocabularies` and still captions its values from all of them: no single address is a different fact from no captions."
+          },
+          "facet_meta": {
+            "$ref": "#/components/schemas/FacetMeta"
+          },
+          "next_anchor": {
+            "type": "string",
+            "nullable": true
+          },
+          "prev_anchor": {
+            "type": "string",
+            "nullable": true
+          },
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_prev": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer",
+            "nullable": true,
+            "description": "How many documents match. NEVER 0 beside a non-empty items[] — the answer may not claim fewer matches than the page shows. `null` means the engine cannot say, and is rendered as no count at all."
+          },
+          "count_is_lower_bound": {
+            "type": "boolean",
+            "description": "True when `count` is a floor: at least this many match, possibly more (a capped count, a window-truncated engine answer). Render 'N+', never 'N'."
+          },
+          "exact_total": {
+            "type": "boolean",
+            "description": "True when `count` is exact for THIS answer — equivalent to `count is not null and not count_is_lower_bound`. Per answer, not per engine: an engine without a guaranteed exact total still counts a small candidate set exactly."
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the configured engine could not do for this query."
+          },
+          "backend": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string",
+            "description": "The language whose dictionary and analyzer configuration answered — `lang`, else Accept-Language, else DEFAULT_LANGUAGE. When the fallback is wrong the synonym layer silently does not apply, and this field is the only place the answer says so."
+          },
+          "sort": {
+            "type": "string"
+          },
+          "took_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "backend",
+          "category_resolved",
+          "count",
+          "count_is_lower_bound",
+          "degraded",
+          "exact_total",
+          "facet_labels",
+          "facet_meta",
+          "facets",
+          "has_next",
+          "has_prev",
+          "items",
+          "language",
+          "next_anchor",
+          "prev_anchor",
+          "sort",
+          "took_ms"
+        ],
+        "x-stapel-pagination": {
+          "style": "anchor",
+          "items": "items"
+        }
+      },
+      "StapelError": {
+        "type": "object",
+        "description": "Structured error returned by all Stapel API endpoints.",
+        "properties": {
+          "localizable_error": {
+            "type": "string",
+            "description": "Translation key for client-side localization",
+            "example": "error.404.not_found"
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable fallback/debug message — not reliably English,"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Context values for template placeholders",
+            "example": {
+              "retry_after": 30
+            }
+          },
+          "error_language": {
+            "type": "string",
+            "description": "The language `error` is written in (e.g. 'en', 'ru'),"
+          }
+        },
+        "required": [
+          "error",
+          "localizable_error"
+        ]
+      },
+      "SuggestResponse": {
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategorySuggestion"
+            },
+            "description": "Destinations, ranked by match class (strong name grades and goods-driven rows above substring), then stocked before empty, then grade, then live listing count desc, then depth, then name."
+          },
+          "terms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Title prefixes from the index."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Deprecated alias of `terms`, kept for one minor."
+          },
+          "language": {
+            "type": "string",
+            "description": "Which dictionary answered — the same resolution /query reports."
+          },
+          "degraded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What this answer could not do: `category_suggestions` (no provider for category names), `category_rollup` (no ancestry, so counts would read 0), `category_listing_suggestions` (no name matched and the configured engine does not implement the optional goods-driven verb, or it failed), `category_listing_ids` (goods-driven rows were dropped because their indexed path leaf is not a category id, so the declared integer `id` cannot be resolved)."
+          },
+          "backend": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "categories",
+          "degraded",
+          "items",
+          "language",
+          "terms"
+        ]
+      },
+      "VocabularyAddress": {
+        "type": "object",
+        "description": "One dictionary a facet group draws its option codes from.",
+        "properties": {
+          "vocabulary": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "level",
+          "vocabulary"
+        ]
+      },
+      "WithheldAxis": {
+        "type": "object",
+        "description": "One axis that was planned and then not offered, and why.",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "axis": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AxisEnum"
+              }
+            ],
+            "description": "Which half of the panel this row is about — the bucket list or the from/to picker. One slug can be both (an imported `year` is a choice AND a measurement) and the two are decided by different quantities over the same page, so a withheld `group` row does not mean the slider is gone, or the other way round.\n\n* `group` - group\n* `range` - range"
+          },
+          "reason": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReasonEnum"
+              }
+            ],
+            "description": "`coverage` — it describes too little of this result set (FACET_MIN_COVERAGE). `unlabelled` — no caption could be resolved, so a client could only print the storage slug at a reader. A closed set: an unknown value means the client is older than the server.\n\n* `coverage` - coverage\n* `unlabelled` - unlabelled"
+          },
+          "coverage": {
+            "type": "integer",
+            "description": "How many documents the axis describes. Present on `coverage` only — it is the measurement that decided."
+          },
+          "candidates": {
+            "type": "integer",
+            "description": "What it was a share OF. Present on `coverage` only."
+          }
+        },
+        "required": [
+          "axis",
+          "reason",
+          "slug"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "JWTBearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT access token in the `Authorization: Bearer <token>` header — the credential a native client sends. When the JWT cookie is also present, the cookie wins."
+      },
+      "JWTCookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "stapel_jwt",
+        "description": "JWT token stored in cookie. Login via /auth/admin/ to get the cookie."
+      }
+    }
+  }
+}

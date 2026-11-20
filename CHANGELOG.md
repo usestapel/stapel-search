@@ -4,6 +4,21 @@ All notable changes to stapel-search are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.18.3] — 2026-11-20
+
+Patch. No migration, no consumer edit. Requires stapel-core 0.99.0.
+
+- **Contract profile 2:** `docs/schema.v2.json` (stapel_tools.codegen
+  `contract_profile=2`) beside the unchanged-profile `docs/schema.json`, for a
+  native client generator: bearer scheme, public operations from the running
+  permission stack, error codes bound per response (`x-stapel-errors`).
+  Committed-artifact and `make contract-check` lists include it.
+- Gates (`tests/test_contract_profile2.py`, on stapel-tools 0.84.0's
+  `contract_gates`): `schema.v2.json` is profile 2 of the same surface with
+  bound codes drawn from `errors.json`; every example in both documents
+  validates against its schema (inversion included); no `@action` declares a
+  permission, authenticator or throttle its mount never runs. Search mounts no viewsets; the roster asserts that.
+
 ## [0.18.2] — 2026-10-22
 
 ### Fixed — `W003` fires when there is no beat schedule at all
