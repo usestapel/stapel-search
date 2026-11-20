@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stapel-search"
-version = "0.18.3"
+version = "0.18.4"
 description = "Search index, facets, geo-radius and ranking for the Stapel framework"
 readme = "README.md"
 license = { text = "MIT" }
@@ -26,7 +26,7 @@ dependencies = [
     # Floor 0.31.0: the core this module is developed and tested against.
     # 0.99.0: falsy docstring examples reach the contract (the committed
     # examples rely on it) and errors.json carries declared param_types.
-    "stapel-core>=0.99.0,<1.0",
+    "stapel-core>=0.99.1,<1.0",
     # L1 library, imported, NOT a Django app: the facet mapping registry is
     # keyed by attribute-type slug and caches on `registry_version()`.
     # Floor 0.8: `stapel_attributes.visibility` — the stamp a stored DAO
